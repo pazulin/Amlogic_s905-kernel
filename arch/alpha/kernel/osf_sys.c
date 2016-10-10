@@ -104,12 +104,11 @@ struct osf_dirent_callback {
 };
 
 static int
-osf_filldir(struct dir_context *ctx, const char *name, int namlen,
-	    loff_t offset, u64 ino, unsigned int d_type)
+osf_filldir(void *__buf, const char *name, int namlen, loff_t offset,
+	    u64 ino, unsigned int d_type)
 {
 	struct osf_dirent __user *dirent;
-	struct osf_dirent_callback *buf =
-		container_of(ctx, struct osf_dirent_callback, ctx);
+	struct osf_dirent_callback *buf = (struct osf_dirent_callback *) __buf;
 	unsigned int reclen = ALIGN(NAME_OFFSET + namlen + 1, sizeof(u32));
 	unsigned int d_ino;
 

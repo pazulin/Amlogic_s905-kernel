@@ -205,9 +205,21 @@ static int controller_quene_rb(struct hw_controller *controller,
 
 	if (time_out_cnt >=  time_out_limit) {
 		/*dbg code here!*/
+#if 0
 		dump_pinmux_regs(controller);
+#endif
 		ret = -NAND_BUSY_FAILURE;
 	}
+
+	/*
+	fixme: Add standby here, it means release ce;avoid influence between
+	two operations nearby. it have been found that when have finished
+	reading one plane page and rb is checked ready,but before reading next
+	plane, check rb busy.
+	*/
+	/* delay for 5 cycle. */
+	NFC_SEND_CMD_STANDBY(controller, 5);
+
 	return ret;
 }
 
@@ -535,7 +547,7 @@ static int controller_hw_init(struct hw_controller *controller)
 	bus_timing = (start_cycle + end_cycle) / 2;
 #else
 	bus_cycle  = 6;
-	bus_timing = bus_cycle + 2;
+	bus_timing = bus_cycle + 1;
 #endif
 
 	NFC_SET_CFG(controller, 0);
@@ -571,6 +583,9 @@ static int controller_adjust_timing(struct hw_controller *controller)
 
 	get_sys_clk_rate(controller, &sys_clk_rate);
 
+	aml_nand_msg("clk_reg = %x",
+			AMLNF_READ_REG(controller->nand_clk_reg));
+
 	sys_time = (10000 / sys_clk_rate);
 	/* sys_time = (10000 / (sys_clk_rate / 1000000)); */
 
@@ -601,7 +616,7 @@ static int controller_adjust_timing(struct hw_controller *controller)
 	bus_timing = (start_cycle + end_cycle) / 2;
 #else
 	bus_cycle  = 6;
-	bus_timing = bus_cycle + 2;
+	bus_timing = bus_cycle + 1;
 #endif
 
 	NFC_SET_CFG(controller , 0);

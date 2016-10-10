@@ -20,6 +20,7 @@
 
 static struct timer_list scdc_tmds_cfg_timer;
 
+static int cnt;
 static void tmds_config(unsigned long arg)
 {
 	struct hdmitx_dev *hdev = (struct hdmitx_dev *)arg;
@@ -28,14 +29,20 @@ static void tmds_config(unsigned long arg)
 	hdev = hdev; /* prevent warning, TODO used */
 	scdc_wr_sink(SOURCE_VER, 0x1);
 	scdc_wr_sink(SOURCE_VER, 0x1);
-	scdc_wr_sink(TMDS_CFG, 0x3); /* TMDS 1/40 & Scramble */
-	scdc_wr_sink(TMDS_CFG, 0x3); /* TMDS 1/40 & Scramble */
+	/* TMDS 1/40 & Scramble */
+	scdc_wr_sink(TMDS_CFG, hdev->para->tmds_clk_div40 ? 0x3 : 0);
+	scdc_wr_sink(TMDS_CFG, hdev->para->tmds_clk_div40 ? 0x3 : 0);
 	scdc_rd_sink(SCRAMBLER_ST, &st);
-	if (st & 0x1) {
+	cnt++;
+	if ((hdev->para->tmds_clk_div40) && (st & 0x1)) {
 		pr_info("hdmitx20: rx scrambler status\n");
 		return;
-	} else
-		mod_timer(&scdc_tmds_cfg_timer, jiffies + HZ);
+	} else {
+		if ((hdev->para->tmds_clk_div40) && (cnt < 3))
+			mod_timer(&scdc_tmds_cfg_timer, jiffies + HZ);
+		else
+			cnt = 0;
+	}
 }
 
 void scdc_config(void *hdev)
@@ -54,3 +61,4 @@ void scdc_config(void *hdev)
 	scdc_tmds_cfg_timer.expires = jiffies + HZ;
 	mod_timer(&scdc_tmds_cfg_timer, jiffies + HZ);
 }
+

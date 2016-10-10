@@ -4,96 +4,40 @@
 #include <dt-bindings/reset/aml_gxbb.h>
 #include <dt-bindings/thermal/thermal.h>
 #include <dt-bindings/interrupt-controller/arm-gic.h>
+#include "mesongxbb-gpu-mali450.dtsi"
 / {
 	cpus:cpus {
 		#address-cells = <2>;
 		#size-cells = <0>;
 		#cooling-cells = <2>; /* min followed by max */
 
-		cpu@0 {
+		cpu0:cpu@0 {
 			device_type = "cpu";
 			compatible = "arm,cortex-a53","arm,armv8";
 			reg = <0x0 0x0>;
 			enable-method = "psci";
-			timer=<&timer_f>;
 		};
 
-		cpu@1 {
+		cpu1:cpu@1 {
 			device_type = "cpu";
 			compatible = "arm,cortex-a53","arm,armv8";
 			reg = <0x0 0x1>;
 			enable-method = "psci";
-			timer=<&timer_g>;
 		};
-		cpu@2 {
+		cpu2:cpu@2 {
 			device_type = "cpu";
 			compatible = "arm,cortex-a53","arm,armv8";
 			reg = <0x0 0x2>;
 			enable-method = "psci";
-			timer=<&timer_h>;
 		};
 
-		cpu@3 {
+		cpu3:cpu@3 {
 			device_type = "cpu";
 			compatible = "arm,cortex-a53","arm,armv8";
 			reg = <0x0 0x3>;
 			enable-method = "psci";
-			timer=<&timer_i>;
 		};
 
-
-	};
-
-	meson_timer{
-		compatible = "arm, meson-timer";
-		#address-cells = <2>;
-		#size-cells = <2>;
-		ranges;
-		reg=   <0x0 0xc1109990 0x0 0x4 0x0 0xc1109988 0x0 0x4>;
-		timer_f:timer-f{
-			timer_name="MESON TIMER-F";
-			clockevent-rating=<300>;
-			clockevent-shift=<20>;
-			clockevent-features=<0x03>;
-			interrupts = <0 60 1>;
-			bit_enable=<16>;
-			bit_mode=<12>;
-			bit_resolution=<0>;
-			reg=   <0x0 0xc1109994 0x0 0x4>;
-		};
-		timer_g:timer-g{
-			timer_name="MESON TIMER-G";
-			clockevent-rating=<300>;
-			clockevent-shift=<20>;
-			clockevent-features=<0x03>;
-			interrupts = <0 61 1>;
-			bit_enable=<17>;
-			bit_mode=<13>;
-			bit_resolution=<2>;
-			reg=<0x0 0xc1109998 0x0 0x4>;
-		};
-		timer_h:timer-h{
-			timer_name="MESON TIMER-H";
-			clockevent-rating=<300>;
-			clockevent-shift=<20>;
-			clockevent-features=<0x03>;
-			interrupts = <0 62 1>;
-			bit_enable=<18>;
-			bit_mode=<14>;
-			bit_resolution=<4>;
-			reg=<0x0 0xc110999c 0x0 0x4>;
-		};
-		timer_i:timer-i{
-			timer_name="MESON TIMER-I";
-			clockevent-rating=<300>;
-			clockevent-shift=<20>;
-			clockevent-features=<0x03>;
-			interrupts = <0 63 1>;
-			bit_enable=<19>;
-			bit_mode=<15>;
-			bit_resolution=<6>;
-			reg=<0x0 0xc11099a0 0x0 0x4>;
-		};
 	};
 
 	timer {
@@ -103,7 +47,6 @@
 			        <GIC_PPI 11 0xff01>,
 			        <GIC_PPI 10 0xff01>;
 	};
-
 	arm_pmu {
 		compatible = "arm,armv8-pmuv3";
 		interrupts = <0 137 4>,
@@ -113,127 +56,19 @@
 	};
 	meson_suspend:pm{
 	           compatible = "amlogic, pm";
+	           device_name = "aml_pm";
 	           gxbaby-suspend;
 	           reg = <0x0 0xc81000a8 0x0 0x4
 				0x0 0xc810023c 0x0 0x4>;
 	};
-	gpu:mali@d00c0000{
-		#cooling-cells = <2>; /* min followed by max */
-		compatible = "arm,mali-450";
-		interrupt-parent = <&gic>;
-		reg = <0 0xd00c0000 0 0x40000>, /*mali APB bus base address*/
-		      <0 0xc883c000 0 0x00004>, /*hiubus base address for gpu clk cntl*/
-		      <0 0xc8100000 0 0x00004>; /*aobus  base address for gpu pmu domain*/
-		interrupts = <0 160 4>, <0 161 4>, <0 162 4>, <0 163 4>,
-				   <0 164 4>, <0 165 4>, <0 166 4>, <0 167 4>,
-				   <0 168 4>, <0 169 4>;
-		interrupt-names = "IRQGP", "IRQGPMMU", "IRQPP", "IRQPMU",
-			"IRQPP0", "IRQPPMMU0", "IRQPP1", "IRQPPMMU1",
-			"IRQPP2", "IRQPPMMU2";
-		pmu_domain_config = <0x1 0x2 0x4 0x4 0x0 0x0 0x0 0x0 0x0 0x1 0x2 0x0>;
-		pmu_switch_delay = <0xffff> ;
-		num_of_pp = <3> ;
-		def_clk = <4> ;
-		sc_mpp = <3>;/* number of pp used most of time.*/
-		min_pp = <3>;
-		min_clk = <4>;
-		tbl = <&clk125_cfg &clk285_cfg &clk400_cfg &clk500_cfg &clk666_cfg &clk800_cfg>;
 
-		clocks = <&clock CLK_FPLL_DIV3>,
-			<&clock CLK_FPLL_DIV4>,
-			<&clock CLK_FPLL_DIV5>,
-			<&clock CLK_FPLL_DIV7>,
-			<&clock GP0_PLL>,
-			<&clock CLK_MALI>,
-			<&clock CLK_MALI_0>,
-			<&clock CLK_MALI_1>;
-		clock-names =
-			"fclk_div3",
-			"fclk_div4",
-			"fclk_div5",
-			"fclk_div7",
-			"gp0_pll",
-			"clk_mali",
-			"clk_mali_0",
-			"clk_mali_1";
-
-		  /*control_interval x keep_count == 900 - 1000ms */
-		  control_interval = <200>;
-		  dvfs_tbl = <&gpu_dvfs_tbl>;
-
-		  clk125_cfg:clk125_cfg {
-			clk_freq = <125000000>;
-			clk_parent = "fclk_div4";
-			clkp_freq = <500000000>;
-			voltage = <1150>;
-			keep_count = <5>;
-			threshold = <30 120>;
-		  };
-
-		  clk250_cfg:clk250_cfg {
-			clk_freq = <250000000>;
-			clk_parent = "fclk_div4";
-			clkp_freq = <500000000>;
-			voltage = <1150>;
-			keep_count = <5>;
-			threshold = <80 170>;
-		  };
-
-		  clk285_cfg:clk285_cfg {
-			clk_freq = <285000000>;
-			clk_parent = "fclk_div7";
-			clkp_freq = <285000000>;
-			voltage = <1150>;
-			keep_count = <5>;
-			threshold = <100 190>;
-		  };
-
-		  clk400_cfg:clk400_cfg {
-			clk_freq = <400000000>;
-			clk_parent = "fclk_div5";
-			clkp_freq = <400000000>;
-			voltage = <1150>;
-			keep_count = <5>;
-			threshold = <152 207>;
-		  };
-
-		  clk500_cfg:clk500_cfg {
-			clk_freq = <500000000>;
-			clk_parent = "fclk_div4";
-			clkp_freq = <500000000>;
-			voltage = <1150>;
-			keep_count = <5>;
-			threshold = <180 220>;
-		  };
-
-		  clk666_cfg:clk666_cfg {
-			clk_freq = <666000000>;
-			clk_parent = "fclk_div3";
-			clkp_freq = <666000000>;
-			voltage = <1150>;
-			keep_count = <5>;
-			threshold = <210 236>;
-		  };
-
-		  clk800_cfg:clk800_cfg {
-			clk_freq = <792000000>;
-			clk_parent = "gp0_pll";
-			clkp_freq = <792000000>;
-			voltage = <1150>;
-			keep_count = <5>;
-			threshold = <230 255>;
-		  };
-
-	};
-	gic: interrupt-controller@c4301000{
-		compatible = "arm,gic-400", "arm,cortex-a15-gic", "arm,cortex-a9-gic";
+	gic: interrupt-controller@2c001000 {
+		compatible = "arm,cortex-a15-gic", "arm,cortex-a9-gic";
 		#interrupt-cells = <3>;
 		#address-cells = <0>;
 		interrupt-controller;
 		reg = <0x0 0xc4301000 0 0x1000>,
-		      <0x0 0xc4302000 0 0x2000>,
-		      <0x0 0xc4304000 0 0x2000>,
-		      <0x0 0xc4306000 0 0x2000>;
+		      <0x0 0xc4302000 0 0x0100>;
 		interrupts = <GIC_PPI 9 0xf04>;
 	};
 
@@ -254,7 +89,7 @@
 		migrate = <0xC4000005>;
 	};
 	secmon {
-		compatible = "aml,secmon";
+		compatible = "amlogic, secmon";
 		memory-region = <&secmon_reserved>;
 		in_base_func = <0x82000020>;
 		out_base_func = <0x82000021>;
@@ -275,7 +110,7 @@
 		storage_size_func = <0x82000027>;
 	};
 	cpu_iomap{
-		compatible = "amlogic,iomap";
+		compatible = "amlogic, iomap";
 		#address-cells=<2>;
 		#size-cells=<2>;
 		ranges;
@@ -296,13 +131,25 @@
 		clock-names = "cpu_clk";
         };
 
-	amlwatchdog: amlogic-watchdog{
-		compatible = "amlogic,meson-gxbb-wdt";
+	amlogic-watchdog{
+		compatible = "amlogic, gx-wdt";
 		status = "disable";
+		default_timeout=<10>;
+		reset_watchdog_method=<1>;//0:sysfs,1:kernel
+		reset_watchdog_time=<2>;
+		shutdown_timeout=<10>;
+		firmware_timeout=<6>;
+		suspend_timeout=<6>;
 		reg = <0x0 0xc11098d0 0x0 0x10>;
 		clocks = <&clock CLK_XTAL>;
 	};
-
+	amlogic-jtag {
+		compatible = "amlogic, jtag";
+		status = "okay";
+		pinctrl-names = "jtag_apao_pins", "jtag_apee_pins";
+		pinctrl-0 = <&jtag_apao_pins>;
+		pinctrl-1 = <&jtag_apee_pins>;
+	};
 	clock: meson_clock {
 		compatible = "amlogic, gxbb-clock";
 		reg = <0x0 0xc883c000 0x0 0x1000>,   /* HIU BUS*/
@@ -311,6 +158,10 @@
 		#reset-cells = <1>;
 		sys_max = <1536000000>;
 	};
+	cpu_info{
+		compatible = "amlogic, cpuinfo";
+		cpuinfo_cmd = <0x82000044>;
+	};
 	pinmux: pinmux{
 		compatible = "amlogic, pinmux-gxbb";
 		dev_name = "pinmux";
@@ -318,19 +169,11 @@
 		#address-cells = <2>;
 		#size-cells = <2>;
 		reg = <0x0 0xc1109880 0x0 0x10>;
-		interrupts = <	0 64 1	 /* gpio irq 0 = 64 + 32 = 96 */
-				0 65 1
-				0 66 1
-				0 67 1
-				0 68 1
-				0 69 1
-				0 70 1
-				0 71 1>; /* gpio irq bank 7 = 71 + 32 = 103 */
 		ranges;
 		gpio: banks@c11080b0 {
 			reg = <0x0 0xc88344b0 0x0 0x28>,
 			<0x0 0xc88344e8 0x0 0x14>,
-			<0x0 0xc8834120 0x0 0x14>,
+			<0x0 0xc8834520 0x0 0x14>,
 			<0x0 0xc8834430 0x0 0x40>;
 			reg-names = "mux", "pull", "pull-enable", "gpio";
 			gpio-controller;
@@ -354,6 +197,14 @@
                                 "GPIOZ_8","GPIOZ_9","GPIOZ_10","GPIOZ_11",
                                 "GPIOZ_12","GPIOZ_13","GPIOZ_15";
                 };
+		jtag_apao_pins:jtag_apao_pin{
+			amlogic,clrmask = <AO 0x78000000>;
+			amlogic,pins = "GPIOAO_8","GPIOAO_9","GPIOAO_10","GPIOAO_11";
+		};
+		jtag_apee_pins:jtag_apee_pin{
+			amlogic,clrmask = <2 0xcc00>;
+			amlogic,pins = "CARD_0","CARD_1","CARD_2","CARD_3";
+		};
 		remote_pins:remote_pin{
 			amlogic,setmask = <AO 0x1>;
 			amlogic,pins = "GPIOAO_7";
@@ -418,7 +269,7 @@
 		};
 		sd_1bit_uart_pins:sd_1bit_uart_pins{
 			amlogic,setmask=<2 0x00008c00>,
-											<8 0x00000600>;
+					<8 0x00000600>;
 			amlogic,pins = "CARD_1","CARD_2","CARD_3";
 			amlogic,enable-output=<1>; /* 0:output, 1:input */
 			amlogic,pullup=<1>;
@@ -435,12 +286,32 @@
 		ao_to_sd_uart_pins:ao_to_sd_uart_pins{
 			amlogic,setmask=<8 0x00000600>;
 			amlogic,clrmask=<AO 0x00001800>,
-											<2 0x00003000>;
+					<2 0x00003000>;
 			amlogic,pins = "CARD_4","CARD_5";
 			amlogic,enable-output=<1>; /* 0:output, 1:input */
 			amlogic,pullup=<1>;
 			amlogic,pullupen=<1>;
 		};
+		ao_to_sd_jtag_pins:ao_to_sd_jtag_pins{
+			amlogic,setmask=<8 0x00000600>;
+			amlogic,clrmask=<2 0x0000CC00>,
+					<AO 0x00001800>;
+			amlogic,pins = "CARD_4","CARD_5";
+			amlogic,enable-output=<1>; /* 0:output, 1:input */
+			amlogic,pullup=<1>;
+			amlogic,pullupen=<1>;
+		};
+		sd_to_ao_jtag_pins:sd_to_ao_jtag_pins{
+			amlogic,setmask=<AO 0x00001800>;
+			amlogic,clrmask=<8 0x00000600>,
+					<2 0x0000CC00>;
+			amlogic,pins = "GPIOAO_0","GPIOAO_1";
+			amlogic,enable-output=<1>; /* 0:output, 1:input */
+			amlogic,pullup=<1>;
+			amlogic,pullupen=<1>;
+		};
+
+
 		emmc_clk_cmd_pins:emmc_clk_cmd_pins{
 		    amlogic,setmask=<4 0xc00c0000>;
 		    amlogic,pins = "BOOT_8","BOOT_10"; /** BOOT_10:CMD, BOOT_8:CLK */
@@ -554,6 +425,11 @@
 			amlogic,clrmask=<2 0x3000000 3 0x1000>;
 			amlogic,pins="GPIOX_16","GPIOX_17";
 		};
+		i2c_slave_pin:s_i2c{
+			amlogic,setmask=<AO 0x6>;
+			amlogic,clrmask=<AO 0x1800060>;
+			amlogic,pins="GPIOAO_4","GPIOAO_5";
+		};
 		dvb_p_ts0_pins: dvb_p_ts0_pins {
 			amlogic,setmask = <3 0x37>;
 			amlogic,clrmask = <2 0xf0000 1 0x30ff>;
@@ -638,6 +514,15 @@
 		clock-names = "clk_i2c";
 		resets = <&clock GCLK_IDX_I2C>;
 	};
+	i2c_slave:i2c_slave@c8100540{
+		compatible = "amlogic, meson-i2c-slave";
+		status = "disabled";
+		reg = <0x0 0xc8100540 0x0 0x20>;
+		interrupts = <0 194 1>;
+		pinctrl-names="default";
+		pinctrl-0=<&i2c_slave_pin>;
+
+	};
 	efuse: efuse{
 		compatible = "amlogic, efuse";
 		read_cmd = <0x82000030>;
@@ -680,8 +565,8 @@
 		compatible = "amlogic, meson_mhu";
 		reg = <0x0 0xc883c400 0x0 0x4c>,   /* MHU registers */
 		      <0x0 0xc8013000 0x0 0x800>;   /* Payload area */
-		interrupts = <0 209 8>,   /* low priority interrupt */
-			     <0 210 8>;   /* high priority interrupt */
+		interrupts = <0 209 IRQ_TYPE_EDGE_RISING>,   /* low priority interrupt */
+			     <0 210 IRQ_TYPE_EDGE_RISING>;   /* high priority interrupt */
 		#mbox-cells = <1>;
 		mbox-names = "cpu_to_scp_low", "cpu_to_scp_high";
 		mboxes = <&mailbox 0 &mailbox 1>;
@@ -696,6 +581,15 @@
 			clock-output-names = "vcpu";
 		};
 
+	};
+	meson-remote {
+		compatible = "amlogic, aml_remote";
+		dev_name = "meson-remote";
+		status = "ok";
+		remote_ao_offset = <0x580>; /* 0x400 + (0x20 + idx)<<2 -- old ; 0x400 + (0x60 +idx)<<2 --new   */
+		interrupts = <0 196 1>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&remote_pins>;
 	};
 
 	rng {
@@ -720,5 +614,192 @@
 		reg = <0x0 0xc1108680 0x0 0x30
 					 0x0 0xc883c3d8 0x0 0x08>;
 	};
+
+	defendkey: defendkey {
+		compatible = "amlogic, defendkey";
+		reg = <0x0 0xc8834500 0x0 0x4>; /*RAND64_ADDR0*/
+		mem_size = <0x0 0x100000>;
+		status = "disabled";
+	};
+
+	tpiu@0,c0202000 {
+		compatible = "arm,coresight-tpiu", "arm,primecell";
+		reg = <0 0xc0202000 0 0x1000>;
+
+		clocks = <&clock CLK_APB_P>;
+		clock-names = "apb_pclk";
+		port {
+			tpiu_in_port: endpoint@0 {
+				slave-mode;
+				remote-endpoint = <&replicator_out_port0>;
+			};
+		};
+	};
+
+	etb@0,c0203000 {
+		compatible = "arm,coresight-etb10", "arm,primecell";
+		reg = <0 0xc0203000 0 0x1000>;
+
+		clocks = <&clock CLK_APB_P>;
+		clock-names = "apb_pclk";
+		port {
+			etb_in_port: endpoint@0 {
+				slave-mode;
+				remote-endpoint = <&replicator_out_port1>;
+			};
+		};
+	};
+
+	replicator@0,c0204000 {
+		compatible = "arm,coresight-replicator-qcom", "arm,primecell";
+		reg = <0 0xc0204000 0 0x1000>;
+
+		clocks = <&clock CLK_APB_P>;
+		clock-names = "apb_pclk";
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			/* replicator output ports */
+			port@0 {
+				#address-cells = <1>;
+				#size-cells = <0>;
+				reg = <0>;
+				replicator_out_port0: endpoint {
+					reg = <0>;
+					remote-endpoint = <&tpiu_in_port>;
+				};
+			};
+
+			port@1 {
+				#address-cells = <1>;
+				#size-cells = <0>;
+				reg = <1>;
+				replicator_out_port1: endpoint {
+					reg = <1>;
+					remote-endpoint = <&etb_in_port>;
+				};
+			};
+
+			/* replicator input port */
+			port@2 {
+				reg = <0>;
+				replicator_in_port0: endpoint {
+					slave-mode;
+					remote-endpoint = <&funnel_out_port0>;
+				};
+			};
+		};
+	};
+
+	funnel@0,c0201000 {
+		compatible = "arm,coresight-funnel", "arm,primecell";
+		reg = <0 0xc0201000 0 0x1000>;
+
+		clocks = <&clock CLK_APB_P>;
+		clock-names = "apb_pclk";
+		ports {
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			/* funnel output port */
+			port@0 {
+				reg = <0>;
+				funnel_out_port0: endpoint {
+					remote-endpoint = <&replicator_in_port0>;
+				};
+			};
+
+			/* funnel input ports */
+			port@1 {
+				reg = <0>;
+				funnel_in_port0: endpoint {
+					slave-mode;
+					remote-endpoint = <&etm0_out_port>;
+				};
+			};
+
+			port@2 {
+				reg = <1>;
+				funnel_in_port1: endpoint {
+					slave-mode;
+					remote-endpoint = <&etm1_out_port>;
+				};
+			};
+
+			port@3 {
+				reg = <2>;
+				funnel_in_port2: endpoint {
+					slave-mode;
+					remote-endpoint = <&etm2_out_port>;
+				};
+			};
+
+			port@4 {
+				reg = <3>;
+				funnel_in_port3: endpoint {
+					slave-mode;
+					remote-endpoint = <&etm3_out_port>;
+				};
+			};
+		};
+	};
+
+	etm@0,c0440000 {
+		compatible = "arm,coresight-etm4x", "arm,primecell";
+		reg = <0 0xc0440000 0 0x1000>;
+
+		cpu = <&cpu0>;
+		clocks = <&clock CLK_APB_P>;
+		clock-names = "apb_pclk";
+		port {
+			etm0_out_port: endpoint {
+				remote-endpoint = <&funnel_in_port0>;
+			};
+		};
+	};
+
+	etm@0,c0540000 {
+		compatible = "arm,coresight-etm4x", "arm,primecell";
+		reg = <0 0xc0540000 0 0x1000>;
+
+		cpu = <&cpu1>;
+		clocks = <&clock CLK_APB_P>;
+		clock-names = "apb_pclk";
+		port {
+			etm1_out_port: endpoint {
+				remote-endpoint = <&funnel_in_port1>;
+			};
+		};
+	};
+
+	etm@0,c0640000 {
+		compatible = "arm,coresight-etm4x", "arm,primecell";
+		reg = <0 0xc0640000 0 0x1000>;
+
+		cpu = <&cpu2>;
+		clocks = <&clock CLK_APB_P>;
+		clock-names = "apb_pclk";
+		port {
+			etm2_out_port: endpoint {
+				remote-endpoint = <&funnel_in_port2>;
+			};
+		};
+	};
+
+	etm@0,c0740000 {
+		compatible = "arm,coresight-etm4x", "arm,primecell";
+		reg = <0 0xc0740000 0 0x1000>;
+
+		cpu = <&cpu3>;
+		clocks = <&clock CLK_APB_P>;
+		clock-names = "apb_pclk";
+		port {
+			etm3_out_port: endpoint {
+				remote-endpoint = <&funnel_in_port3>;
+			};
+		};
+	};
+
 
 };/* end of / */

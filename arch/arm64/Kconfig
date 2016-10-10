@@ -1,7 +1,6 @@
 config ARM64
 	def_bool y
 	select ARCH_HAS_ATOMIC64_DEC_IF_POSITIVE
-	select ARCH_HAS_GCOV_PROFILE_ALL
 	select ARCH_USE_CMPXCHG_LOCKREF
 	select ARCH_SUPPORTS_ATOMIC_RMW
 	select ARCH_HAS_TICK_BROADCAST if GENERIC_CLOCKEVENTS_BROADCAST
@@ -90,10 +89,6 @@ config NO_IOPORT
 config STACKTRACE_SUPPORT
 	def_bool y
 
-config ILLEGAL_POINTER_VALUE
-	hex
-	default 0xdead000000000000
-
 config LOCKDEP_SUPPORT
 	def_bool y
 
@@ -157,12 +152,6 @@ config ARCH_XGENE
 	help
 	  This enables support for AppliedMicro X-Gene SOC Family
 
-config ARCH_MESON64_ODROIDC2
-        bool "Hardkernel's ODROID-C2 board"
-        help
-          This enables support for the board ODROID-C2 of Hardkernel
-          which is based on ARMv8 SoC of AMLogic, Inc.
-
 endmenu
 
 menu "Bus support"
@@ -172,14 +161,12 @@ config ARM_AMBA
 
 endmenu
 
-menu "Kernel Features"
-
-menu "ARM errata workarounds"
+menu "ARM errata workarounds via the alternatives framework"
 
 config ARM64_ERRATUM_845719
 	bool "Cortex-A53: 845719: a load might read incorrect data"
 	depends on COMPAT
-	default n
+	default y
 	help
 	  This option adds an alternative code sequence to work around ARM
 	  erratum 845719 on Cortex-A53 parts up to r0p4.
@@ -197,8 +184,33 @@ config ARM64_ERRATUM_845719
 
 	  If unsure, say Y.
 
+config ARM64_ERRATUM_843419
+	bool "Cortex-A53: 843419: A load or store might access an incorrect address"
+	depends on MODULES
+	default y
+	help
+	  This option builds kernel modules using the large memory model in
+	  order to avoid the use of the ADRP instruction, which can cause
+	  a subsequent memory access to use an incorrect address on Cortex-A53
+	  parts up to r0p4.
+
+	  Note that the kernel itself must be linked with a version of ld
+	  which fixes potentially affected ADRP instructions through the
+	  use of veneers.
+
+	  If unsure, say Y.
+
+config ARM64_ERRATUM_835769
+	bool "Cortex-A53: 835769: AArch64 multiply-accumulate instruction might produce incorrect result"
+	depends on MODULES
+	default y
+	help
+	  This option build kernel with option -mfix-cortex-a53-835769 to
+	  fix mulity-accumulate bug of cpu
+
 endmenu
 
+menu "Kernel Features"
 
 config ARM64_64K_PAGES
 	bool "Enable 64KB pages support"
@@ -265,7 +277,7 @@ config DISABLE_CPU_SCHED_DOMAIN_BALANCE
 
 config SCHED_HMP
 	bool "(EXPERIMENTAL) Heterogenous multiprocessor scheduling"
-	depends on DISABLE_CPU_SCHED_DOMAIN_BALANCE && SCHED_MC && FAIR_GROUP_SCHED && !SCHED_AUTOGROUP
+	depends on SCHED_MC && FAIR_GROUP_SCHED && !SCHED_AUTOGROUP
 	help
 	  Experimental scheduler optimizations for heterogeneous platforms.
 	  Attempts to introspectively select task affinity to optimize power
@@ -456,10 +468,30 @@ config ARCH_WANT_HUGE_PMD_SHARE
 config HAVE_ARCH_TRANSPARENT_HUGEPAGE
 	def_bool y
 
-config ARCH_HAS_CACHE_LINE_SIZE
-	def_bool y
-
 source "mm/Kconfig"
+
+config KEXEC
+	depends on (!SMP || PM_SLEEP_SMP)
+	select KEXEC_CORE
+	bool "kexec system call"
+	---help---
+	  kexec is a system call that implements the ability to shutdown your
+	  current kernel, and to start another kernel.  It is like a reboot
+	  but it is independent of the system firmware.   And like a reboot
+	  you can start any kernel with it, not just Linux.
+
+config CRASH_DUMP
+	bool "Build kdump crash kernel"
+	help
+	  Generate crash dump after being started by kexec. This should
+	  be normally only set in special crash dump kernels which are
+	  loaded in the main kernel with kexec-tools into a specially
+	  reserved region and then later executed after a crash by
+	  kdump/kexec. The crash dump kernel must be compiled to a
+	  memory address not used by the main kernel.
+
+	  For more details see Documentation/kdump/kdump.txt
+
 
 config XEN_DOM0
 	def_bool y
@@ -543,20 +575,6 @@ config BUILD_ARM64_APPENDED_DTB_IMAGE_NAMES
 	  Space separated list of names of dtbs to append when
 	  building a concatenated Image.gz-dtb.
 
-config EFI
-	bool "UEFI runtime support"
-	depends on OF && !CPU_BIG_ENDIAN
-	select LIBFDT
-	select UCS2_STRING
-	select EFI_PARAMS_FROM_FDT
-	default y
-	help
-	  This option provides support for runtime services provided
-	  by UEFI firmware (such as non-volatile variables, realtime
-          clock, and platform reset). A UEFI stub is also provided to
-	  allow the kernel to be booted as an EFI application. This
-	  is only useful on systems that have UEFI firmware.
-
 endmenu
 
 menu "Userspace binary formats"
@@ -605,29 +623,11 @@ menu "CPU Power Management"
 
 source "drivers/cpuidle/Kconfig"
 
-config ARM64_ERRATUM_843419
-	bool "Cortex-A53: 843419: A load or store might access an incorrect address"
-	depends on MODULES
-	default y
-	help
-	  This option builds kernel modules using the large memory model in
-	  order to avoid the use of the ADRP instruction, which can cause
-	  a subsequent memory access to use an incorrect address on Cortex-A53
-	  parts up to r0p4.
-
-	  Note that the kernel itself must be linked with a version of ld
-	  which fixes potentially affected ADRP instructions through the
-	  use of veneers.
-
-	  If unsure, say Y.
-
 endmenu
 
 source "net/Kconfig"
 
 source "drivers/Kconfig"
-
-source "drivers/firmware/Kconfig"
 
 source "fs/Kconfig"
 

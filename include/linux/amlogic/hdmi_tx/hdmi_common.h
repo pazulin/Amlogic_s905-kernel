@@ -24,7 +24,6 @@
 	VIC_MAX_VALID_MODE and VIC_MAX_NUM in hdmi_tx_module.h */
 #define HDMITX_VIC420_OFFSET	0x100
 #define HDMITX_VIC420_FAKE_OFFSET 0x200
-#define HDMITX_VESA_OFFSET	0x300
 
 #define HDMITX_VIC_MASK			0xff
 
@@ -167,30 +166,7 @@ enum hdmi_vic {
 	HDMI_VIC_Y420_MAX,
 
 	HDMI_VIC_FAKE = HDMITX_VIC420_FAKE_OFFSET,
-
-	HDMIV_640x480p60hz = HDMITX_VESA_OFFSET,
-	HDMIV_800x480p60hz,
-	HDMIV_800x600p60hz,
-	HDMIV_1024x600p60hz,
-	HDMIV_1024x768p60hz,
-	HDMIV_1280x800p60hz,
-	HDMIV_1280x1024p60hz,
-	HDMIV_1360x768p60hz,
-	HDMIV_1366x768p60hz,
-	HDMIV_1440x900p60hz,
-	HDMIV_1600x900p60hz,
-	HDMIV_1600x1200p60hz,
-	HDMIV_1680x1050p60hz,
-	HDMIV_1920x1200p60hz,
-	HDMIV_2560x1440p60hz,
-	HDMIV_2560x1600p60hz,
-	HDMIV_2560x1080p60hz,
-	HDMIV_3440x1440p60hz,
-	/*
-	 the following vic is custom-built one
-	 and detailed parameters are defined in boot.ini
-	*/
-	HDMIV_CUSTOMBUILT,
+	HDMI_VIC_END,
 };
 
 /* Compliance with old definitions */
@@ -230,7 +206,8 @@ enum hdmi_vic {
 /* for Y420 modes*/
 #define HDMI_4k2k_50_y420       HDMI_3840x2160p50_16x9_Y420
 #define HDMI_4k2k_60_y420       HDMI_3840x2160p60_16x9_Y420
-
+#define HDMI_4k2k_smpte_50_y420 HDMI_4096x2160p50_256x135_Y420
+#define HDMI_4k2k_smpte_60_y420 HDMI_4096x2160p60_256x135_Y420
 
 /* CEA TIMING STRUCT DEFINITION */
 struct hdmi_cea_timing {
@@ -254,6 +231,26 @@ struct hdmi_cea_timing {
 	unsigned short v_sync_ln;
 };
 
+enum hdmi_color_depth {
+	COLORDEPTH_24B = 4,
+	COLORDEPTH_30B = 5,
+	COLORDEPTH_36B = 6,
+	COLORDEPTH_48B = 7,
+};
+
+enum hdmi_color_space {
+	COLORSPACE_RGB444 = 0,
+	COLORSPACE_YUV422 = 1,
+	COLORSPACE_YUV444 = 2,
+	COLORSPACE_YUV420 = 3,
+	COLORSPACE_RESERVED,
+};
+
+enum hdmi_color_range {
+	COLORRANGE_LIM,
+	COLORRANGE_FUL,
+};
+
 /* get hdmi cea timing */
 /* t: struct hdmi_cea_timing * */
 #define GET_TIMING(name)      (t->name)
@@ -261,6 +258,11 @@ struct hdmi_cea_timing {
 struct hdmi_format_para {
 	enum hdmi_vic vic;
 	unsigned char *name;
+	unsigned char *sname;
+	char ext_name[32];
+	enum hdmi_color_depth cd; /* cd8, cd10 or cd12 */
+	enum hdmi_color_space cs; /* rgb, y444, y422, y420 */
+	enum hdmi_color_range cr; /* limit, full */
 	unsigned int pixel_repetition_factor;
 	unsigned int progress_mode:1;
 	unsigned int scrambler_en:1;
@@ -298,24 +300,6 @@ struct hdmi_format_para {
 #define AVI_INFOFRAMES_VERSION    0x02
 #define AVI_INFOFRAMES_LENGTH     0x0D
 
-enum hdmi_color_depth {
-	hdmi_color_depth_24B = 4,
-	hdmi_color_depth_30B = 5,
-	hdmi_color_depth_36B = 6,
-	hdmi_color_depth_48B = 7,
-};
-
-enum hdmi_color_format {
-	hdmi_color_format_RGB,
-	hdmi_color_format_444,
-	hdmi_color_format_422,
-	hdmi_color_format_420,
-};
-
-enum hdmi_color_range {
-	hdmi_color_range_LIM, hdmi_color_range_FUL,
-};
-
 struct hdmi_csc_coef_table {
 	unsigned char input_format;
 	unsigned char output_format;
@@ -332,14 +316,6 @@ enum hdmi_audio_packet {
 	hdmi_audio_packet_HBR = 0x09,
 };
 
-enum hdmi_color_space_type {
-	COLOR_SPACE_RGB444 = 0,
-	COLOR_SPACE_YUV422 = 1,
-	COLOR_SPACE_YUV444 = 2,
-	COLOR_SPACE_YUV420 = 3,
-	COLOR_SPACE_RESERVED,
-};
-
 enum hdmi_aspect_ratio {
 	ASPECT_RATIO_SAME_AS_SOURCE = 0x8,
 	TV_ASPECT_RATIO_4_3 = 0x9,
@@ -354,10 +330,12 @@ unsigned int hdmi_get_csc_coef(
 	unsigned int input_format, unsigned int output_format,
 	unsigned int color_depth, unsigned int color_format,
 	unsigned char **coef_array, unsigned int *coef_length);
-
+struct hdmi_format_para *hdmi_get_fmt_name(char const *name);
 
 /* HDMI Audio Parmeters */
 /* Refer to CEA-861-D Page 88 */
+#define DTS_HD_TYPE_MASK 0xff00
+#define DTS_HD_MA  (0X1 << 8)
 enum hdmi_audio_type {
 	CT_REFER_TO_STREAM = 0,
 	CT_PCM,
@@ -374,6 +352,7 @@ enum hdmi_audio_type {
 	CT_MAT, /* TrueHD */
 	CT_DST,
 	CT_WMA,
+	CT_DTS_HD_MA = CT_DTS_HD + (DTS_HD_MA),
 	CT_MAX,
 };
 
@@ -528,6 +507,21 @@ struct hdmi_audio_fs_ncts {
 		unsigned int cts;
 	} array[AUDIO_PARA_MAX_NUM];
 	unsigned int def_n;
+};
+
+struct parse_cd {
+	enum hdmi_color_depth cd;
+	const char *name;
+};
+
+struct parse_cs {
+	enum hdmi_color_space cs;
+	const char *name;
+};
+
+struct parse_cr {
+	enum hdmi_color_range cr;
+	const char *name;
 };
 
 #endif

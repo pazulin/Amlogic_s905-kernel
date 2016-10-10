@@ -34,6 +34,7 @@
 #include <linux/mm.h>
 
 /* Local Headers */
+#include <linux/amlogic/cpu_version.h>
 #include "osd.h"
 #include "osd_io.h"
 #include "osd_reg.h"
@@ -50,7 +51,6 @@ static void *table_vaddr;
 static u32 rdma_enable;
 static u32 item_count;
 static u32 rdma_debug;
-static char *info;
 static bool osd_rdma_init_flag;
 static int ctrl_ahb_rd_burst_size = 3;
 static int ctrl_ahb_wr_burst_size = 3;
@@ -147,19 +147,14 @@ static int update_table_item(u32 addr, u32 val)
 		/*rdma table is full*/
 		return -1;
 	}
-	if (info)
-		sprintf(info, "item_count : %d\n"
-				"reg_ctrl : %x\n"
-				"reg_status : %x\n"
-				"reg_auto :0x%x\n"
-				"reg_flag :0x%x\n",
-				item_count, osd_reg_read(RDMA_CTRL),
-				osd_reg_read(RDMA_STATUS),
-				osd_reg_read(RDMA_ACCESS_AUTO),
-				osd_reg_read(OSD_RDMA_FLAG_REG));
+	trace_printk("%02dth, ctrl: 0x%02x, status: 0x%04x, auto:0x%08x, flag:0x%08x\n",
+			item_count, osd_reg_read(RDMA_CTRL),
+			osd_reg_read(RDMA_STATUS),
+			osd_reg_read(RDMA_ACCESS_AUTO),
+			osd_reg_read(OSD_RDMA_FLAG_REG));
 retry:
 	if (0 == (retry_count--)) {
-		pr_info("OSD RDMA stuck .....%d,0x%x\n", retry_count,
+		trace_printk("OSD RDMA stuck .....%d,0x%x\n", retry_count,
 			osd_reg_read(RDMA_STATUS));
 		reset_rdma_table();
 		OSD_RDMA_STAUS_MARK_DIRTY;
@@ -196,7 +191,7 @@ retry:
 	osd_rdma_mem_cpy(&rdma_table[item_count], &request_item, 8);
 
 	if (OSD_RDMA_STATUS_IS_REJECT) {
-		pr_info("rdma done detect +++++%d,0x%x\n",
+		trace_printk("rdma done detect +++++%d,0x%x\n",
 				retry_count, osd_reg_read(RDMA_STATUS));
 		item_count--;
 		spin_unlock_irqrestore(&rdma_lock, flags);
@@ -214,7 +209,7 @@ retry:
 	if (!OSD_RDMA_STAUS_IS_DIRTY || OSD_RDMA_STATUS_IS_REJECT) {
 		item_count--;
 		spin_unlock_irqrestore(&rdma_lock, flags);
-		pr_info("osd_rdma flag ++++++: %x\n",
+		trace_printk("osd_rdma flag ++++++: %x\n",
 			osd_reg_read(OSD_RDMA_FLAG_REG));
 		goto retry;
 	}
@@ -225,11 +220,20 @@ retry:
 u32 VSYNCOSD_RD_MPEG_REG(u32 addr)
 {
 	int  i;
+	u32 val = 0;
+	unsigned long flags;
+
 	if (rdma_enable) {
+		spin_lock_irqsave(&rdma_lock, flags);
 		for (i = (item_count - 1); i >= 0; i--) {
-			if (addr == rdma_table[i].addr)
-				return rdma_table[i].val;
+			if (addr == rdma_table[i].addr) {
+				val = rdma_table[i].val;
+				break;
+			}
 		}
+		spin_unlock_irqrestore(&rdma_lock, flags);
+		if (i >= 0)
+			return val;
 	}
 	return osd_reg_read(addr);
 }
@@ -392,12 +396,10 @@ int osd_rdma_enable(u32 enable)
 	if (enable) {
 		OSD_RDMA_STATUS_CLEAR_ALL;
 		reset_rdma_table();
-		info = kmalloc(GFP_KERNEL, sizeof(char)*200);
 		osd_reg_write(START_ADDR, table_paddr);
 		start_osd_rdma(OSD_RDMA_CHANNEL_INDEX);
 	} else {
 		stop_rdma(OSD_RDMA_CHANNEL_INDEX);
-		kfree(info);
 	}
 
 	return 1;
@@ -418,6 +420,8 @@ static irqreturn_t osd_rdma_isr(int irq, void *dev_id)
 	osd_update_scan_mode();
 	osd_update_3d_mode();
 	osd_update_vsync_hit();
+
+	osd_hw_reset();
 
 	if (ret) {
 		/*This is a memory barrier*/
@@ -483,9 +487,6 @@ error2:
 
 MODULE_PARM_DESC(item_count, "\n item_count\n");
 module_param(item_count, uint, 0664);
-
-MODULE_PARM_DESC(info, "\n info\n");
-module_param(info, charp, S_IRUSR);
 
 MODULE_PARM_DESC(table_paddr, "\n table_paddr\n");
 module_param(table_paddr, uint, 0664);

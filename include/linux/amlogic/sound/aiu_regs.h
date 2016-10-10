@@ -70,6 +70,7 @@
 #define AIU_CODEC_ADC_LRCLK_CTRL	0x1529
 #define AIU_HDMI_CLK_DATA_CTRL		0x152a
 #define AIU_CODEC_CLK_DATA_CTRL		0x152b
+#define AIU_ACODEC_CTRL			0x152c
 #define AIU_958_CHSTAT_R0		0x1530
 #define AIU_958_CHSTAT_R1		0x1531
 #define AIU_958_VALID_CTRL		0x1532
@@ -184,7 +185,16 @@
 #define AIU_I2S_CBUS_DDR_WDATA		0x15aa
 #define AIU_I2S_CBUS_DDR_ADDR		0x15ab
 
+#define ISA_TIMER_MUX   0x2650
+#define ISA_TIMERA      0x2651
+#define ISA_TIMERB      0x2652
+#define ISA_TIMERC      0x2653
+#define ISA_TIMERD      0x2654
+#define ISA_TIMERE      0x2655
+
 #define MEDIA_CPU_CTL				0x2661
 #define RESET2_REGISTER				0x1103
+#define RESET1_REGISTER				0x1102
+#define ACODEC_RESET				0x1D
 
 #endif /* _AML_AIU_REGS_H */

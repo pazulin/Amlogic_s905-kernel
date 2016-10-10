@@ -452,7 +452,8 @@ int init_canvas(int start_addr, long dpb_size, int dpb_number, int mb_width,
 					codec_mm_alloc_for_dma(
 					MEM_NAME, buffer_spec[i].alloc_count,
 					4 + PAGE_SHIFT,
-					CODEC_MM_FLAGS_CMA_CLEAR);
+					CODEC_MM_FLAGS_CMA_CLEAR |
+					CODEC_MM_FLAGS_FOR_VDECODER);
 			}
 			alloc_count++;
 
@@ -805,7 +806,7 @@ static irqreturn_t vh264_4k2k_isr(int irq, void *dev_id)
 				frame_dur = 96000 / 10;
 			}
 #endif
-
+			vf->signal_type = 0;
 			vf->index = display_buff_id;
 			vf->type = VIDTYPE_PROGRESSIVE | VIDTYPE_VIU_FIELD;
 			vf->type |= VIDTYPE_VIU_NV21;
@@ -987,9 +988,11 @@ static void vh264_4k2k_put_timer_func(unsigned long arg)
 			(READ_VREG(BUFFER_RECYCLE) == 0)) {
 		struct vframe_s *vf;
 		if (kfifo_get(&recycle_q, &vf)) {
-			if ((vf->index >= 0) && (--vfbuf_use[vf->index] == 0)) {
+			if ((vf->index >= 0)
+					&& (vf->index < DECODE_BUFFER_NUM_MAX)
+					&& (--vfbuf_use[vf->index] == 0)) {
 				WRITE_VREG(BUFFER_RECYCLE, vf->index + 1);
-				vf->index = -1;
+				vf->index = DECODE_BUFFER_NUM_MAX;
 			}
 
 			kfifo_put(&newframe_q, (const struct vframe_s *)vf);
@@ -999,10 +1002,10 @@ static void vh264_4k2k_put_timer_func(unsigned long arg)
 		frame_dur > 0 && saved_resolution !=
 		frame_width * frame_height * (96000 / frame_dur)) {
 		int fps = 96000 / frame_dur;
-		saved_resolution = frame_width * frame_height * fps;
 		pr_info("H264 4k2k resolution changed!!\n");
-		vdec_source_changed(VFORMAT_H264_4K2K,
-			frame_width, frame_height, fps);
+		if (vdec_source_changed(VFORMAT_H264_4K2K,
+			frame_width, frame_height, fps) > 0)/*changed clk ok*/
+			saved_resolution = frame_width * frame_height * fps;
 	}
 	timer->expires = jiffies + PUT_INTERVAL;
 
@@ -1370,7 +1373,7 @@ static void vh264_4k2k_local_init(void)
 
 	for (i = 0; i < VF_POOL_SIZE; i++) {
 		const struct vframe_s *vf = &vfpool[i];
-		vfpool[i].index = -1;
+		vfpool[i].index = DECODE_BUFFER_NUM_MAX;
 		kfifo_put(&newframe_q, vf);
 	}
 
@@ -1812,10 +1815,10 @@ static struct codec_profile_t amvdec_h264_4k2k_profile = {
 
 static int __init amvdec_h264_4k2k_driver_init_module(void)
 {
-	pr_info("amvdec_h264_4k2k module init\n");
+	pr_debug("amvdec_h264_4k2k module init\n");
 
 	if (platform_driver_register(&amvdec_h264_4k2k_driver)) {
-		pr_info("failed to register amvdec_h264_4k2k driver\n");
+		pr_err("failed to register amvdec_h264_4k2k driver\n");
 		return -ENODEV;
 	}
 
@@ -1826,7 +1829,7 @@ static int __init amvdec_h264_4k2k_driver_init_module(void)
 
 static void __exit amvdec_h264_4k2k_driver_remove_module(void)
 {
-	pr_info("amvdec_h264_4k2k module remove.\n");
+	pr_debug("amvdec_h264_4k2k module remove.\n");
 
 	platform_driver_unregister(&amvdec_h264_4k2k_driver);
 }

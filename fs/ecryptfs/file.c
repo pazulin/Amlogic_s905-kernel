@@ -76,11 +76,11 @@ struct ecryptfs_getdents_callback {
 
 /* Inspired by generic filldir in fs/readdir.c */
 static int
-ecryptfs_filldir(struct dir_context *ctx, const char *lower_name,
-		 int lower_namelen, loff_t offset, u64 ino, unsigned int d_type)
+ecryptfs_filldir(void *dirent, const char *lower_name, int lower_namelen,
+		 loff_t offset, u64 ino, unsigned int d_type)
 {
 	struct ecryptfs_getdents_callback *buf =
-		container_of(ctx, struct ecryptfs_getdents_callback, ctx);
+	    (struct ecryptfs_getdents_callback *)dirent;
 	size_t name_size;
 	char *name;
 	int rc;
@@ -176,19 +176,6 @@ static int read_or_initialize_metadata(struct dentry *dentry)
 out:
 	mutex_unlock(&crypt_stat->cs_mutex);
 	return rc;
-}
-
-static int ecryptfs_mmap(struct file *file, struct vm_area_struct *vma)
-{
-	struct file *lower_file = ecryptfs_file_to_lower(file);
-	/*
-	 * Don't allow mmap on top of file systems that don't support it
-	 * natively.  If FILESYSTEM_MAX_STACK_DEPTH > 2 or ecryptfs
-	 * allows recursive mounting, this will need to be extended.
-	 */
-	if (!lower_file->f_op->mmap)
-		return -ENODEV;
-	return generic_file_mmap(file, vma);
 }
 
 /**
@@ -362,7 +349,7 @@ const struct file_operations ecryptfs_main_fops = {
 #ifdef CONFIG_COMPAT
 	.compat_ioctl = ecryptfs_compat_ioctl,
 #endif
-	.mmap = ecryptfs_mmap,
+	.mmap = generic_file_mmap,
 	.open = ecryptfs_open,
 	.flush = ecryptfs_flush,
 	.release = ecryptfs_release,

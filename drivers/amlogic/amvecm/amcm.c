@@ -63,12 +63,15 @@ static struct am_regs_s amregs3;
 static struct am_regs_s amregs4;
 static struct am_regs_s amregs5;
 
+static struct sr1_regs_s sr1_regs[101];
+
 /* extern unsigned int vecm_latch_flag; */
 
 void am_set_regmap(struct am_regs_s *p)
 {
 	unsigned short i;
 	unsigned int temp = 0;
+	unsigned short sr1_temp = 0;
 	for (i = 0; i < p->length; i++) {
 		switch (p->am_reg[i].type) {
 		case REG_TYPE_PHY:
@@ -170,6 +173,25 @@ void am_set_regmap(struct am_regs_s *p)
 				/* (READ_VCBUS_REG(p->am_reg[i].addr) & */
 				/* (~(p->am_reg[i].mask))) | */
 				/* (p->am_reg[i].val & p->am_reg[i].mask)); */
+			if ((is_meson_gxtvbb_cpu()) &&
+				(p->am_reg[i].addr >= 0x3280)
+				&& (p->am_reg[i].addr <= 0x32e4)) {
+				if (p->am_reg[i].addr == 0x32d7)
+					break;
+					sr1_temp = p->am_reg[i].addr - 0x3280;
+					sr1_regs[sr1_temp].addr =
+						p->am_reg[i].addr;
+					sr1_regs[sr1_temp].mask =
+						p->am_reg[i].mask;
+					sr1_regs[sr1_temp].val =
+						(sr1_regs[sr1_temp].val &
+						(~(p->am_reg[i].mask))) |
+					(p->am_reg[i].val & p->am_reg[i].mask);
+					sr1_reg_val[sr1_temp] =
+						sr1_regs[sr1_temp].val;
+				aml_write_vcbus(p->am_reg[i].addr,
+					sr1_regs[sr1_temp].val);
+			} else
 				aml_write_vcbus(p->am_reg[i].addr,
 					(aml_read_vcbus(p->am_reg[i].addr) &
 					(~(p->am_reg[i].mask))) |
@@ -288,7 +310,9 @@ void cm_latch_process(void)
 	} while (0);
 	if (cm_en && (cm_level_last != cm_level)) {
 		cm_level_last = cm_level;
-		amcm_level_sel(cm_level);
+		if (!is_meson_gxtvbb_cpu())
+			amcm_level_sel(cm_level);
+		amcm_enable();
 		pr_amcm_dbg("\n[amcm..] set cm2 load OK!!!\n");
 	} else if ((cm_en == 0) && (cm_level_last != 0xff)) {
 		cm_level_last = 0xff;
@@ -402,7 +426,7 @@ static long amvecm_regmap_set(struct am_regs_s *regs,
 		reg_map);
 		return -EFAULT;
 	}
-	if (!regs->length || (regs->length > 512)) {
+	if (!regs->length || (regs->length > am_reg_size)) {
 		pr_amcm_dbg(
 		"[amcm..]0x%x load regs error: buf length error!!!, length=0x%x\n",
 				reg_map, regs->length);

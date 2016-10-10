@@ -17,14 +17,15 @@
 
 
 #include <linux/err.h>
-#include <android/ion/ion.h>
+#include <ion/ion.h>
 #include <linux/platform_device.h>
 #include <linux/slab.h>
 #include <linux/module.h>
-#include <android/ion/ion_priv.h>
+#include <ion/ion_priv.h>
 #include <linux/of.h>
 #include <linux/of_fdt.h>
 #include <linux/of_reserved_mem.h>
+#include "meson_ion.h"
 
 MODULE_DESCRIPTION("AMLOGIC ION driver");
 MODULE_LICENSE("GPL");
@@ -52,6 +53,42 @@ static int num_heaps;
 static struct ion_heap **heaps;
 static struct ion_platform_heap my_ion_heap[MAX_HEAP];
 
+struct ion_client *meson_ion_client_create(unsigned int heap_mask,
+		const char *name) {
+
+	/*
+	 *	  * The assumption is that if there is a NULL device, the ion
+	 *		   * driver has not yet probed.
+	 *				*/
+	if (idev == NULL) {
+		dprintk(0, "create error");
+		return ERR_PTR(-EPROBE_DEFER);
+	}
+
+	if (IS_ERR(idev)) {
+		dprintk(0, "idev error");
+		return (struct ion_client *)idev;
+	}
+
+	return ion_client_create(idev, name);
+}
+EXPORT_SYMBOL(meson_ion_client_create);
+
+int meson_ion_share_fd_to_phys(struct ion_client *client,
+		int share_fd, ion_phys_addr_t *addr, size_t *len)
+{
+	struct ion_handle *handle = NULL;
+
+	handle = ion_import_dma_buf(client, share_fd);
+	if (IS_ERR_OR_NULL(handle)) {
+		dprintk(0, "EINVAL, client=%p, share_fd=%d\n",
+				client, share_fd);
+	}
+
+	return ion_phys(client, handle, addr, len);
+}
+EXPORT_SYMBOL(meson_ion_share_fd_to_phys);
+
 int dev_ion_probe(struct platform_device *pdev)
 {
 	int err = 0;
@@ -59,6 +96,13 @@ int dev_ion_probe(struct platform_device *pdev)
 	my_ion_heap[num_heaps].type = ION_HEAP_TYPE_SYSTEM;
 	my_ion_heap[num_heaps].id = ION_HEAP_TYPE_SYSTEM;
 	my_ion_heap[num_heaps].name = "vmalloc_ion";
+	num_heaps++;
+
+	my_ion_heap[num_heaps].type = ION_HEAP_TYPE_CUSTOM;
+	my_ion_heap[num_heaps].id = ION_HEAP_TYPE_CUSTOM;
+	my_ion_heap[num_heaps].name = "codec_mm_ion";
+	my_ion_heap[num_heaps].base = (ion_phys_addr_t) NULL;
+	my_ion_heap[num_heaps].size = 16 * 1024 * 1024;
 	num_heaps++;
 
 	/* init reserved memory */
@@ -104,12 +148,12 @@ static int ion_dev_mem_init(struct reserved_mem *rmem, struct device *dev)
 	int i = 0;
 	int err;
 	struct platform_device *pdev = to_platform_device(dev);
+
 	my_ion_heap[num_heaps].type = ION_HEAP_TYPE_CARVEOUT;
 	my_ion_heap[num_heaps].id = ION_HEAP_TYPE_CARVEOUT;
 	my_ion_heap[num_heaps].name = "carveout_ion";
 	my_ion_heap[num_heaps].base = (ion_phys_addr_t) rmem->base;
 	my_ion_heap[num_heaps].size = rmem->size;
-
 	num_heaps++;
 	heaps = kzalloc(sizeof(struct ion_heap *) * num_heaps, GFP_KERNEL);
 	idev = ion_device_create(NULL);
@@ -130,7 +174,7 @@ static int ion_dev_mem_init(struct reserved_mem *rmem, struct device *dev)
 		}
 		ion_device_add_heap(idev, heaps[i]);
 		dprintk(2, "add heap type:%d id:%d\n",
-	    my_ion_heap[i].type, my_ion_heap[i].id);
+	 my_ion_heap[i].type, my_ion_heap[i].id);
 	}
 
 	dprintk(1, "%s, create %d heaps\n", __func__, num_heaps);
@@ -158,7 +202,7 @@ static struct rmem_multi_user rmem_ion_muser = {
 static int __init ion_dev_mem_setup(struct reserved_mem *rmem)
 {
 	of_add_rmem_multi_user(rmem, &rmem_ion_muser);
-	pr_info("ion_dev mem setup\n");
+	pr_debug("ion_dev mem setup\n");
 
 	return 0;
 }

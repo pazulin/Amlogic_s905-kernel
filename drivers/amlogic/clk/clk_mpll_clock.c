@@ -26,6 +26,9 @@
 #include "mpll_clk.h"
 #include "clk.h"
 
+#undef pr_fmt
+#define pr_fmt(fmt) "gxbb_mpll_clk: " fmt
+
 #define sdm_mask(d)		((1 << (d->sdm_in_width)) - 1)
 #define n_mask(d)			((1 << (d->n_in_width)) - 1)
 
@@ -49,6 +52,17 @@ static int mpll_enable(struct clk_hw *hw)
 	}
 
 	return 0;
+}
+
+static void mpll_disable(struct clk_hw *hw)
+{
+	struct mpll_clk *mpll = to_clk_pll(hw);
+	unsigned int val;
+	if (strncmp(hw->clk->name, "mpll_clk_out0", 13) == 0) {
+		val = readl(mpll->con_reg2);
+		val &= ~(1 <<  mpll->SSEN_shift);
+		writel(val, mpll->con_reg2);
+	}
 }
 
 static unsigned long mpll_recalc_rate(struct clk_hw *hw,
@@ -106,6 +120,7 @@ static int mpll_set_rate(struct clk_hw *hw, unsigned long drate,
 
 static const struct clk_ops mpll_clk_ops = {
 	.enable = mpll_enable,
+	.disable = mpll_disable,
 	.recalc_rate = mpll_recalc_rate,
 	.round_rate = mpll_round_rate,
 	.set_rate = mpll_set_rate,

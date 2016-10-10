@@ -55,8 +55,12 @@
 #define WAKE_NUMERATOR 30
 #define WAKE_DENOMINATOR 1001
 
-#define MAX_WIDTH 4096
-#define MAX_HEIGHT 4096
+#define MAX_WIDTH 1920
+#define MAX_HEIGHT 1920
+
+#define IONVID_INFO(fmt, args...) pr_info("ionvid: info: "fmt"", ## args)
+#define IONVID_DBG(fmt, args...) pr_debug("ionvid: dbg: "fmt"", ## args)
+#define IONVID_ERR(fmt, args...) pr_err("ionvid: err: "fmt"", ## args)
 
 #define DUR2PTS(x) ((x) - ((x) >> 4))
 
@@ -97,8 +101,8 @@ struct ionvideo_dmaqueue {
 	struct task_struct *kthread;
 	wait_queue_head_t wq;
 	/* Counters to control fps rate */
-	int frame;
-	int ini_jiffies;
+	int vb_ready;
+	struct ionvideo_dev *pdev;
 };
 
 struct ppmgr2_device {

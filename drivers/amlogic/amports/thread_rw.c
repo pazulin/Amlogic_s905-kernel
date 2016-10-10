@@ -60,6 +60,7 @@ struct threadrw_write_task {
 	int buffered_data_size;
 	int passed_data_len;
 	int buffer_size;
+	int data_offset;
 	int writework_on;
 	unsigned long codec_mm_buffer;
 	wait_queue_head_t wq;
@@ -177,7 +178,10 @@ static ssize_t threadrw_write_in(
 
 	/*end: */
 	spin_lock_irqsave(&task->lock, flags);
-	task->buffered_data_size += off;
+	if (off > 0) {
+		task->buffered_data_size += off;
+		task->data_offset += off;
+	}
 	spin_unlock_irqrestore(&task->lock, flags);
 	if (off > 0)
 		return off;
@@ -230,8 +234,8 @@ static int do_write_work_in(struct threadrw_write_task *task)
 		task->errors = ret;
 	}
 	if (write_len > 0) {
-		task->passed_data_len += write_len;
 		spin_lock_irqsave(&task->lock, flags);
+		task->passed_data_len += write_len;
 		task->buffered_data_size -= write_len;
 		spin_unlock_irqrestore(&task->lock, flags);
 	}
@@ -412,6 +416,18 @@ int threadrw_passed_len(struct stream_buf_s *stbuf)
 	return 0;
 
 }
+/*
+all data writed.;
+*/
+int threadrw_dataoffset(struct stream_buf_s *stbuf)
+{
+	struct threadrw_write_task *task = stbuf->write_thread;
+	int offset = 0;
+	if (task)
+		return task->data_offset;
+	return offset;
+
+}
 
 ssize_t threadrw_write(struct file *file, struct stream_buf_s *stbuf,
 					   const char __user *buf, size_t count)
@@ -422,6 +438,21 @@ ssize_t threadrw_write(struct file *file, struct stream_buf_s *stbuf,
 		task->sbuf = stbuf;
 	}
 	return threadrw_write_in(task, stbuf, buf, count);
+}
+
+int threadrw_flush_buffers(struct stream_buf_s *stbuf)
+{
+	struct threadrw_write_task *task = stbuf->write_thread;
+	int max_retry = 20;
+	if (!task)
+		return 0;
+	while (!kfifo_is_empty(&task->datafifo) && max_retry-- > 0) {
+		threadrw_schedule_delayed_work(task, 0);
+		msleep(20);
+	}
+	if (!kfifo_is_empty(&task->datafifo))
+		return -1;/*data not flushed*/
+	return 0;
 }
 
 void *threadrw_alloc(int num,

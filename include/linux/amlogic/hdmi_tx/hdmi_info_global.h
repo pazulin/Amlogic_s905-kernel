@@ -81,7 +81,7 @@ enum hdmi_slacing {
 
 struct hdmi_videoinfo {
 	enum hdmi_vic VIC;
-	enum hdmi_color_space_type color;
+	enum hdmi_color_space color;
 	enum hdmi_color_depth color_depth;
 	enum hdmi_barinfo bar_info;
 	enum hdmi_pixel_repeat repeat_time;
@@ -203,8 +203,8 @@ struct hdmitx_supspeakerformat {
 
 struct hdmitx_vidpara {
 	unsigned int VIC;
-	enum hdmi_color_space_type color_prefer;
-	enum hdmi_color_space_type color;
+	enum hdmi_color_space color_prefer;
+	enum hdmi_color_space color;
 	enum hdmi_color_depth color_depth;
 	enum hdmi_barinfo bar_info;
 	enum hdmi_pixel_repeat repeat_time;
@@ -335,14 +335,5 @@ struct hdmitx_info {
 	unsigned char y420cmdb_bitmap[Y420CMDB_MAX];
 	/* ------------------------------------------------------- */
 };
-
-#if defined(CONFIG_ARCH_MESON64_ODROIDC2)
-#define VOUTMODE_HDMI           0x00
-#define VOUTMODE_DVI            0x01
-#define VOUTMODE_VGA            0x02
-#define VOUTMODE_NONHDMI        (VOUTMODE_DVI | VOUTMODE_VGA)
-
-int odroidc_voutmode(void);
-#endif
 
 #endif  /* _HDMI_RX_GLOBAL_H */
