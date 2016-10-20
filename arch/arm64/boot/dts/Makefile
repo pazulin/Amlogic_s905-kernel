@@ -1,5 +1,6 @@
 dtb-$(CONFIG_ARCH_VEXPRESS) += gxbb_p200.dtb gxbb_p200_2G.dtb \
-				gxl_p212_1g.dtb gxl_p212_2g.dtb
+				gxl_p212_1g.dtb gxl_p212_2g.dtb \
+				gxbb_p200_2G_vegas95.dtb
 
 targets += dtbs
 
