@@ -47,18 +47,6 @@
 			        <GIC_PPI 11 0xff01>,
 			        <GIC_PPI 10 0xff01>;
 	};
-	timer_bc {
-		compatible = "arm, meson-bc-timer";
-		reg=   <0x0 0xc1109990 0x0 0x4 0x0 0xc1109994 0x0 0x4>;
-		timer_name = "Meson TimerF";
-		clockevent-rating=<300>;
-		clockevent-shift=<20>;
-		clockevent-features=<0x03>;
-		interrupts = <0 60 1>;
-		bit_enable=<16>;
-		bit_mode=<12>;
-		bit_resolution=<0>;
-	};
 	arm_pmu {
 		compatible = "arm,armv8-pmuv3";
 		interrupts = <0 137 4>,
@@ -594,19 +582,11 @@
 		};
 
 	};
-	aml_remote:meson-remote {
+	meson-remote {
 		compatible = "amlogic, aml_remote";
 		dev_name = "meson-remote";
 		status = "ok";
 		remote_ao_offset = <0x580>; /* 0x400 + (0x20 + idx)<<2 -- old ; 0x400 + (0x60 +idx)<<2 --new   */
-		interrupts = <0 196 1>;
-		pinctrl-names = "default";
-		pinctrl-0 = <&remote_pins>;
-	};
-	meson_ir:meson-ir {
-		compatible = "amlogic,meson-gxbb-ir";
-		status = "disabled";
-		reg = <0x0 0xc8100580 0x0 0x40>;
 		interrupts = <0 196 1>;
 		pinctrl-names = "default";
 		pinctrl-0 = <&remote_pins>;
