@@ -45,7 +45,9 @@
 #include <asm/uaccess.h>
 
 #include "queue.h"
+#if !defined(CONFIG_ARCH_MESON64_ODROIDC2)
 #include <linux/mmc/emmc_partitions.h>
+#endif
 
 MODULE_ALIAS("mmc:block");
 #ifdef MODULE_PARAM_PREFIX
@@ -2071,8 +2073,6 @@ static inline int mmc_blk_readonly(struct mmc_card *card)
 	       !(card->csd.cmdclass & CCC_BLOCK_WRITE);
 }
 
-int is_card_emmc(struct mmc_card *card);
-
 static struct mmc_blk_data *mmc_blk_alloc_req(struct mmc_card *card,
 					      struct device *parent,
 					      sector_t size,
@@ -2101,10 +2101,7 @@ static struct mmc_blk_data *mmc_blk_alloc_req(struct mmc_card *card,
 	 * index anymore so we keep track of a name index.
 	 */
 	if (!subname) {
-		if (!is_card_emmc(card))
-			md->name_idx  = find_first_zero_bit(name_use, max_devices);
-		else
-			md->name_idx  = 1;
+		md->name_idx = find_first_zero_bit(name_use, max_devices);
 		__set_bit(md->name_idx, name_use);
 	} else
 		md->name_idx = ((struct mmc_blk_data *)
@@ -2491,7 +2488,9 @@ static int mmc_blk_probe(struct mmc_card *card)
 	if (mmc_add_disk(md))
 		goto out;
 
+#if !defined(CONFIG_ARCH_MESON64_ODROIDC2)
 	aml_emmc_partition_ops(card, md->disk); /* add by gch */
+#endif
 
 	list_for_each_entry(part_md, &md->part, part) {
 		if (mmc_add_disk(part_md))

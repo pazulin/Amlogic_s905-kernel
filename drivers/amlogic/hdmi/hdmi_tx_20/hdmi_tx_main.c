@@ -1657,11 +1657,31 @@ static ssize_t show_hdcp_ksv_info(struct device *dev,
 	return pos;
 }
 
+/* Special FBC check */
+static int check_fbc_special(unsigned char *edid_dat)
+{
+	if ((edid_dat[250] == 0xfb) && (edid_dat[251] == 0x0c))
+		return 1;
+	else
+		return 0;
+}
+
 static ssize_t show_hdcp_ver(struct device *dev,
 	struct device_attribute *attr, char *buf)
 {
 	int pos = 0;
-	uint32_t ver;
+	uint32_t ver = 0;
+
+	if (check_fbc_special(&hdmitx_device.EDID_buf[0])
+	    || check_fbc_special(&hdmitx_device.EDID_buf1[0])) {
+		pos += snprintf(buf+pos, PAGE_SIZE, "00\n\r");
+		return pos;
+	}
+
+	/* if TX don't have HDCP22 key, skip RX hdcp22 ver */
+	if (hdmitx_device.HWOp.CntlDDC(&hdmitx_device,
+		DDC_HDCP_22_LSTORE, 0) == 0)
+		goto next;
 
 	/* Detect RX support HDCP22 */
 	ver = hdcp_rd_hdcp22_ver();
@@ -1670,7 +1690,7 @@ static ssize_t show_hdcp_ver(struct device *dev,
 		pos += snprintf(buf+pos, PAGE_SIZE, "14\n\r");
 		return pos;
 	}
-	/* Detect RX support HDCP14 */
+next:	/* Detect RX support HDCP14 */
 	/* Here, must assume RX support HDCP14, otherwise affect 1A-03 */
 	if (ver == 0) {
 		ver = hdcp_rd_hdcp14_ver();
@@ -1738,6 +1758,20 @@ void hdmi_print(int dbg_lvl, const char *fmt, ...)
 		va_end(args);
 	}
 }
+
+static ssize_t store_output_rgb(struct device *dev,
+	struct device_attribute *attr, const char *buf, size_t count)
+{
+	if (strncmp(buf, "1", 1) == 0)
+		hdmitx_output_rgb();
+
+	hdmitx_set_display(&hdmitx_device, hdmitx_device.cur_VIC);
+
+	return count;
+}
+
+static DEVICE_ATTR(output_rgb, S_IWUSR | S_IWGRP,
+	NULL, store_output_rgb);
 
 static DEVICE_ATTR(disp_mode, S_IWUSR | S_IRUGO | S_IWGRP,
 	show_disp_mode, store_disp_mode);
@@ -2068,9 +2102,13 @@ static void hdmitx_get_edid(struct hdmitx_dev *hdev)
 
 static int get_downstream_hdcp_ver(void)
 {
+	/* if TX don't have HDCP22 key, skip RX hdcp22 ver */
+	if (hdmitx_device.HWOp.CntlDDC(&hdmitx_device,
+		DDC_HDCP_22_LSTORE, 0) == 0)
+		goto next;
 	if (hdcp_rd_hdcp22_ver())
 		return 22;
-	if (hdcp_rd_hdcp14_ver())
+next:	if (hdcp_rd_hdcp14_ver())
 		return 14;
 	return 0;
 }
@@ -2084,8 +2122,9 @@ void hdmitx_hpd_plugin_handler(struct work_struct *work)
 
 	if (!(hdev->hdmitx_event & (HDMI_TX_HPD_PLUGIN)))
 		return;
-	pr_info("hdmitx: plugin\n");
 	mutex_lock(&setclk_mutex);
+	pr_info("hdmitx: plugin\n");
+	hdev->hdmitx_event &= ~HDMI_TX_HPD_PLUGIN;
 	/* start reading E-EDID */
 	hdev->hpd_state = 1;
 	rx_repeat_hpd_state(1);
@@ -2098,7 +2137,6 @@ void hdmitx_hpd_plugin_handler(struct work_struct *work)
 	hdmitx_set_audio(hdev, &(hdev->cur_audio_param), hdmi_ch);
 	switch_set_state(&sdev, 1);
 
-	hdev->hdmitx_event &= ~HDMI_TX_HPD_PLUGIN;
 	mutex_unlock(&setclk_mutex);
 }
 
@@ -2126,6 +2164,7 @@ void hdmitx_hpd_plugout_handler(struct work_struct *work)
 	hdev->HWOp.CntlDDC(hdev, DDC_HDCP_MUX_INIT, 1);
 	hdev->HWOp.CntlDDC(hdev, DDC_HDCP_OP, HDCP14_OFF);
 	mutex_lock(&setclk_mutex);
+	pr_info("hdmitx: plugout\n");
 	hdev->ready = 0;
 	hdev->hpd_state = 0;
 	rx_repeat_hpd_state(0);
@@ -2133,7 +2172,7 @@ void hdmitx_hpd_plugout_handler(struct work_struct *work)
 	hdev->HWOp.CntlDDC(hdev, DDC_HDCP_MUX_INIT, 1);
 	hdev->HWOp.CntlDDC(hdev, DDC_HDCP_OP, HDCP14_OFF);
 	hdev->HWOp.CntlMisc(hdev, MISC_TMDS_PHY_OP, TMDS_PHY_DISABLE);
-	pr_info("hdmitx: plugout\n");
+	hdev->hdmitx_event &= ~HDMI_TX_HPD_PLUGOUT;
 	hdev->HWOp.CntlMisc(hdev, MISC_ESM_RESET, 0);
 	if (hdev->gpio_i2c_enable) {
 		edid_read_flag = 0;
@@ -2144,7 +2183,6 @@ void hdmitx_hpd_plugout_handler(struct work_struct *work)
 	hdmitx_edid_clear(hdev);
 	hdmitx_edid_ram_buffer_clear(hdev);
 	switch_set_state(&sdev, 0);
-	hdev->hdmitx_event &= ~HDMI_TX_HPD_PLUGOUT;
 	mutex_unlock(&setclk_mutex);
 }
 
@@ -2600,6 +2638,7 @@ static int amhdmitx_probe(struct platform_device *pdev)
 	ret = device_create_file(dev, &dev_attr_ready);
 	ret = device_create_file(dev, &dev_attr_support_3d);
 	ret = device_create_file(dev, &dev_attr_dc_cap);
+	ret = device_create_file(dev, &dev_attr_output_rgb);
 #ifdef CONFIG_AML_VOUT_FRAMERATE_AUTOMATION
 	register_hdmi_edid_supported_func(hdmitx_is_vmode_supported);
 #endif
@@ -2739,6 +2778,9 @@ static int amhdmitx_probe(struct platform_device *pdev)
 	HDMITX_Meson_Init(&hdmitx_device);
 	hdmitx_device.task = kthread_run(hdmi_task_handle,
 		&hdmitx_device, "kthread_hdmi");
+#ifdef CONFIG_AML_AO_CEC
+	init_waitqueue_head(&hdmitx_device.hdmi_info.vsdb_phy_addr.waitq);
+#endif
 
 	if (r < 0) {
 		hdmi_print(INF, SYS "register switch dev failed\n");
@@ -2789,6 +2831,7 @@ static int amhdmitx_remove(struct platform_device *pdev)
 	device_remove_file(dev, &dev_attr_vic);
 	device_remove_file(dev, &dev_attr_hdcp_pwr);
 	device_remove_file(dev, &dev_attr_aud_output_chs);
+	device_remove_file(dev, &dev_attr_output_rgb);
 
 	cdev_del(&hdmitx_device.cdev);
 
@@ -3077,6 +3120,8 @@ static  int __init hdmitx_boot_para_setup(char *s)
 	char *token;
 	unsigned token_len, token_offset, offset = 0;
 	int size = strlen(s);
+	unsigned long list;
+	int ret = 0;
 
 	do {
 		token = next_token_ex(separator, s, size, offset,
@@ -3085,6 +3130,12 @@ static  int __init hdmitx_boot_para_setup(char *s)
 		if ((token_len == 3)
 			&& (strncmp(token, "off", token_len) == 0)) {
 			init_flag |= INIT_FLAG_NOT_LOAD;
+		} else if (strncmp(token, "cec", 3) == 0) {
+			ret = kstrtoul(token+3, 16, &list);
+			if ((list >= 0) && (list <= 0xff))
+				hdmitx_device.cec_func_config = list;
+			hdmi_print(IMP, CEC "HDMI hdmi_cec_func_config:0x%x\n",
+				   hdmitx_device.cec_func_config);
 		}
 	}
 		offset = token_offset;

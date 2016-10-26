@@ -258,9 +258,13 @@ static int ge2d_process_work_queue(struct ge2d_context_s *wq)
 	} while (pos != head);
 	ge2d_manager.last_wq = wq;
 exit:
+
+	spin_lock(&ge2d_manager.state_lock);
 	if (ge2d_manager.ge2d_state == GE2D_STATE_REMOVING_WQ)
 		complete(&ge2d_manager.event.process_complete);
 	ge2d_manager.ge2d_state = GE2D_STATE_IDLE;
+	spin_unlock(&ge2d_manager.state_lock);
+
 	return ret;
 }
 
@@ -493,7 +497,7 @@ static void build_ge2d_config(struct config_para_s *cfg,
 			dst->canvas_index = index;
 			canvas_config(index++ & 0xff,
 				      cfg->dst_planes[0].addr,
-				      cfg->dst_planes[0].w * dst->bpp / 8,
+				      cfg->dst_planes[0].w,
 				      cfg->dst_planes[0].h,
 				      CANVAS_ADDR_NOWRAP,
 				      CANVAS_BLKMODE_LINEAR);
@@ -504,7 +508,7 @@ static void build_ge2d_config(struct config_para_s *cfg,
 			dst->canvas_index |= index << 8;
 			canvas_config(index++,
 				      cfg->dst_planes[1].addr,
-				      cfg->dst_planes[1].w * dst->bpp / 8,
+				      cfg->dst_planes[1].w,
 				      cfg->dst_planes[1].h,
 				      CANVAS_ADDR_NOWRAP,
 				      CANVAS_BLKMODE_LINEAR);
@@ -513,7 +517,7 @@ static void build_ge2d_config(struct config_para_s *cfg,
 			dst->canvas_index |= index << 16;
 			canvas_config(index++,
 				      cfg->dst_planes[2].addr,
-				      cfg->dst_planes[2].w * dst->bpp / 8,
+				      cfg->dst_planes[2].w,
 				      cfg->dst_planes[2].h,
 				      CANVAS_ADDR_NOWRAP,
 				      CANVAS_BLKMODE_LINEAR);
@@ -522,7 +526,7 @@ static void build_ge2d_config(struct config_para_s *cfg,
 			dst->canvas_index |= index << 24;
 			canvas_config(index++,
 				      cfg->dst_planes[3].addr,
-				      cfg->dst_planes[3].w * dst->bpp / 8,
+				      cfg->dst_planes[3].w,
 				      cfg->dst_planes[3].h,
 				      CANVAS_ADDR_NOWRAP,
 				      CANVAS_BLKMODE_LINEAR);
@@ -1048,9 +1052,18 @@ int  destroy_ge2d_work_queue(struct ge2d_context_s *ge2d_work_queue)
 		spin_unlock(&ge2d_manager.event.sem_lock);
 		if ((ge2d_manager.current_wq == ge2d_work_queue) &&
 		    (ge2d_manager.ge2d_state == GE2D_STATE_RUNNING)) {
-			ge2d_manager.ge2d_state = GE2D_STATE_REMOVING_WQ;
-			wait_for_completion(
-				&ge2d_manager.event.process_complete);
+
+		     // check again with lock
+		        int wasRunning = 0;
+		        spin_lock(&ge2d_manager.state_lock);
+		        if (ge2d_manager.ge2d_state== GE2D_STATE_RUNNING)
+		        {
+			  ge2d_manager.ge2d_state=GE2D_STATE_REMOVING_WQ;
+			  wasRunning = 1;
+			}
+			spin_unlock(&ge2d_manager.state_lock);
+			if (wasRunning)
+			    wait_for_completion(&ge2d_manager.event.process_complete);
 			/* condition so complex ,simplify it . */
 			ge2d_manager.last_wq = NULL;
 		} /* else we can delete it safely. */
@@ -1103,6 +1116,7 @@ int ge2d_wq_init(struct platform_device *pdev,
 
 	/* prepare bottom half */
 	spin_lock_init(&ge2d_manager.event.sem_lock);
+	spin_lock_init(&ge2d_manager.state_lock);
 	sema_init(&ge2d_manager.event.cmd_in_sem, 1);
 	init_waitqueue_head(&ge2d_manager.event.cmd_complete);
 	init_completion(&ge2d_manager.event.process_complete);

@@ -622,6 +622,8 @@ int hdmitx_set_display(struct hdmitx_dev *hdmitx_device,
 		param->color = param->color_prefer;
 		if (hdmi_output_rgb) {
 			param->color = COLORSPACE_RGB444;
+			hdmitx_device->para->cs =
+				hdmitx_device->cur_video_param->color;
 		} else {
 			/* HDMI CT 7-24 Pixel Encoding
 			 * YCbCr to YCbCr Sink
@@ -648,6 +650,12 @@ int hdmitx_set_display(struct hdmitx_dev *hdmitx_device,
 			default:
 				break;
 			}
+			if (param->color == COLORSPACE_RGB444) {
+				hdmitx_device->para->cs =
+					hdmitx_device->cur_video_param->color;
+				pr_info("hdmitx: rx edid only support RGB format\n");
+			}
+
 		}
 		if (hdmitx_device->HWOp.SetDispMode(hdmitx_device) >= 0) {
 			/* HDMI CT 7-33 DVI Sink, no HDMI VSDB nor any

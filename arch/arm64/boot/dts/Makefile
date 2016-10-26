@@ -1,6 +1,12 @@
 dtb-$(CONFIG_ARCH_VEXPRESS) += gxbb_p200.dtb gxbb_p200_2G.dtb \
 				gxl_p212_1g.dtb gxl_p212_2g.dtb \
+				gxbb_p201.dtb odroidc2.dtb \
+				gxbb_p200_1G_wetek_hub.dtb gxbb_p200_2G_wetek_play2.dtb \
+				gxl_p230_2g.dtb meson64_odroidc2.dtb \
+				gxl_p231_1g.dtb gxl_p231_2g.dtb \
 				gxbb_p200_2G_vegas95.dtb
+
+dtb-$(CONFIG_ARCH_MESON64_ODROIDC2) += meson64_odroidc2.dtb
 
 targets += dtbs
 
