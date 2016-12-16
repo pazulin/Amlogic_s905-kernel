@@ -1,4 +1,4 @@
-dtb-$(CONFIG_ARCH_VEXPRESS) += gxbb_p200.dtb gxbb_p200_2G.dtb \
+dtb-$(CONFIG_ARM64) += gxbb_p200.dtb gxbb_p200_2G.dtb \
 				gxl_p212_1g.dtb gxl_p212_2g.dtb \
 				gxbb_p201.dtb odroidc2.dtb \
 				gxbb_p200_1G_wetek_hub.dtb gxbb_p200_2G_wetek_play_2.dtb \

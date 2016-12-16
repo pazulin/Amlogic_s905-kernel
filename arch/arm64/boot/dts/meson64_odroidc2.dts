@@ -564,9 +564,9 @@
 			"top_level",
 			"aoclk",
 			"aud_in";
-		clocks = <&clock CLK_MPLL0>,
+		clocks = <&clock CLK_MPLL2>,
 			<&clock CLK_AMCLK>;
-		clock-names = "mpll0", "mclk";
+		clock-names = "mpll2", "mclk";
 		compatible = "amlogic, aml-i2s-dai";
 	};
 	spdif_dai: SPDIF {
@@ -591,7 +591,12 @@
 		compatible = "amlogic, aml-pcm-dai";
 		pinctrl-names = "aml_audio_btpcm";
 		pinctrl-0 = <&audio_btpcm_pins>;
-	};
+		clocks = <&clock CLK_MPLL0>,
+			<&clock CLK_PCM_MCLK>,
+			<&clock CLK_PCM_SCLK>;
+		clock-names = "mpll0", "pcm_mclk", "pcm_sclk";
+		pcm_mode = <1>;	/* 0=slave mode, 1=master mode */
+        };
 	i2s_plat: i2s_platform {
 		compatible = "amlogic, aml-i2s";
 		interrupts = <0 29 1>;
@@ -800,10 +805,38 @@
                         linux,default-trigger = "heartbeat";
                 };
         };
+
+	spi-gpio {
+		compatible = "spi-gpio";
+		#address-cells = <1>;
+		#size-cells = <0>;
+		status = "ok";
+		id = <0>;
+		gpio-sck  = <&gpio GPIOX_2 0>;
+		gpio-miso = <&gpio GPIOX_4 0>;
+		gpio-mosi = <&gpio GPIOX_7 0>;
+		cs-gpios  = <&gpio GPIOX_1 0
+			     &gpio GPIOY_14 0>;
+		num-chipselects = <2>;
+
+		/* clients */
+		spidev0: spi-gpio@0 {
+			compatible = "spidev";
+			reg = <0>;
+			spi-max-frequency = <500000>;
+		};
+	};
 };
 &i2c_a {
-  status = "disabled";
-  /*p200: multiplex with usb PWR, disbaled*/
+    status = "okay";
+
+    /* Hardkernel I2C RTC */
+    pcf8563: pcf8563@51    {
+        status = "okay";
+        compatible = "nxp,pcf8563";
+        reg = <0x51>;
+        #clock-cells = <0>;
+    };
 };
 /*
 &i2c_b {

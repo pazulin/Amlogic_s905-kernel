@@ -131,6 +131,7 @@ bool platform_type = 1;
 int bit_depth_flag = 8;
 
 bool omx_secret_mode = false;
+EXPORT_SYMBOL(omx_secret_mode);
 #define DEBUG_FLAG_FFPLAY	(1<<0)
 #define DEBUG_FLAG_CALC_PTS_INC	(1<<1)
 
@@ -2217,7 +2218,9 @@ static void vsync_toggle_frame(struct vframe_s *vf)
 		(vf->type & VIDTYPE_COMPRESS)) {
 		VSYNC_WR_MPEG_REG(AFBC_HEAD_BADDR, vf->compHeadAddr>>4);
 		VSYNC_WR_MPEG_REG(AFBC_BODY_BADDR, vf->compBodyAddr>>4);
-	} else if ((VSYNC_RD_MPEG_REG(DI_IF1_GEN_REG) & 0x1) == 0) {
+	}
+	if ((vf->canvas0Addr != 0) &&
+	(VSYNC_RD_MPEG_REG(DI_IF1_GEN_REG) & 0x1) == 0) {
 #ifdef CONFIG_VSYNC_RDMA
 		canvas_copy(vf->canvas0Addr & 0xff,
 			    disp_canvas_index[rdma_canvas_id][0]);
@@ -2670,7 +2673,8 @@ static void viu_set_dcu(struct vpp_frame_par_s *frame_par, struct vframe_s *vf)
 			return;
 
 		} else {
-			if (vf->bitdepth & BITDEPTH_Y10) {
+			if ((vf->bitdepth & BITDEPTH_Y10) &&
+			(!frame_par->nocomp)) {
 				if (vf->type & VIDTYPE_VIU_444) {
 					bit_mode = 2;
 				} else {
@@ -7857,7 +7861,7 @@ static int __init video_early_init(void)
 	/* default 10bit setting for gxm */
 	if (is_meson_gxm_cpu()) {
 		WRITE_VCBUS_REG_BITS(VIU_MISC_CTRL1, 0xff, 16, 8);
-		WRITE_VCBUS_REG(VPP_DOLBY_CTRL, 0x20000);
+		WRITE_VCBUS_REG(VPP_DOLBY_CTRL, 0x22000);
 		/* default setting is black for dummy data1& dumy data0,
 		for dummy data1 the y/cb/cr data width is 10bit on gxm,
 		for dummy data the y/cb/cr data width is 8bit but
