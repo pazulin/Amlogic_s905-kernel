@@ -439,9 +439,9 @@ static void handle_critical_trips(struct thermal_zone_device *tz,
 			tz->enter_hot = 0;
 		else
 			tz->enter_hot++;
-		dev_info(&tz->device,
-			 "temp:%d, hyst:%ld, trip_temp:%ld, hot:%d\n",
-			 tz->temperature, hyst, trip_temp, tz->enter_hot);
+//		dev_info(&tz->device,
+//			 "temp:%d, hyst:%ld, trip_temp:%ld, hot:%d\n",
+//			 tz->temperature, hyst, trip_temp, tz->enter_hot);
 		if (tz->ops->notify)
 			tz->ops->notify(tz, trip, trip_type);
 	}
