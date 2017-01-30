@@ -60,6 +60,7 @@ void machine_halt(void)
  * Function pointers to optional machine specific functions
  */
 void (*pm_power_off)(void) = NULL;
+EXPORT_SYMBOL(pm_power_off);
 
 void machine_power_off(void)
 {
@@ -200,13 +201,6 @@ void show_regs(struct pt_regs *regs)
 	__backtrace();
 }
 
-/*
- * Free current thread data structures etc..
- */
-void exit_thread(void)
-{
-}
-
 void flush_thread(void)
 {
 	struct thread_info *thread = current_thread_info();
@@ -301,8 +295,7 @@ unsigned long get_wchan(struct task_struct *p)
 
 unsigned long arch_randomize_brk(struct mm_struct *mm)
 {
-	unsigned long range_end = mm->brk + 0x02000000;
-	return randomize_range(mm->brk, range_end, 0) ? : mm->brk;
+	return randomize_page(mm->brk, 0x02000000);
 }
 
 /*

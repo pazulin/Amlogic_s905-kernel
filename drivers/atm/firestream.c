@@ -168,7 +168,7 @@ static char *res_strings[] = {
 	"reserved 14", 
 	"Unrecognized cell", 
 	"reserved 16", 
-	"reassemby abort: AAL5 abort", 
+	"reassembly abort: AAL5 abort", 
 	"packet purged", 
 	"packet ageing timeout", 
 	"channel ageing timeout", 
@@ -181,13 +181,17 @@ static char *res_strings[] = {
 	"reserved 27", 
 	"reserved 28", 
 	"reserved 29", 
-	"reserved 30", 
+	"reserved 30", /* FIXME: The strings between 30-40 might be wrong. */
 	"reassembly abort: no buffers", 
 	"receive buffer overflow", 
 	"change in GFC", 
 	"receive buffer full", 
 	"low priority discard - no receive descriptor", 
 	"low priority discard - missing end of packet", 
+	"reserved 37",
+	"reserved 38",
+	"reserved 39",
+	"reseverd 40",
 	"reserved 41", 
 	"reserved 42", 
 	"reserved 43", 
@@ -736,8 +740,8 @@ static void process_txdone_queue (struct fs_dev *dev, struct queue *q)
       
 			skb = td->skb;
 			if (skb == FS_VCC (ATM_SKB(skb)->vcc)->last_skb) {
-				wake_up_interruptible (& FS_VCC (ATM_SKB(skb)->vcc)->close_wait);
 				FS_VCC (ATM_SKB(skb)->vcc)->last_skb = NULL;
+				wake_up_interruptible (& FS_VCC (ATM_SKB(skb)->vcc)->close_wait);
 			}
 			td->dev->ntxpckts--;
 
@@ -1123,7 +1127,7 @@ static void fs_close(struct atm_vcc *atm_vcc)
 		   this sleep_on, we'll lose any reference to these packets. Memory leak!
 		   On the other hand, it's awfully convenient that we can abort a "close" that
 		   is taking too long. Maybe just use non-interruptible sleep on? -- REW */
-		interruptible_sleep_on (& vcc->close_wait);
+		wait_event_interruptible(vcc->close_wait, !vcc->last_skb);
 	}
 
 	txtp = &atm_vcc->qos.txtp;
@@ -2000,7 +2004,7 @@ static void firestream_remove_one(struct pci_dev *pdev)
 
 		fs_dprintk (FS_DEBUG_CLEANUP, "Freeing irq%d.\n", dev->irq);
 		free_irq (dev->irq, dev);
-		del_timer (&dev->timer);
+		del_timer_sync (&dev->timer);
 
 		atm_dev_deregister(dev->atm_dev);
 		free_queue (dev, &dev->hp_txq);

@@ -7,6 +7,12 @@ config PPC4xx_PCI_EXPRESS
 	depends on PCI && 4xx
 	default n
 
+config PPC4xx_HSTA_MSI
+	bool
+	depends on PCI_MSI
+	depends on PCI && 4xx
+	default n
+
 config PPC4xx_MSI
 	bool
 	depends on PCI_MSI
@@ -34,3 +40,8 @@ config SCOM_DEBUGFS
 config GE_FPGA
 	bool
 	default n
+
+config FSL_CORENET_RCPM
+	bool
+	help
+	  This option enables support for RCPM (Run Control/Power Management).

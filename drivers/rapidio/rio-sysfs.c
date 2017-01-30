@@ -125,8 +125,7 @@ rio_read_config(struct file *filp, struct kobject *kobj,
 		struct bin_attribute *bin_attr,
 		char *buf, loff_t off, size_t count)
 {
-	struct rio_dev *dev =
-	    to_rio_dev(container_of(kobj, struct device, kobj));
+	struct rio_dev *dev = to_rio_dev(kobj_to_dev(kobj));
 	unsigned int size = 0x100;
 	loff_t init_off = off;
 	u8 *data = (u8 *) buf;
@@ -197,8 +196,7 @@ rio_write_config(struct file *filp, struct kobject *kobj,
 		 struct bin_attribute *bin_attr,
 		 char *buf, loff_t off, size_t count)
 {
-	struct rio_dev *dev =
-	    to_rio_dev(container_of(kobj, struct device, kobj));
+	struct rio_dev *dev = to_rio_dev(kobj_to_dev(kobj));
 	unsigned int size = count;
 	loff_t init_off = off;
 	u8 *data = (u8 *) buf;
@@ -339,5 +337,45 @@ static const struct attribute_group rio_bus_group = {
 
 const struct attribute_group *rio_bus_groups[] = {
 	&rio_bus_group,
+	NULL,
+};
+
+static ssize_t
+port_destid_show(struct device *dev, struct device_attribute *attr,
+		 char *buf)
+{
+	struct rio_mport *mport = to_rio_mport(dev);
+
+	if (mport)
+		return sprintf(buf, "0x%04x\n", mport->host_deviceid);
+	else
+		return -ENODEV;
+}
+static DEVICE_ATTR_RO(port_destid);
+
+static ssize_t sys_size_show(struct device *dev, struct device_attribute *attr,
+			   char *buf)
+{
+	struct rio_mport *mport = to_rio_mport(dev);
+
+	if (mport)
+		return sprintf(buf, "%u\n", mport->sys_size);
+	else
+		return -ENODEV;
+}
+static DEVICE_ATTR_RO(sys_size);
+
+static struct attribute *rio_mport_attrs[] = {
+	&dev_attr_port_destid.attr,
+	&dev_attr_sys_size.attr,
+	NULL,
+};
+
+static const struct attribute_group rio_mport_group = {
+	.attrs = rio_mport_attrs,
+};
+
+const struct attribute_group *rio_mport_groups[] = {
+	&rio_mport_group,
 	NULL,
 };

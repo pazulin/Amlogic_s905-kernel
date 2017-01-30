@@ -1,24 +1,30 @@
-dtb-$(CONFIG_ARM64) += gxbb_p200.dtb gxbb_p200_2G.dtb \
-				gxl_p212_1g.dtb gxl_p212_2g.dtb \
-				gxbb_p201.dtb odroidc2.dtb \
-				gxbb_p200_1G_wetek_hub.dtb gxbb_p200_2G_wetek_play_2.dtb \
-				gxl_p230_2g.dtb meson64_odroidc2.dtb \
-				gxl_p231_1g.dtb gxl_p231_2g.dtb \
-				gxbb_p200_2G_vegas95.dtb \
-				gxm_q200_3g.dtb
+dts-dirs += al
+dts-dirs += altera
+dts-dirs += amd
+dts-dirs += amlogic
+dts-dirs += apm
+dts-dirs += arm
+dts-dirs += broadcom
+dts-dirs += cavium
+dts-dirs += exynos
+dts-dirs += freescale
+dts-dirs += hisilicon
+dts-dirs += marvell
+dts-dirs += mediatek
+dts-dirs += nvidia
+dts-dirs += qcom
+dts-dirs += renesas
+dts-dirs += rockchip
+dts-dirs += socionext
+dts-dirs += sprd
+dts-dirs += xilinx
+dts-dirs += lg
+dts-dirs += zte
 
-dtb-$(CONFIG_ARCH_MESON64_ODROIDC2) += meson64_odroidc2.dtb
+subdir-y	:= $(dts-dirs)
 
-targets += dtbs
+dtstree		:= $(srctree)/$(src)
 
-DTB_NAMES := $(subst $\",,$(CONFIG_BUILD_ARM64_APPENDED_DTB_IMAGE_NAMES))
-ifneq ($(DTB_NAMES),)
-DTB_LIST := $(addsuffix .dtb,$(DTB_NAMES))
-else
-DTB_LIST := $(dtb-y)
-endif
-targets += $(DTB_LIST)
+dtb-$(CONFIG_OF_ALL_DTBS) := $(patsubst $(dtstree)/%.dts,%.dtb, $(foreach d,$(dts-dirs), $(wildcard $(dtstree)/$(d)/*.dts)))
 
-dtbs: $(addprefix $(obj)/, $(DTB_LIST))
-
-clean-files := dts/*.dtb *.dtb
+always		:= $(dtb-y)

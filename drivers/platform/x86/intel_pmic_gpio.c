@@ -1,6 +1,8 @@
 /* Moorestown PMIC GPIO (access through IPC) driver
  * Copyright (c) 2008 - 2009, Intel Corporation.
  *
+ * Author: Alek Du <alek.du@intel.com>
+ *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
  * published by the Free Software Foundation.
@@ -21,7 +23,6 @@
 
 #define pr_fmt(fmt) "%s: " fmt, __func__
 
-#include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/interrupt.h>
 #include <linux/delay.h>
@@ -30,7 +31,7 @@
 #include <linux/ioport.h>
 #include <linux/init.h>
 #include <linux/io.h>
-#include <linux/gpio.h>
+#include <linux/gpio/driver.h>
 #include <asm/intel_scu_ipc.h>
 #include <linux/device.h>
 #include <linux/intel_pmic_gpio.h>
@@ -91,7 +92,7 @@ static void pmic_program_irqtype(int gpio, int type)
 
 static int pmic_gpio_direction_input(struct gpio_chip *chip, unsigned offset)
 {
-	if (offset > 8) {
+	if (offset >= 8) {
 		pr_err("only pin 0-7 support input\n");
 		return -1;/* we only have 8 GPIO can use as input */
 	}
@@ -130,7 +131,7 @@ static int pmic_gpio_get(struct gpio_chip *chip, unsigned offset)
 	int ret;
 
 	/* we only have 8 GPIO pins we can use as input */
-	if (offset > 8)
+	if (offset >= 8)
 		return -EOPNOTSUPP;
 	ret = intel_scu_ipc_ioread8(GPIO0 + offset, &r);
 	if (ret < 0)
@@ -174,7 +175,7 @@ static int pmic_irq_type(struct irq_data *data, unsigned type)
 
 static int pmic_gpio_to_irq(struct gpio_chip *chip, unsigned offset)
 {
-	struct pmic_gpio *pg = container_of(chip, struct pmic_gpio, chip);
+	struct pmic_gpio *pg = gpiochip_get_data(chip);
 
 	return pg->irq_base + offset;
 }
@@ -274,12 +275,12 @@ static int platform_pmic_gpio_probe(struct platform_device *pdev)
 	pg->chip.base = pdata->gpio_base;
 	pg->chip.ngpio = NUM_GPIO;
 	pg->chip.can_sleep = 1;
-	pg->chip.dev = dev;
+	pg->chip.parent = dev;
 
 	mutex_init(&pg->buslock);
 
-	pg->chip.dev = dev;
-	retval = gpiochip_add(&pg->chip);
+	pg->chip.parent = dev;
+	retval = gpiochip_add_data(&pg->chip, pg);
 	if (retval) {
 		pr_err("Can not add pmic gpio chip\n");
 		goto err;
@@ -301,8 +302,7 @@ static int platform_pmic_gpio_probe(struct platform_device *pdev)
 	return 0;
 
 fail_request_irq:
-	if (gpiochip_remove(&pg->chip))
-		pr_err("gpiochip_remove failed\n");
+	gpiochip_remove(&pg->chip);
 err:
 	iounmap(pg->gpiointr);
 err2:
@@ -315,7 +315,6 @@ err2:
 static struct platform_driver platform_pmic_gpio_driver = {
 	.driver = {
 		.name		= DRIVER_NAME,
-		.owner		= THIS_MODULE,
 	},
 	.probe		= platform_pmic_gpio_probe,
 };
@@ -324,9 +323,4 @@ static int __init platform_pmic_gpio_init(void)
 {
 	return platform_driver_register(&platform_pmic_gpio_driver);
 }
-
 subsys_initcall(platform_pmic_gpio_init);
-
-MODULE_AUTHOR("Alek Du <alek.du@intel.com>");
-MODULE_DESCRIPTION("Intel Moorestown PMIC GPIO driver");
-MODULE_LICENSE("GPL v2");

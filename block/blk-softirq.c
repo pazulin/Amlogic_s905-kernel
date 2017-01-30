@@ -18,7 +18,7 @@ static DEFINE_PER_CPU(struct list_head, blk_cpu_done);
  * Softirq action handler - move entries to local list and loop over them
  * while passing them to the queue registered handler.
  */
-static void blk_done_softirq(struct softirq_action *h)
+static __latent_entropy void blk_done_softirq(struct softirq_action *h)
 {
 	struct list_head *cpu_list, local_list;
 
@@ -30,8 +30,8 @@ static void blk_done_softirq(struct softirq_action *h)
 	while (!list_empty(&local_list)) {
 		struct request *rq;
 
-		rq = list_entry(local_list.next, struct request, csd.list);
-		list_del_init(&rq->csd.list);
+		rq = list_entry(local_list.next, struct request, ipi_list);
+		list_del_init(&rq->ipi_list);
 		rq->q->softirq_done_fn(rq);
 	}
 }
@@ -45,9 +45,9 @@ static void trigger_softirq(void *data)
 
 	local_irq_save(flags);
 	list = this_cpu_ptr(&blk_cpu_done);
-	list_add_tail(&rq->csd.list, list);
+	list_add_tail(&rq->ipi_list, list);
 
-	if (list->next == &rq->csd.list)
+	if (list->next == &rq->ipi_list)
 		raise_softirq_irqoff(BLOCK_SOFTIRQ);
 
 	local_irq_restore(flags);
@@ -65,7 +65,7 @@ static int raise_blk_irq(int cpu, struct request *rq)
 		data->info = rq;
 		data->flags = 0;
 
-		__smp_call_function_single(cpu, data, 0);
+		smp_call_function_single_async(cpu, data);
 		return 0;
 	}
 
@@ -78,29 +78,20 @@ static int raise_blk_irq(int cpu, struct request *rq)
 }
 #endif
 
-static int blk_cpu_notify(struct notifier_block *self, unsigned long action,
-			  void *hcpu)
+static int blk_softirq_cpu_dead(unsigned int cpu)
 {
 	/*
 	 * If a CPU goes away, splice its entries to the current CPU
 	 * and trigger a run of the softirq
 	 */
-	if (action == CPU_DEAD || action == CPU_DEAD_FROZEN) {
-		int cpu = (unsigned long) hcpu;
+	local_irq_disable();
+	list_splice_init(&per_cpu(blk_cpu_done, cpu),
+			 this_cpu_ptr(&blk_cpu_done));
+	raise_softirq_irqoff(BLOCK_SOFTIRQ);
+	local_irq_enable();
 
-		local_irq_disable();
-		list_splice_init(&per_cpu(blk_cpu_done, cpu),
-				 this_cpu_ptr(&blk_cpu_done));
-		raise_softirq_irqoff(BLOCK_SOFTIRQ);
-		local_irq_enable();
-	}
-
-	return NOTIFY_OK;
+	return 0;
 }
-
-static struct notifier_block blk_cpu_notifier = {
-	.notifier_call	= blk_cpu_notify,
-};
 
 void __blk_complete_request(struct request *req)
 {
@@ -136,7 +127,7 @@ void __blk_complete_request(struct request *req)
 		struct list_head *list;
 do_local:
 		list = this_cpu_ptr(&blk_cpu_done);
-		list_add_tail(&req->csd.list, list);
+		list_add_tail(&req->ipi_list, list);
 
 		/*
 		 * if the list only contains our just added request,
@@ -144,7 +135,7 @@ do_local:
 		 * entries there, someone already raised the irq but it
 		 * hasn't run yet.
 		 */
-		if (list->next == &req->csd.list)
+		if (list->next == &req->ipi_list)
 			raise_softirq_irqoff(BLOCK_SOFTIRQ);
 	} else if (raise_blk_irq(ccpu, req))
 		goto do_local;
@@ -180,7 +171,9 @@ static __init int blk_softirq_init(void)
 		INIT_LIST_HEAD(&per_cpu(blk_cpu_done, i));
 
 	open_softirq(BLOCK_SOFTIRQ, blk_done_softirq);
-	register_hotcpu_notifier(&blk_cpu_notifier);
+	cpuhp_setup_state_nocalls(CPUHP_BLOCK_SOFTIRQ_DEAD,
+				  "block/softirq:dead", NULL,
+				  blk_softirq_cpu_dead);
 	return 0;
 }
 subsys_initcall(blk_softirq_init);

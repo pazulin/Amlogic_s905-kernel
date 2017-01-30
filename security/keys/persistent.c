@@ -26,7 +26,7 @@ static int key_create_persistent_register(struct user_namespace *ns)
 					current_cred(),
 					((KEY_POS_ALL & ~KEY_POS_SETATTR) |
 					 KEY_USR_VIEW | KEY_USR_READ),
-					KEY_ALLOC_NOT_IN_QUOTA, NULL);
+					KEY_ALLOC_NOT_IN_QUOTA, NULL, NULL);
 	if (IS_ERR(reg))
 		return PTR_ERR(reg);
 
@@ -60,7 +60,7 @@ static key_ref_t key_create_persistent(struct user_namespace *ns, kuid_t uid,
 				   uid, INVALID_GID, current_cred(),
 				   ((KEY_POS_ALL & ~KEY_POS_SETATTR) |
 				    KEY_USR_VIEW | KEY_USR_READ),
-				   KEY_ALLOC_NOT_IN_QUOTA,
+				   KEY_ALLOC_NOT_IN_QUOTA, NULL,
 				   ns->persistent_keyring_register);
 	if (IS_ERR(persistent))
 		return ERR_CAST(persistent);
@@ -108,13 +108,13 @@ static long key_get_persistent(struct user_namespace *ns, kuid_t uid,
 	return PTR_ERR(persistent_ref);
 
 found:
-	ret = key_task_permission(persistent_ref, current_cred(), KEY_LINK);
+	ret = key_task_permission(persistent_ref, current_cred(), KEY_NEED_LINK);
 	if (ret == 0) {
 		persistent = key_ref_to_ptr(persistent_ref);
 		ret = key_link(key_ref_to_ptr(dest_ref), persistent);
 		if (ret == 0) {
 			key_set_timeout(persistent, persistent_keyring_expiry);
-			ret = persistent->serial;		
+			ret = persistent->serial;
 		}
 	}
 
@@ -151,7 +151,7 @@ long keyctl_get_persistent(uid_t _uid, key_serial_t destid)
 	}
 
 	/* There must be a destination keyring */
-	dest_ref = lookup_user_key(destid, KEY_LOOKUP_CREATE, KEY_WRITE);
+	dest_ref = lookup_user_key(destid, KEY_LOOKUP_CREATE, KEY_NEED_WRITE);
 	if (IS_ERR(dest_ref))
 		return PTR_ERR(dest_ref);
 	if (key_ref_to_ptr(dest_ref)->type != &key_type_keyring) {

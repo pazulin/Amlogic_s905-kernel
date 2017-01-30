@@ -11,11 +11,6 @@
  * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
  * more details.
  *
- * You should have received a copy of the GNU General Public License along with
- * this program; if not, write to the Free Software Foundation, Inc.,
- * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
- *
- *
  ******************************************************************************/
 #ifndef _RTW_IOCTL_H_
 #define _RTW_IOCTL_H_
@@ -74,15 +69,6 @@ enum oid_type {
 	SET_OID
 };
 
-struct oid_funs_node {
-	unsigned int oid_start; /* the starting number for OID */
-	unsigned int oid_end; /* the ending number for OID */
-	struct oid_obj_priv *node_array;
-	unsigned int array_sz; /* the size of node_array */
-	int query_counter; /* count the number of query hits for this segment */
-	int set_counter; /* count the number of set hits for this segment */
-};
-
 struct oid_par_priv {
 	void		*adapter_context;
 	NDIS_OID	oid;
@@ -94,16 +80,8 @@ struct oid_par_priv {
 	u32		dbg;
 };
 
-struct oid_obj_priv {
-	unsigned char	dbg; /*  0: without OID debug message
-			      *  1: with OID debug message */
-	int (*oidfuns)(struct oid_par_priv *poid_par_priv);
-};
-
 #if defined(_RTW_MP_IOCTL_C_)
 static int oid_null_function(struct oid_par_priv *poid_par_priv) {
-	_func_enter_;
-	_func_exit_;
 	return NDIS_STATUS_SUCCESS;
 }
 #endif
@@ -118,7 +96,5 @@ int drv_set_info(struct  net_device *MiniportAdapterContext,
 		 NDIS_OID oid, void *informationbuffer,
 		 u32 informationbufferlength, u32 *bytesread,
 		 u32 *bytesneeded);
-
-extern int ui_pid[3];
 
 #endif /*  #ifndef __INC_CEINFO_ */

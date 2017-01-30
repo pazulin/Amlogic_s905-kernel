@@ -199,7 +199,7 @@ IVc. Errata
 #define USE_IO_OPS 1
 #endif
 
-static DEFINE_PCI_DEVICE_TABLE(sundance_pci_tbl) = {
+static const struct pci_device_id sundance_pci_tbl[] = {
 	{ 0x1186, 0x1002, 0x1186, 0x1002, 0, 0, 0 },
 	{ 0x1186, 0x1002, 0x1186, 0x1003, 0, 0, 1 },
 	{ 0x1186, 0x1002, 0x1186, 0x1012, 0, 0, 2 },
@@ -577,7 +577,7 @@ static int sundance_probe1(struct pci_dev *pdev,
 
 	/* The chip-specific entries in the device structure. */
 	dev->netdev_ops = &netdev_ops;
-	SET_ETHTOOL_OPS(dev, &ethtool_ops);
+	dev->ethtool_ops = &ethtool_ops;
 	dev->watchdog_timeo = TX_TIMEOUT;
 
 	pci_set_drvdata(pdev, dev);
@@ -867,7 +867,7 @@ static int netdev_open(struct net_device *dev)
 
 	/* Initialize other registers. */
 	__set_mac_addr(dev);
-#if defined(CONFIG_VLAN_8021Q) || defined(CONFIG_VLAN_8021Q_MODULE)
+#if IS_ENABLED(CONFIG_VLAN_8021Q)
 	iowrite16(dev->mtu + 18, ioaddr + MaxFrameSize);
 #else
 	iowrite16(dev->mtu + 14, ioaddr + MaxFrameSize);
@@ -1011,7 +1011,7 @@ static void tx_timeout(struct net_device *dev)
 
 	dev->if_port = 0;
 
-	dev->trans_start = jiffies; /* prevent tx timeout */
+	netif_trans_update(dev); /* prevent tx timeout */
 	dev->stats.tx_errors++;
 	if (np->cur_tx - np->dirty_tx < TX_QUEUE_LEN - 4) {
 		netif_wake_queue(dev);
@@ -1137,7 +1137,7 @@ start_tx (struct sk_buff *skb, struct net_device *dev)
 	return NETDEV_TX_OK;
 
 drop_frame:
-	dev_kfree_skb(skb);
+	dev_kfree_skb_any(skb);
 	np->tx_skbuff[entry] = NULL;
 	dev->stats.tx_dropped++;
 	return NETDEV_TX_OK;

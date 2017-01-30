@@ -204,7 +204,6 @@ static int pcc_cpufreq_target(struct cpufreq_policy *policy,
 	u32 input_buffer;
 	int cpu;
 
-	spin_lock(&pcc_lock);
 	cpu = policy->cpu;
 	pcc_cpu_data = per_cpu_ptr(pcc_cpu_info, cpu);
 
@@ -215,7 +214,8 @@ static int pcc_cpufreq_target(struct cpufreq_policy *policy,
 
 	freqs.old = policy->cur;
 	freqs.new = target_freq;
-	cpufreq_notify_transition(policy, &freqs, CPUFREQ_PRECHANGE);
+	cpufreq_freq_transition_begin(policy, &freqs);
+	spin_lock(&pcc_lock);
 
 	input_buffer = 0x1 | (((target_freq * 100)
 			       / (ioread32(&pcch_hdr->nominal) * 1000)) << 8);
@@ -231,7 +231,7 @@ static int pcc_cpufreq_target(struct cpufreq_policy *policy,
 	status = ioread16(&pcch_hdr->status);
 	iowrite16(0, &pcch_hdr->status);
 
-	cpufreq_notify_post_transition(policy, &freqs, status != CMD_COMPLETE);
+	cpufreq_freq_transition_end(policy, &freqs, status != CMD_COMPLETE);
 	spin_unlock(&pcc_lock);
 
 	if (status != CMD_COMPLETE) {
@@ -487,7 +487,7 @@ static int __init pcc_cpufreq_probe(void)
 	doorbell.space_id = reg_resource->space_id;
 	doorbell.bit_width = reg_resource->bit_width;
 	doorbell.bit_offset = reg_resource->bit_offset;
-	doorbell.access_width = 64;
+	doorbell.access_width = 4;
 	doorbell.address = reg_resource->address;
 
 	pr_debug("probe: doorbell: space_id is %d, bit_width is %d, "
@@ -602,6 +602,13 @@ static void __exit pcc_cpufreq_exit(void)
 
 	free_percpu(pcc_cpu_info);
 }
+
+static const struct acpi_device_id processor_device_ids[] = {
+	{ACPI_PROCESSOR_OBJECT_HID, },
+	{ACPI_PROCESSOR_DEVICE_HID, },
+	{},
+};
+MODULE_DEVICE_TABLE(acpi, processor_device_ids);
 
 MODULE_AUTHOR("Matthew Garrett, Naga Chumbalkar");
 MODULE_VERSION(PCC_VERSION);

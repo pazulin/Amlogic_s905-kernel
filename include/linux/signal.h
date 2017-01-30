@@ -2,6 +2,7 @@
 #define _LINUX_SIGNAL_H
 
 #include <linux/list.h>
+#include <linux/bug.h>
 #include <uapi/linux/signal.h>
 
 struct task_struct;
@@ -26,6 +27,21 @@ struct sigpending {
 	struct list_head list;
 	sigset_t signal;
 };
+
+#ifndef HAVE_ARCH_COPY_SIGINFO
+
+#include <linux/string.h>
+
+static inline void copy_siginfo(struct siginfo *to, struct siginfo *from)
+{
+	if (from->si_code < 0)
+		memcpy(to, from, sizeof(*to));
+	else
+		/* _sigchld is currently the largest know union member */
+		memcpy(to, from, __ARCH_SI_PREAMBLE_SIZE + sizeof(from->_sifields._sigchld));
+}
+
+#endif
 
 /*
  * Define some primitives to manipulate sigset_t.
@@ -63,16 +79,10 @@ static inline int sigismember(sigset_t *set, int _sig)
 		return 1 & (set->sig[sig / _NSIG_BPW] >> (sig % _NSIG_BPW));
 }
 
-static inline int sigfindinword(unsigned long word)
-{
-	return ffz(~word);
-}
-
 #endif /* __HAVE_ARCH_SIG_BITOPS */
 
 static inline int sigisemptyset(sigset_t *set)
 {
-	extern void _NSIG_WORDS_is_unsupported_size(void);
 	switch (_NSIG_WORDS) {
 	case 4:
 		return (set->sig[3] | set->sig[2] |
@@ -82,7 +92,7 @@ static inline int sigisemptyset(sigset_t *set)
 	case 1:
 		return set->sig[0] == 0;
 	default:
-		_NSIG_WORDS_is_unsupported_size();
+		BUILD_BUG();
 		return 0;
 	}
 }
@@ -95,24 +105,23 @@ static inline int sigisemptyset(sigset_t *set)
 #define _SIG_SET_BINOP(name, op)					\
 static inline void name(sigset_t *r, const sigset_t *a, const sigset_t *b) \
 {									\
-	extern void _NSIG_WORDS_is_unsupported_size(void);		\
 	unsigned long a0, a1, a2, a3, b0, b1, b2, b3;			\
 									\
 	switch (_NSIG_WORDS) {						\
-	    case 4:							\
+	case 4:								\
 		a3 = a->sig[3]; a2 = a->sig[2];				\
 		b3 = b->sig[3]; b2 = b->sig[2];				\
 		r->sig[3] = op(a3, b3);					\
 		r->sig[2] = op(a2, b2);					\
-	    case 2:							\
+	case 2:								\
 		a1 = a->sig[1]; b1 = b->sig[1];				\
 		r->sig[1] = op(a1, b1);					\
-	    case 1:							\
+	case 1:								\
 		a0 = a->sig[0]; b0 = b->sig[0];				\
 		r->sig[0] = op(a0, b0);					\
 		break;							\
-	    default:							\
-		_NSIG_WORDS_is_unsupported_size();			\
+	default:							\
+		BUILD_BUG();						\
 	}								\
 }
 
@@ -133,16 +142,14 @@ _SIG_SET_BINOP(sigandnsets, _sig_andn)
 #define _SIG_SET_OP(name, op)						\
 static inline void name(sigset_t *set)					\
 {									\
-	extern void _NSIG_WORDS_is_unsupported_size(void);		\
-									\
 	switch (_NSIG_WORDS) {						\
-	    case 4: set->sig[3] = op(set->sig[3]);			\
-		    set->sig[2] = op(set->sig[2]);			\
-	    case 2: set->sig[1] = op(set->sig[1]);			\
-	    case 1: set->sig[0] = op(set->sig[0]);			\
+	case 4:	set->sig[3] = op(set->sig[3]);				\
+		set->sig[2] = op(set->sig[2]);				\
+	case 2:	set->sig[1] = op(set->sig[1]);				\
+	case 1:	set->sig[0] = op(set->sig[0]);				\
 		    break;						\
-	    default:							\
-		_NSIG_WORDS_is_unsupported_size();			\
+	default:							\
+		BUILD_BUG();						\
 	}								\
 }
 
@@ -247,7 +254,6 @@ extern int sigprocmask(int, sigset_t *, sigset_t *);
 extern void set_current_blocked(sigset_t *);
 extern void __set_current_blocked(const sigset_t *);
 extern int show_unhandled_signals;
-extern int sigsuspend(sigset_t *);
 
 struct sigaction {
 #ifndef __ARCH_HAS_IRIX_SIGACTION
@@ -285,22 +291,25 @@ struct ksignal {
 	int sig;
 };
 
-extern int get_signal_to_deliver(siginfo_t *info, struct k_sigaction *return_ka, struct pt_regs *regs, void *cookie);
+extern int get_signal(struct ksignal *ksig);
 extern void signal_setup_done(int failed, struct ksignal *ksig, int stepping);
-extern void signal_delivered(int sig, siginfo_t *info, struct k_sigaction *ka, struct pt_regs *regs, int stepping);
 extern void exit_signals(struct task_struct *tsk);
+extern void kernel_sigaction(int, __sighandler_t);
 
-/*
- * Eventually that'll replace get_signal_to_deliver(); macro for now,
- * to avoid nastiness with include order.
- */
-#define get_signal(ksig)					\
-({								\
-	struct ksignal *p = (ksig);				\
-	p->sig = get_signal_to_deliver(&p->info, &p->ka,	\
-					signal_pt_regs(), NULL);\
-	p->sig > 0;						\
-})
+static inline void allow_signal(int sig)
+{
+	/*
+	 * Kernel threads handle their own signals. Let the signal code
+	 * know it'll be handled, so that they don't get converted to
+	 * SIGKILL or just silently dropped.
+	 */
+	kernel_sigaction(sig, (__force __sighandler_t)2);
+}
+
+static inline void disallow_signal(int sig)
+{
+	kernel_sigaction(sig, SIG_IGN);
+}
 
 extern struct kmem_cache *sighand_cachep;
 
@@ -391,7 +400,9 @@ int unhandled_signal(struct task_struct *tsk, int sig);
 #else
 #define rt_sigmask(sig)	sigmask(sig)
 #endif
-#define siginmask(sig, mask) (rt_sigmask(sig) & (mask))
+
+#define siginmask(sig, mask) \
+	((sig) < SIGRTMIN && (rt_sigmask(sig) & (mask)))
 
 #define SIG_KERNEL_ONLY_MASK (\
 	rt_sigmask(SIGKILL)   |  rt_sigmask(SIGSTOP))
@@ -412,14 +423,10 @@ int unhandled_signal(struct task_struct *tsk, int sig);
         rt_sigmask(SIGCONT)   |  rt_sigmask(SIGCHLD)   | \
 	rt_sigmask(SIGWINCH)  |  rt_sigmask(SIGURG)    )
 
-#define sig_kernel_only(sig) \
-	(((sig) < SIGRTMIN) && siginmask(sig, SIG_KERNEL_ONLY_MASK))
-#define sig_kernel_coredump(sig) \
-	(((sig) < SIGRTMIN) && siginmask(sig, SIG_KERNEL_COREDUMP_MASK))
-#define sig_kernel_ignore(sig) \
-	(((sig) < SIGRTMIN) && siginmask(sig, SIG_KERNEL_IGNORE_MASK))
-#define sig_kernel_stop(sig) \
-	(((sig) < SIGRTMIN) && siginmask(sig, SIG_KERNEL_STOP_MASK))
+#define sig_kernel_only(sig)		siginmask(sig, SIG_KERNEL_ONLY_MASK)
+#define sig_kernel_coredump(sig)	siginmask(sig, SIG_KERNEL_COREDUMP_MASK)
+#define sig_kernel_ignore(sig)		siginmask(sig, SIG_KERNEL_IGNORE_MASK)
+#define sig_kernel_stop(sig)		siginmask(sig, SIG_KERNEL_STOP_MASK)
 
 #define sig_user_defined(t, signr) \
 	(((t)->sighand->action[(signr)-1].sa.sa_handler != SIG_DFL) &&	\
@@ -438,8 +445,10 @@ int __save_altstack(stack_t __user *, unsigned long);
 	stack_t __user *__uss = uss; \
 	struct task_struct *t = current; \
 	put_user_ex((void __user *)t->sas_ss_sp, &__uss->ss_sp); \
-	put_user_ex(sas_ss_flags(sp), &__uss->ss_flags); \
+	put_user_ex(t->sas_ss_flags, &__uss->ss_flags); \
 	put_user_ex(t->sas_ss_size, &__uss->ss_size); \
+	if (t->sas_ss_flags & SS_AUTODISARM) \
+		sas_ss_reset(t); \
 } while (0);
 
 #ifdef CONFIG_PROC_FS

@@ -2,7 +2,7 @@
  * devfreq_cooling: Thermal cooling device implementation for devices using
  *                  devfreq
  *
- * Copyright (C) 2014 ARM Limited
+ * Copyright (C) 2014-2015 ARM Limited
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 as
@@ -23,70 +23,58 @@
 #ifdef CONFIG_DEVFREQ_THERMAL
 
 /**
- * struct devfreq_cooling_ops - Devfreq cooling power ops
- * @get_static_power: Take voltage, in mV, and return the static power in mW.
- * @get_dynamic_power: Take voltage, in mV, and frequency, in HZ, and return
- * the dynamic power draw in mW.
+ * struct devfreq_cooling_power - Devfreq cooling power ops
+ * @get_static_power:	Take voltage, in mV, and return the static power
+ *			in mW.  If NULL, the static power is assumed
+ *			to be 0.
+ * @get_dynamic_power:	Take voltage, in mV, and frequency, in HZ, and
+ *			return the dynamic power draw in mW.  If NULL,
+ *			a simple power model is used.
+ * @dyn_power_coeff:	Coefficient for the simple dynamic power model in
+ *			mW/(MHz mV mV).
+ *			If get_dynamic_power() is NULL, then the
+ *			dynamic power is calculated as
+ *			@dyn_power_coeff * frequency * voltage^2
  */
-struct devfreq_cooling_ops {
+struct devfreq_cooling_power {
 	unsigned long (*get_static_power)(unsigned long voltage);
 	unsigned long (*get_dynamic_power)(unsigned long freq,
-			unsigned long voltage);
+					   unsigned long voltage);
+	unsigned long dyn_power_coeff;
 };
 
-/**
- * struct devfreq_cooling_device - Devfreq cooling device
- * @cdev:          Pointer to associated thermal cooling device.
- * @devfreq:       Pointer to associated devfreq device.
- * @cooling_state: Current cooling state.
- * @power_table:   Pointer to table with maximum power draw for each cooling
- *                 state. State is the index into the table, and the power is
- *                 stated in mW.
- * @power_ops:     Pointer to power operations, used to generate @power_table.
- * @last_status:   The devfreq status at last devfreq polling.
- */
-struct devfreq_cooling_device {
-	struct thermal_cooling_device *cdev;
-	struct devfreq *devfreq;
-	unsigned long cooling_state;
-	u32 *power_table;
-	struct devfreq_cooling_ops *power_ops;
-	struct devfreq_dev_status last_status;
-};
-
-struct devfreq_cooling_device *
+struct thermal_cooling_device *
 of_devfreq_cooling_register_power(struct device_node *np, struct devfreq *df,
-		struct devfreq_cooling_ops *ops);
-struct devfreq_cooling_device *
+				  struct devfreq_cooling_power *dfc_power);
+struct thermal_cooling_device *
 of_devfreq_cooling_register(struct device_node *np, struct devfreq *df);
-struct devfreq_cooling_device *devfreq_cooling_register(struct devfreq *df);
-void devfreq_cooling_unregister(struct devfreq_cooling_device *dfc);
+struct thermal_cooling_device *devfreq_cooling_register(struct devfreq *df);
+void devfreq_cooling_unregister(struct thermal_cooling_device *dfc);
 
 #else /* !CONFIG_DEVFREQ_THERMAL */
 
-struct devfreq_cooling_device *
+struct thermal_cooling_device *
 of_devfreq_cooling_register_power(struct device_node *np, struct devfreq *df,
-		struct devfreq_cooling_ops *ops)
+				  struct devfreq_cooling_power *dfc_power)
 {
-	return NULL;
+	return ERR_PTR(-EINVAL);
 }
 
-static inline struct devfreq_cooling_device *
+static inline struct thermal_cooling_device *
 of_devfreq_cooling_register(struct device_node *np, struct devfreq *df)
 {
-	return NULL;
+	return ERR_PTR(-EINVAL);
 }
 
-static inline struct devfreq_cooling_device *
+static inline struct thermal_cooling_device *
 devfreq_cooling_register(struct devfreq *df)
 {
-	return NULL;
+	return ERR_PTR(-EINVAL);
 }
 
 static inline void
-devfreq_cooling_unregister(struct devfreq_cooling_device *dfc)
+devfreq_cooling_unregister(struct thermal_cooling_device *dfc)
 {
-	return;
 }
 
 #endif /* CONFIG_DEVFREQ_THERMAL */

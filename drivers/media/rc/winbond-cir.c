@@ -615,6 +615,10 @@ wbcir_txmask(struct rc_dev *dev, u32 mask)
 	unsigned long flags;
 	u8 val;
 
+	/* return the number of transmitters */
+	if (mask > 15)
+		return 4;
+
 	/* Four outputs, only one output can be enabled at a time */
 	switch (mask) {
 	case 0x1:
@@ -1082,7 +1086,7 @@ wbcir_probe(struct pnp_dev *device, const struct pnp_device_id *dev_id)
 	data->dev->dev.parent = &device->dev;
 	data->dev->timeout = MS_TO_NS(100);
 	data->dev->rx_resolution = US_TO_NS(2);
-	data->dev->allowed_protos = RC_BIT_ALL;
+	data->dev->allowed_protocols = RC_BIT_ALL;
 
 	err = rc_register_device(data->dev);
 	if (err)

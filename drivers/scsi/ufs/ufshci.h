@@ -89,8 +89,10 @@ enum {
 
 /* Controller UFSHCI version */
 enum {
-	UFSHCI_VERSION_10 = 0x00010000,
-	UFSHCI_VERSION_11 = 0x00010100,
+	UFSHCI_VERSION_10 = 0x00010000, /* 1.0 */
+	UFSHCI_VERSION_11 = 0x00010100, /* 1.1 */
+	UFSHCI_VERSION_20 = 0x00000200, /* 2.0 */
+	UFSHCI_VERSION_21 = 0x00000210, /* 2.1 */
 };
 
 /*
@@ -124,8 +126,11 @@ enum {
 #define CONTROLLER_FATAL_ERROR			UFS_BIT(16)
 #define SYSTEM_BUS_FATAL_ERROR			UFS_BIT(17)
 
-#define UFSHCD_UIC_MASK		(UIC_COMMAND_COMPL |\
-				 UIC_POWER_MODE)
+#define UFSHCD_UIC_PWR_MASK	(UIC_HIBERNATE_ENTER |\
+				UIC_HIBERNATE_EXIT |\
+				UIC_POWER_MODE)
+
+#define UFSHCD_UIC_MASK		(UIC_COMMAND_COMPL | UFSHCD_UIC_PWR_MASK)
 
 #define UFSHCD_ERROR_MASK	(UIC_ERROR |\
 				DEVICE_FATAL_ERROR |\
@@ -166,6 +171,8 @@ enum {
 #define UIC_DATA_LINK_LAYER_ERROR		UFS_BIT(31)
 #define UIC_DATA_LINK_LAYER_ERROR_CODE_MASK	0x7FFF
 #define UIC_DATA_LINK_LAYER_ERROR_PA_INIT	0x2000
+#define UIC_DATA_LINK_LAYER_ERROR_NAC_RECEIVED	0x0001
+#define UIC_DATA_LINK_LAYER_ERROR_TCx_REPLAY_TIMEOUT 0x0002
 
 /* UECN - Host UIC Error Code Network Layer 40h */
 #define UIC_NETWORK_LAYER_ERROR			UFS_BIT(31)
@@ -203,14 +210,24 @@ enum {
 #define CONFIG_RESULT_CODE_MASK		0xFF
 #define GENERIC_ERROR_CODE_MASK		0xFF
 
+/* GenSelectorIndex calculation macros for M-PHY attributes */
+#define UIC_ARG_MPHY_TX_GEN_SEL_INDEX(lane) (lane)
+#define UIC_ARG_MPHY_RX_GEN_SEL_INDEX(lane) (PA_MAXDATALANES + (lane))
+
 #define UIC_ARG_MIB_SEL(attr, sel)	((((attr) & 0xFFFF) << 16) |\
 					 ((sel) & 0xFFFF))
 #define UIC_ARG_MIB(attr)		UIC_ARG_MIB_SEL(attr, 0)
 #define UIC_ARG_ATTR_TYPE(t)		(((t) & 0xFF) << 16)
 #define UIC_GET_ATTR_ID(v)		(((v) >> 16) & 0xFFFF)
 
+/* Link Status*/
+enum link_status {
+	UFSHCD_LINK_IS_DOWN	= 1,
+	UFSHCD_LINK_IS_UP	= 2,
+};
+
 /* UIC Commands */
-enum {
+enum uic_cmd_dme {
 	UIC_CMD_DME_GET			= 0x01,
 	UIC_CMD_DME_SET			= 0x02,
 	UIC_CMD_DME_PEER_GET		= 0x03,
@@ -268,6 +285,11 @@ enum {
 	UTP_CMD_TYPE_DEV_MANAGE		= 0x2,
 };
 
+/* To accommodate UFS2.0 required Command type */
+enum {
+	UTP_CMD_TYPE_UFS_STORAGE	= 0x1,
+};
+
 enum {
 	UTP_SCSI_COMMAND		= 0x00000000,
 	UTP_NATIVE_UFS_COMMAND		= 0x10000000,
@@ -296,6 +318,11 @@ enum {
 	MASK_OCS			= 0x0F,
 };
 
+/* The maximum length of the data byte count field in the PRDT is 256KB */
+#define PRDT_DATA_BYTE_COUNT_MAX	(256 * 1024)
+/* The granularity of the data byte count field in the PRDT is 32-bit */
+#define PRDT_DATA_BYTE_COUNT_PAD	4
+
 /**
  * struct ufshcd_sg_entry - UFSHCI PRD Entry
  * @base_addr: Lower 32bit physical address DW-0
@@ -304,10 +331,10 @@ enum {
  * @size: size of physical segment DW-3
  */
 struct ufshcd_sg_entry {
-	u32    base_addr;
-	u32    upper_addr;
-	u32    reserved;
-	u32    size;
+	__le32    base_addr;
+	__le32    upper_addr;
+	__le32    reserved;
+	__le32    size;
 };
 
 /**
@@ -330,10 +357,10 @@ struct utp_transfer_cmd_desc {
  * @dword3: Descriptor Header DW3
  */
 struct request_desc_header {
-	u32 dword_0;
-	u32 dword_1;
-	u32 dword_2;
-	u32 dword_3;
+	__le32 dword_0;
+	__le32 dword_1;
+	__le32 dword_2;
+	__le32 dword_3;
 };
 
 /**
@@ -352,16 +379,16 @@ struct utp_transfer_req_desc {
 	struct request_desc_header header;
 
 	/* DW 4-5*/
-	u32  command_desc_base_addr_lo;
-	u32  command_desc_base_addr_hi;
+	__le32  command_desc_base_addr_lo;
+	__le32  command_desc_base_addr_hi;
 
 	/* DW 6 */
-	u16  response_upiu_length;
-	u16  response_upiu_offset;
+	__le16  response_upiu_length;
+	__le16  response_upiu_offset;
 
 	/* DW 7 */
-	u16  prd_table_length;
-	u16  prd_table_offset;
+	__le16  prd_table_length;
+	__le16  prd_table_offset;
 };
 
 /**
@@ -376,10 +403,10 @@ struct utp_task_req_desc {
 	struct request_desc_header header;
 
 	/* DW 4-11 */
-	u32 task_req_upiu[TASK_REQ_UPIU_SIZE_DWORDS];
+	__le32 task_req_upiu[TASK_REQ_UPIU_SIZE_DWORDS];
 
 	/* DW 12-19 */
-	u32 task_rsp_upiu[TASK_RSP_UPIU_SIZE_DWORDS];
+	__le32 task_rsp_upiu[TASK_RSP_UPIU_SIZE_DWORDS];
 };
 
 #endif /* End of Header */

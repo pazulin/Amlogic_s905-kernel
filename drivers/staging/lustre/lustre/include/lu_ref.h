@@ -17,10 +17,6 @@
  *   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  *   GNU General Public License for more details.
  *
- *   You should have received a copy of the GNU General Public License
- *   along with Lustre; if not, write to the Free Software
- *   Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
- *
  */
 
 #ifndef __LUSTRE_LU_REF_H
@@ -69,12 +65,12 @@
  *
  *	// current thread acquired a temporary reference to foo.
  *	foo_get(foo);
- *	lu_ref_add(&foo->reference, __FUNCTION__, current);
+ *	lu_ref_add(&foo->reference, __func__, current);
  *
  *	...
  *
  *	// temporary reference is released.
- *	lu_ref_del(&foo->reference, __FUNCTION__, current);
+ *	lu_ref_del(&foo->reference, __func__, current);
  *	foo_put(foo);
  * \endcode
  *
@@ -106,7 +102,6 @@
  *
  * @{
  */
-
 
 /*
  * dummy data structures/functions to pass compile for now.

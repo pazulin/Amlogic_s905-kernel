@@ -377,8 +377,7 @@ static void free_buffer(struct videobuf_queue *vq, struct zr364xx_buffer *buf)
 {
 	_DBG("%s\n", __func__);
 
-	if (in_interrupt())
-		BUG();
+	BUG_ON(in_interrupt());
 
 	videobuf_vmalloc_free(&buf->vb);
 	buf->vb.state = VIDEOBUF_NEEDS_INIT;
@@ -806,7 +805,6 @@ static int zr364xx_vidioc_try_fmt_vid_cap(struct file *file, void *priv,
 	f->fmt.pix.bytesperline = f->fmt.pix.width * 2;
 	f->fmt.pix.sizeimage = f->fmt.pix.height * f->fmt.pix.bytesperline;
 	f->fmt.pix.colorspace = V4L2_COLORSPACE_JPEG;
-	f->fmt.pix.priv = 0;
 	DBG("%s: V4L2_PIX_FMT_%s (%d) ok!\n", __func__,
 	    decode_fourcc(f->fmt.pix.pixelformat, pixelformat_name),
 	    f->fmt.pix.field);
@@ -829,7 +827,6 @@ static int zr364xx_vidioc_g_fmt_vid_cap(struct file *file, void *priv,
 	f->fmt.pix.bytesperline = f->fmt.pix.width * 2;
 	f->fmt.pix.sizeimage = f->fmt.pix.height * f->fmt.pix.bytesperline;
 	f->fmt.pix.colorspace = V4L2_COLORSPACE_JPEG;
-	f->fmt.pix.priv = 0;
 	return 0;
 }
 
@@ -866,7 +863,6 @@ static int zr364xx_vidioc_s_fmt_vid_cap(struct file *file, void *priv,
 	f->fmt.pix.bytesperline = f->fmt.pix.width * 2;
 	f->fmt.pix.sizeimage = f->fmt.pix.height * f->fmt.pix.bytesperline;
 	f->fmt.pix.colorspace = V4L2_COLORSPACE_JPEG;
-	f->fmt.pix.priv = 0;
 	cam->vb_vidq.field = f->fmt.pix.field;
 
 	if (f->fmt.pix.width == 160 && f->fmt.pix.height == 120)
@@ -1049,10 +1045,8 @@ static int zr364xx_start_readpipe(struct zr364xx_camera *cam)
 	pipe_info->state = 1;
 	pipe_info->err_count = 0;
 	pipe_info->stream_urb = usb_alloc_urb(0, GFP_KERNEL);
-	if (!pipe_info->stream_urb) {
-		dev_err(&cam->udev->dev, "ReadStream: Unable to alloc URB\n");
+	if (!pipe_info->stream_urb)
 		return -ENOMEM;
-	}
 	/* transfer buffer allocated in board_init */
 	usb_fill_bulk_urb(pipe_info->stream_urb, cam->udev,
 			  pipe,
@@ -1456,10 +1450,7 @@ static int zr364xx_probe(struct usb_interface *intf,
 	cam->vdev.lock = &cam->lock;
 	cam->vdev.v4l2_dev = &cam->v4l2_dev;
 	cam->vdev.ctrl_handler = &cam->ctrl_handler;
-	set_bit(V4L2_FL_USE_FH_PRIO, &cam->vdev.flags);
 	video_set_drvdata(&cam->vdev, cam);
-	if (debug)
-		cam->vdev.debug = V4L2_DEBUG_IOCTL | V4L2_DEBUG_IOCTL_ARG;
 
 	cam->udev = udev;
 

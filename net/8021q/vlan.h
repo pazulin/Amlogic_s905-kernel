@@ -38,9 +38,9 @@ struct vlan_info {
 static inline unsigned int vlan_proto_idx(__be16 proto)
 {
 	switch (proto) {
-	case __constant_htons(ETH_P_8021Q):
+	case htons(ETH_P_8021Q):
 		return VLAN_PROTO_8021Q;
-	case __constant_htons(ETH_P_8021AD):
+	case htons(ETH_P_8021AD):
 		return VLAN_PROTO_8021AD;
 	default:
 		BUG();
@@ -109,6 +109,8 @@ int vlan_check_real_dev(struct net_device *real_dev,
 void vlan_setup(struct net_device *dev);
 int register_vlan_dev(struct net_device *dev);
 void unregister_vlan_dev(struct net_device *dev, struct list_head *head);
+bool vlan_dev_inherit_address(struct net_device *dev,
+			      struct net_device *real_dev);
 
 static inline u32 vlan_get_ingress_priority(struct net_device *dev,
 					    u16 vlan_tci)

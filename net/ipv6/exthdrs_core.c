@@ -82,7 +82,7 @@ int ipv6_skip_exthdr(const struct sk_buff *skb, int start, u8 *nexthdrp,
 		if (nexthdr == NEXTHDR_NONE)
 			return -1;
 		hp = skb_header_pointer(skb, start, sizeof(_hdr), &_hdr);
-		if (hp == NULL)
+		if (!hp)
 			return -1;
 		if (nexthdr == NEXTHDR_FRAGMENT) {
 			__be16 _frag_off, *fp;
@@ -91,7 +91,7 @@ int ipv6_skip_exthdr(const struct sk_buff *skb, int start, u8 *nexthdrp,
 							       frag_off),
 						sizeof(_frag_off),
 						&_frag_off);
-			if (fp == NULL)
+			if (!fp)
 				return -1;
 
 			*frag_offp = *fp;
@@ -112,7 +112,7 @@ int ipv6_skip_exthdr(const struct sk_buff *skb, int start, u8 *nexthdrp,
 }
 EXPORT_SYMBOL(ipv6_skip_exthdr);
 
-int ipv6_find_tlv(struct sk_buff *skb, int offset, int type)
+int ipv6_find_tlv(const struct sk_buff *skb, int offset, int type)
 {
 	const unsigned char *nh = skb_network_header(skb);
 	int packet_len = skb_tail_pointer(skb) - skb_network_header(skb);
@@ -166,15 +166,15 @@ EXPORT_SYMBOL_GPL(ipv6_find_tlv);
  * to explore inner IPv6 header, eg. ICMPv6 error messages.
  *
  * If target header is found, its offset is set in *offset and return protocol
- * number. Otherwise, return -ENOENT or -EBADMSG.
+ * number. Otherwise, return -1.
  *
  * If the first fragment doesn't contain the final protocol header or
  * NEXTHDR_NONE it is considered invalid.
  *
  * Note that non-1st fragment is special case that "the protocol number
  * of last header" is "next header" field in Fragment header. In this case,
- * *offset is meaningless. If fragoff is not NULL, the fragment offset is
- * stored in *fragoff; if it is NULL, return -EINVAL.
+ * *offset is meaningless and fragment offset is stored in *fragoff if fragoff
+ * isn't NULL.
  *
  * if flags is not NULL and it's a fragment, then the frag flag
  * IP6_FH_F_FRAG will be set. If it's an AH header, the
@@ -218,7 +218,7 @@ int ipv6_find_hdr(const struct sk_buff *skb, unsigned int *offset,
 		}
 
 		hp = skb_header_pointer(skb, start, sizeof(_hdr), &_hdr);
-		if (hp == NULL)
+		if (!hp)
 			return -EBADMSG;
 
 		if (nexthdr == NEXTHDR_ROUTING) {
@@ -226,7 +226,7 @@ int ipv6_find_hdr(const struct sk_buff *skb, unsigned int *offset,
 
 			rh = skb_header_pointer(skb, start, sizeof(_rh),
 						&_rh);
-			if (rh == NULL)
+			if (!rh)
 				return -EBADMSG;
 
 			if (flags && (*flags & IP6_FH_F_SKIP_RH) &&
@@ -245,7 +245,7 @@ int ipv6_find_hdr(const struct sk_buff *skb, unsigned int *offset,
 							       frag_off),
 						sizeof(_frag_off),
 						&_frag_off);
-			if (fp == NULL)
+			if (!fp)
 				return -EBADMSG;
 
 			_frag_off = ntohs(*fp) & ~0x7;
@@ -253,14 +253,15 @@ int ipv6_find_hdr(const struct sk_buff *skb, unsigned int *offset,
 				if (target < 0 &&
 				    ((!ipv6_ext_hdr(hp->nexthdr)) ||
 				     hp->nexthdr == NEXTHDR_NONE)) {
-					if (fragoff) {
+					if (fragoff)
 						*fragoff = _frag_off;
-						return hp->nexthdr;
-					} else {
-						return -EINVAL;
-					}
+					return hp->nexthdr;
 				}
-				return -ENOENT;
+				if (!found)
+					return -ENOENT;
+				if (fragoff)
+					*fragoff = _frag_off;
+				break;
 			}
 			hdrlen = 8;
 		} else if (nexthdr == NEXTHDR_AUTH) {

@@ -1,10 +1,11 @@
 /*
  * QLogic Fibre Channel HBA Driver
- * Copyright (c)  2003-2013 QLogic Corporation
+ * Copyright (c)  2003-2014 QLogic Corporation
  *
  * See LICENSE.qla2xxx for copyright and licensing details.
  */
 
+#include "qla_target.h"
 /**
  * qla24xx_calc_iocbs() - Determine number of Command Type 3 and
  * Continuation Type 1 IOCBs to allocate.
@@ -86,8 +87,8 @@ host_to_adap(uint8_t *src, uint8_t *dst, uint32_t bsize)
 	__le32 *odest = (__le32 *) dst;
 	uint32_t iter = bsize >> 2;
 
-	for (; iter ; iter--)
-		*odest++ = cpu_to_le32(*isrc++);
+	for ( ; iter--; isrc++)
+		*odest++ = cpu_to_le32(*isrc);
 }
 
 static inline void
@@ -128,12 +129,20 @@ qla2x00_clear_loop_id(fc_port_t *fcport) {
 }
 
 static inline void
-qla2x00_clean_dsd_pool(struct qla_hw_data *ha, srb_t *sp)
+qla2x00_clean_dsd_pool(struct qla_hw_data *ha, srb_t *sp,
+	struct qla_tgt_cmd *tc)
 {
 	struct dsd_dma *dsd_ptr, *tdsd_ptr;
 	struct crc_context *ctx;
 
-	ctx = (struct crc_context *)GET_CMD_CTX_SP(sp);
+	if (sp)
+		ctx = (struct crc_context *)GET_CMD_CTX_SP(sp);
+	else if (tc)
+		ctx = (struct crc_context *)tc->ctx;
+	else {
+		BUG();
+		return;
+	}
 
 	/* clean up allocated prev pool */
 	list_for_each_entry_safe(dsd_ptr, tdsd_ptr,
@@ -249,6 +258,8 @@ qla2x00_init_timer(srb_t *sp, unsigned long tmo)
 	if ((IS_QLAFX00(sp->fcport->vha->hw)) &&
 	    (sp->type == SRB_FXIOCB_DCMD))
 		init_completion(&sp->u.iocb_cmd.u.fxiocb.fxiocb_comp);
+	if (sp->type == SRB_ELS_DCMD)
+		init_completion(&sp->u.iocb_cmd.u.els_logo.comp);
 }
 
 static inline int
@@ -269,4 +280,12 @@ qla2x00_handle_mbx_completion(struct qla_hw_data *ha, int status)
 		clear_bit(MBX_INTR_WAIT, &ha->mbx_cmd_flags);
 		complete(&ha->mbx_intr_comp);
 	}
+}
+
+static inline void
+qla2x00_set_retry_delay_timestamp(fc_port_t *fcport, uint16_t retry_delay)
+{
+	if (retry_delay)
+		fcport->retry_delay_timestamp = jiffies +
+		    (retry_delay * HZ / 10);
 }

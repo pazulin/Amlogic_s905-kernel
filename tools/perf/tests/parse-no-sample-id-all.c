@@ -1,4 +1,4 @@
-#include <sys/types.h>
+#include <linux/types.h>
 #include <stddef.h>
 
 #include "tests.h"
@@ -7,6 +7,7 @@
 #include "evlist.h"
 #include "header.h"
 #include "util.h"
+#include "debug.h"
 
 static int process_event(struct perf_evlist **pevlist, union perf_event *event)
 {
@@ -43,8 +44,7 @@ static int process_events(union perf_event **events, size_t count)
 	for (i = 0; i < count && !err; i++)
 		err = process_event(&evlist, events[i]);
 
-	if (evlist)
-		perf_evlist__delete(evlist);
+	perf_evlist__delete(evlist);
 
 	return err;
 }
@@ -66,7 +66,7 @@ struct test_attr_event {
  *
  * Return: %0 on success, %-1 if the test fails.
  */
-int test__parse_no_sample_id_all(void)
+int test__parse_no_sample_id_all(int subtest __maybe_unused)
 {
 	int err;
 

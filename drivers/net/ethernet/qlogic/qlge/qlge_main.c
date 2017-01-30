@@ -86,7 +86,7 @@ MODULE_PARM_DESC(qlge_force_coredump,
 		"Option to allow force of firmware core dump. "
 		"Default is OFF - Do not allow.");
 
-static DEFINE_PCI_DEVICE_TABLE(qlge_pci_tbl) = {
+static const struct pci_device_id qlge_pci_tbl[] = {
 	{PCI_DEVICE(PCI_VENDOR_ID_QLOGIC, QLGE_DEVICE_ID_8012)},
 	{PCI_DEVICE(PCI_VENDOR_ID_QLOGIC, QLGE_DEVICE_ID_8000)},
 	/* required last entry */
@@ -460,7 +460,7 @@ static int ql_set_mac_addr(struct ql_adapter *qdev, int set)
 		netif_printk(qdev, ifup, KERN_DEBUG, qdev->ndev,
 			     "Set Mac addr %pM\n", addr);
 	} else {
-		memset(zero_mac_addr, 0, ETH_ALEN);
+		eth_zero_addr(zero_mac_addr);
 		addr = &zero_mac_addr[0];
 		netif_printk(qdev, ifup, KERN_DEBUG, qdev->ndev,
 			     "Clearing MAC address\n");
@@ -1648,7 +1648,18 @@ static void ql_process_mac_rx_skb(struct ql_adapter *qdev,
 		return;
 	}
 	skb_reserve(new_skb, NET_IP_ALIGN);
+
+	pci_dma_sync_single_for_cpu(qdev->pdev,
+				    dma_unmap_addr(sbq_desc, mapaddr),
+				    dma_unmap_len(sbq_desc, maplen),
+				    PCI_DMA_FROMDEVICE);
+
 	memcpy(skb_put(new_skb, length), skb->data, length);
+
+	pci_dma_sync_single_for_device(qdev->pdev,
+				       dma_unmap_addr(sbq_desc, mapaddr),
+				       dma_unmap_len(sbq_desc, maplen),
+				       PCI_DMA_FROMDEVICE);
 	skb = new_skb;
 
 	/* Frame error, so drop the packet. */
@@ -1881,7 +1892,6 @@ static struct sk_buff *ql_build_rx_skb(struct ql_adapter *qdev,
 			skb->len += length;
 			skb->data_len += length;
 			skb->truesize += length;
-			length -= length;
 			ql_update_mac_hdr_len(qdev, ib_mac_rsp,
 					      lbq_desc->p.pg_chunk.va,
 					      &hlen);
@@ -1922,7 +1932,7 @@ static struct sk_buff *ql_build_rx_skb(struct ql_adapter *qdev,
 			sbq_desc->p.skb = NULL;
 			skb_reserve(skb, NET_IP_ALIGN);
 		}
-		while (length > 0) {
+		do {
 			lbq_desc = ql_get_curr_lchunk(qdev, rx_ring);
 			size = (length < rx_ring->lbq_buf_size) ? length :
 				rx_ring->lbq_buf_size;
@@ -1939,7 +1949,7 @@ static struct sk_buff *ql_build_rx_skb(struct ql_adapter *qdev,
 			skb->truesize += size;
 			length -= size;
 			i++;
-		}
+		} while (length > 0);
 		ql_update_mac_hdr_len(qdev, ib_mac_rsp, lbq_desc->p.pg_chunk.va,
 				      &hlen);
 		__pskb_pull_tail(skb, hlen);
@@ -2351,23 +2361,29 @@ static int qlge_update_hw_vlan_features(struct net_device *ndev,
 {
 	struct ql_adapter *qdev = netdev_priv(ndev);
 	int status = 0;
+	bool need_restart = netif_running(ndev);
 
-	status = ql_adapter_down(qdev);
-	if (status) {
-		netif_err(qdev, link, qdev->ndev,
-			  "Failed to bring down the adapter\n");
-		return status;
+	if (need_restart) {
+		status = ql_adapter_down(qdev);
+		if (status) {
+			netif_err(qdev, link, qdev->ndev,
+				  "Failed to bring down the adapter\n");
+			return status;
+		}
 	}
 
 	/* update the features with resent change */
 	ndev->features = features;
 
-	status = ql_adapter_up(qdev);
-	if (status) {
-		netif_err(qdev, link, qdev->ndev,
-			  "Failed to bring up the adapter\n");
-		return status;
+	if (need_restart) {
+		status = ql_adapter_up(qdev);
+		if (status) {
+			netif_err(qdev, link, qdev->ndev,
+				  "Failed to bring up the adapter\n");
+			return status;
+		}
 	}
+
 	return status;
 }
 
@@ -2556,11 +2572,11 @@ static int ql_tso(struct sk_buff *skb, struct ob_mac_tso_iocb_req *mac_iocb_ptr)
 
 	if (skb_is_gso(skb)) {
 		int err;
-		if (skb_header_cloned(skb)) {
-			err = pskb_expand_head(skb, 0, 0, GFP_ATOMIC);
-			if (err)
-				return err;
-		}
+		__be16 l3_proto = vlan_get_protocol(skb);
+
+		err = skb_cow_head(skb, 0);
+		if (err < 0)
+			return err;
 
 		mac_iocb_ptr->opcode = OPCODE_OB_MAC_TSO_IOCB;
 		mac_iocb_ptr->flags3 |= OB_MAC_TSO_IOCB_IC;
@@ -2573,7 +2589,7 @@ static int ql_tso(struct sk_buff *skb, struct ob_mac_tso_iocb_req *mac_iocb_ptr)
 				<< OB_MAC_TRANSPORT_HDR_SHIFT);
 		mac_iocb_ptr->mss = cpu_to_le16(skb_shinfo(skb)->gso_size);
 		mac_iocb_ptr->flags2 |= OB_MAC_TSO_IOCB_LSO;
-		if (likely(skb->protocol == htons(ETH_P_IP))) {
+		if (likely(l3_proto == htons(ETH_P_IP))) {
 			struct iphdr *iph = ip_hdr(skb);
 			iph->check = 0;
 			mac_iocb_ptr->flags1 |= OB_MAC_TSO_IOCB_IP4;
@@ -2581,7 +2597,7 @@ static int ql_tso(struct sk_buff *skb, struct ob_mac_tso_iocb_req *mac_iocb_ptr)
 								 iph->daddr, 0,
 								 IPPROTO_TCP,
 								 0);
-		} else if (skb->protocol == htons(ETH_P_IPV6)) {
+		} else if (l3_proto == htons(ETH_P_IPV6)) {
 			mac_iocb_ptr->flags1 |= OB_MAC_TSO_IOCB_IP6;
 			tcp_hdr(skb)->check =
 			    ~csum_ipv6_magic(&ipv6_hdr(skb)->saddr,
@@ -2660,11 +2676,11 @@ static netdev_tx_t qlge_send(struct sk_buff *skb, struct net_device *ndev)
 
 	mac_iocb_ptr->frame_len = cpu_to_le16((u16) skb->len);
 
-	if (vlan_tx_tag_present(skb)) {
+	if (skb_vlan_tag_present(skb)) {
 		netif_printk(qdev, tx_queued, KERN_DEBUG, qdev->ndev,
-			     "Adding a vlan tag %d.\n", vlan_tx_tag_get(skb));
+			     "Adding a vlan tag %d.\n", skb_vlan_tag_get(skb));
 		mac_iocb_ptr->flags3 |= OB_MAC_IOCB_V;
-		mac_iocb_ptr->vlan_tci = cpu_to_le16(vlan_tx_tag_get(skb));
+		mac_iocb_ptr->vlan_tci = cpu_to_le16(skb_vlan_tag_get(skb));
 	}
 	tso = ql_tso(skb, (struct ob_mac_tso_iocb_req *)mac_iocb_ptr);
 	if (tso < 0) {
@@ -2728,23 +2744,22 @@ static void ql_free_shadow_space(struct ql_adapter *qdev)
 static int ql_alloc_shadow_space(struct ql_adapter *qdev)
 {
 	qdev->rx_ring_shadow_reg_area =
-	    pci_alloc_consistent(qdev->pdev,
-				 PAGE_SIZE, &qdev->rx_ring_shadow_reg_dma);
+		pci_zalloc_consistent(qdev->pdev, PAGE_SIZE,
+				      &qdev->rx_ring_shadow_reg_dma);
 	if (qdev->rx_ring_shadow_reg_area == NULL) {
 		netif_err(qdev, ifup, qdev->ndev,
 			  "Allocation of RX shadow space failed.\n");
 		return -ENOMEM;
 	}
-	memset(qdev->rx_ring_shadow_reg_area, 0, PAGE_SIZE);
+
 	qdev->tx_ring_shadow_reg_area =
-	    pci_alloc_consistent(qdev->pdev, PAGE_SIZE,
-				 &qdev->tx_ring_shadow_reg_dma);
+		pci_zalloc_consistent(qdev->pdev, PAGE_SIZE,
+				      &qdev->tx_ring_shadow_reg_dma);
 	if (qdev->tx_ring_shadow_reg_area == NULL) {
 		netif_err(qdev, ifup, qdev->ndev,
 			  "Allocation of TX shadow space failed.\n");
 		goto err_wqp_sh_area;
 	}
-	memset(qdev->tx_ring_shadow_reg_area, 0, PAGE_SIZE);
 	return 0;
 
 err_wqp_sh_area:
@@ -3331,24 +3346,16 @@ static void ql_enable_msix(struct ql_adapter *qdev)
 		for (i = 0; i < qdev->intr_count; i++)
 			qdev->msi_x_entry[i].entry = i;
 
-		/* Loop to get our vectors.  We start with
-		 * what we want and settle for what we get.
-		 */
-		do {
-			err = pci_enable_msix(qdev->pdev,
-				qdev->msi_x_entry, qdev->intr_count);
-			if (err > 0)
-				qdev->intr_count = err;
-		} while (err > 0);
-
+		err = pci_enable_msix_range(qdev->pdev, qdev->msi_x_entry,
+					    1, qdev->intr_count);
 		if (err < 0) {
 			kfree(qdev->msi_x_entry);
 			qdev->msi_x_entry = NULL;
 			netif_warn(qdev, ifup, qdev->ndev,
 				   "MSI-X Enable failed, trying MSI.\n");
-			qdev->intr_count = 1;
 			qlge_irq_type = MSI_IRQ;
-		} else if (err == 0) {
+		} else {
+			qdev->intr_count = err;
 			set_bit(QL_MSIX_ENABLED, &qdev->flags);
 			netif_info(qdev, ifup, qdev->ndev,
 				   "MSI-X Enabled, got %d vectors.\n",
@@ -3604,7 +3611,7 @@ static int ql_request_irq(struct ql_adapter *qdev)
 	}
 	return status;
 err_irq:
-	netif_err(qdev, ifup, qdev->ndev, "Failed to get the interrupts!!!/n");
+	netif_err(qdev, ifup, qdev->ndev, "Failed to get the interrupts!!!\n");
 	ql_free_irq(qdev);
 	return status;
 }
@@ -3874,9 +3881,6 @@ static int ql_adapter_reset(struct ql_adapter *qdev)
 		return status;
 	}
 
-	end_jiffies = jiffies +
-		max((unsigned long)1, usecs_to_jiffies(30));
-
 	/* Check if bit is set then skip the mailbox command and
 	 * clear the bit, else we are in normal reset process.
 	 */
@@ -3891,6 +3895,7 @@ static int ql_adapter_reset(struct ql_adapter *qdev)
 
 	ql_write32(qdev, RST_FO, (RST_FO_FR << 16) | RST_FO_FR);
 
+	end_jiffies = jiffies + usecs_to_jiffies(30);
 	do {
 		value = ql_read32(qdev, RST_FO);
 		if ((value & RST_FO_FR) == 0)
@@ -4216,8 +4221,9 @@ static int ql_change_rx_buffers(struct ql_adapter *qdev)
 
 	/* Wait for an outstanding reset to complete. */
 	if (!test_bit(QL_ADAPTER_UP, &qdev->flags)) {
-		int i = 3;
-		while (i-- && !test_bit(QL_ADAPTER_UP, &qdev->flags)) {
+		int i = 4;
+
+		while (--i && !test_bit(QL_ADAPTER_UP, &qdev->flags)) {
 			netif_err(qdev, ifup, qdev->ndev,
 				  "Waiting for adapter UP...\n");
 			ssleep(1);
@@ -4680,7 +4686,7 @@ static int ql_init_device(struct pci_dev *pdev, struct net_device *ndev,
 	/*
 	 * Set up the operating parameters.
 	 */
-	qdev->workqueue = create_singlethread_workqueue(ndev->name);
+	qdev->workqueue = alloc_ordered_workqueue(ndev->name, WQ_MEM_RECLAIM);
 	INIT_DELAYED_WORK(&qdev->asic_reset_work, ql_asic_reset_work);
 	INIT_DELAYED_WORK(&qdev->mpi_reset_work, ql_mpi_reset_work);
 	INIT_DELAYED_WORK(&qdev->mpi_work, ql_mpi_work);
@@ -4779,7 +4785,7 @@ static int qlge_probe(struct pci_dev *pdev,
 	ndev->irq = pdev->irq;
 
 	ndev->netdev_ops = &qlge_netdev_ops;
-	SET_ETHTOOL_OPS(ndev, &qlge_ethtool_ops);
+	ndev->ethtool_ops = &qlge_ethtool_ops;
 	ndev->watchdog_timeo = 10 * HZ;
 
 	err = register_netdev(ndev);
@@ -4839,7 +4845,6 @@ static void ql_eeh_close(struct net_device *ndev)
 	}
 
 	/* Disabling the timer */
-	del_timer_sync(&qdev->timer);
 	ql_cancel_all_work_sync(qdev);
 
 	for (i = 0; i < qdev->rss_ring_count; i++)
@@ -4866,6 +4871,7 @@ static pci_ers_result_t qlge_io_error_detected(struct pci_dev *pdev,
 		return PCI_ERS_RESULT_CAN_RECOVER;
 	case pci_channel_io_frozen:
 		netif_device_detach(ndev);
+		del_timer_sync(&qdev->timer);
 		if (netif_running(ndev))
 			ql_eeh_close(ndev);
 		pci_disable_device(pdev);
@@ -4873,6 +4879,7 @@ static pci_ers_result_t qlge_io_error_detected(struct pci_dev *pdev,
 	case pci_channel_io_perm_failure:
 		dev_err(&pdev->dev,
 			"%s: pci_channel_io_perm_failure.\n", __func__);
+		del_timer_sync(&qdev->timer);
 		ql_eeh_close(ndev);
 		set_bit(QL_EEH_FATAL, &qdev->flags);
 		return PCI_ERS_RESULT_DISCONNECT;

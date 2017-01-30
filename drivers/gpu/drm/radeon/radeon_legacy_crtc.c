@@ -25,6 +25,7 @@
  */
 #include <drm/drmP.h>
 #include <drm/drm_crtc_helper.h>
+#include <drm/drm_fb_helper.h>
 #include <drm/radeon_drm.h>
 #include <drm/drm_fixed.h>
 #include "radeon.h"
@@ -330,13 +331,15 @@ static void radeon_crtc_dpms(struct drm_crtc *crtc, int mode)
 									 RADEON_CRTC_DISP_REQ_EN_B));
 			WREG32_P(RADEON_CRTC_EXT_CNTL, crtc_ext_cntl, ~(mask | crtc_ext_cntl));
 		}
-		drm_vblank_post_modeset(dev, radeon_crtc->crtc_id);
+		if (dev->num_crtcs > radeon_crtc->crtc_id)
+			drm_crtc_vblank_on(crtc);
 		radeon_crtc_load_lut(crtc);
 		break;
 	case DRM_MODE_DPMS_STANDBY:
 	case DRM_MODE_DPMS_SUSPEND:
 	case DRM_MODE_DPMS_OFF:
-		drm_vblank_pre_modeset(dev, radeon_crtc->crtc_id);
+		if (dev->num_crtcs > radeon_crtc->crtc_id)
+			drm_crtc_vblank_off(crtc);
 		if (radeon_crtc->crtc_id)
 			WREG32_P(RADEON_CRTC2_GEN_CNTL, mask, ~(RADEON_CRTC2_EN | mask));
 		else {
@@ -385,7 +388,7 @@ int radeon_crtc_do_set_base(struct drm_crtc *crtc,
 
 	DRM_DEBUG_KMS("\n");
 	/* no fb bound */
-	if (!atomic && !crtc->fb) {
+	if (!atomic && !crtc->primary->fb) {
 		DRM_DEBUG_KMS("No FB bound\n");
 		return 0;
 	}
@@ -395,8 +398,8 @@ int radeon_crtc_do_set_base(struct drm_crtc *crtc,
 		target_fb = fb;
 	}
 	else {
-		radeon_fb = to_radeon_framebuffer(crtc->fb);
-		target_fb = crtc->fb;
+		radeon_fb = to_radeon_framebuffer(crtc->primary->fb);
+		target_fb = crtc->primary->fb;
 	}
 
 	switch (target_fb->bits_per_pixel) {
@@ -444,7 +447,7 @@ retry:
 		 * We don't shutdown the display controller because new buffer
 		 * will end up in same spot.
 		 */
-		if (!atomic && fb && fb != crtc->fb) {
+		if (!atomic && fb && fb != crtc->primary->fb) {
 			struct radeon_bo *old_rbo;
 			unsigned long nsize, osize;
 
@@ -555,7 +558,7 @@ retry:
 	WREG32(RADEON_CRTC_OFFSET + radeon_crtc->crtc_offset, crtc_offset);
 	WREG32(RADEON_CRTC_PITCH + radeon_crtc->crtc_offset, crtc_pitch);
 
-	if (!atomic && fb && fb != crtc->fb) {
+	if (!atomic && fb && fb != crtc->primary->fb) {
 		radeon_fb = to_radeon_framebuffer(fb);
 		rbo = gem_to_radeon_bo(radeon_fb->obj);
 		r = radeon_bo_reserve(rbo, false);
@@ -599,7 +602,7 @@ static bool radeon_set_crtc_timing(struct drm_crtc *crtc, struct drm_display_mod
 		}
 	}
 
-	switch (crtc->fb->bits_per_pixel) {
+	switch (crtc->primary->fb->bits_per_pixel) {
 	case 8:
 		format = 2;
 		break;
@@ -1054,6 +1057,7 @@ static int radeon_crtc_mode_set(struct drm_crtc *crtc,
 			DRM_ERROR("Mode need scaling but only first crtc can do that.\n");
 		}
 	}
+	radeon_cursor_reset(crtc);
 	return 0;
 }
 
@@ -1087,12 +1091,12 @@ static void radeon_crtc_commit(struct drm_crtc *crtc)
 static void radeon_crtc_disable(struct drm_crtc *crtc)
 {
 	radeon_crtc_dpms(crtc, DRM_MODE_DPMS_OFF);
-	if (crtc->fb) {
+	if (crtc->primary->fb) {
 		int r;
 		struct radeon_framebuffer *radeon_fb;
 		struct radeon_bo *rbo;
 
-		radeon_fb = to_radeon_framebuffer(crtc->fb);
+		radeon_fb = to_radeon_framebuffer(crtc->primary->fb);
 		rbo = gem_to_radeon_bo(radeon_fb->obj);
 		r = radeon_bo_reserve(rbo, false);
 		if (unlikely(r))

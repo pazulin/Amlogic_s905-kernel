@@ -29,22 +29,15 @@
 #define BEQUIET
 
 static int isofs_hashi(const struct dentry *parent, struct qstr *qstr);
-static int isofs_hash(const struct dentry *parent, struct qstr *qstr);
-static int isofs_dentry_cmpi(const struct dentry *parent,
-		const struct dentry *dentry,
-		unsigned int len, const char *str, const struct qstr *name);
-static int isofs_dentry_cmp(const struct dentry *parent,
-		const struct dentry *dentry,
+static int isofs_dentry_cmpi(const struct dentry *dentry,
 		unsigned int len, const char *str, const struct qstr *name);
 
 #ifdef CONFIG_JOLIET
 static int isofs_hashi_ms(const struct dentry *parent, struct qstr *qstr);
 static int isofs_hash_ms(const struct dentry *parent, struct qstr *qstr);
-static int isofs_dentry_cmpi_ms(const struct dentry *parent,
-		const struct dentry *dentry,
+static int isofs_dentry_cmpi_ms(const struct dentry *dentry,
 		unsigned int len, const char *str, const struct qstr *name);
-static int isofs_dentry_cmp_ms(const struct dentry *parent,
-		const struct dentry *dentry,
+static int isofs_dentry_cmp_ms(const struct dentry *dentry,
 		unsigned int len, const char *str, const struct qstr *name);
 #endif
 
@@ -93,12 +86,12 @@ static void init_once(void *foo)
 	inode_init_once(&ei->vfs_inode);
 }
 
-static int init_inodecache(void)
+static int __init init_inodecache(void)
 {
 	isofs_inode_cachep = kmem_cache_create("isofs_inode_cache",
 					sizeof(struct iso_inode_info),
 					0, (SLAB_RECLAIM_ACCOUNT|
-					SLAB_MEM_SPREAD),
+					SLAB_MEM_SPREAD|SLAB_ACCOUNT),
 					init_once);
 	if (isofs_inode_cachep == NULL)
 		return -ENOMEM;
@@ -117,6 +110,7 @@ static void destroy_inodecache(void)
 
 static int isofs_remount(struct super_block *sb, int *flags, char *data)
 {
+	sync_filesystem(sb);
 	if (!(*flags & MS_RDONLY))
 		return -EROFS;
 	return 0;
@@ -133,10 +127,6 @@ static const struct super_operations isofs_sops = {
 
 
 static const struct dentry_operations isofs_dentry_ops[] = {
-	{
-		.d_hash		= isofs_hash,
-		.d_compare	= isofs_dentry_cmp,
-	},
 	{
 		.d_hash		= isofs_hashi,
 		.d_compare	= isofs_dentry_cmpi,
@@ -181,28 +171,7 @@ struct iso9660_options{
  * Compute the hash for the isofs name corresponding to the dentry.
  */
 static int
-isofs_hash_common(struct qstr *qstr, int ms)
-{
-	const char *name;
-	int len;
-
-	len = qstr->len;
-	name = qstr->name;
-	if (ms) {
-		while (len && name[len-1] == '.')
-			len--;
-	}
-
-	qstr->hash = full_name_hash(name, len);
-
-	return 0;
-}
-
-/*
- * Compute the hash for the isofs name corresponding to the dentry.
- */
-static int
-isofs_hashi_common(struct qstr *qstr, int ms)
+isofs_hashi_common(const struct dentry *dentry, struct qstr *qstr, int ms)
 {
 	const char *name;
 	int len;
@@ -216,7 +185,7 @@ isofs_hashi_common(struct qstr *qstr, int ms)
 			len--;
 	}
 
-	hash = init_name_hash();
+	hash = init_name_hash(dentry);
 	while (len--) {
 		c = tolower(*name++);
 		hash = partial_name_hash(c, hash);
@@ -246,7 +215,7 @@ static int isofs_dentry_cmp_common(
 	}
 	if (alen == blen) {
 		if (ci) {
-			if (strnicmp(name->name, str, alen) == 0)
+			if (strncasecmp(name->name, str, alen) == 0)
 				return 0;
 		} else {
 			if (strncmp(name->name, str, alen) == 0)
@@ -257,53 +226,61 @@ static int isofs_dentry_cmp_common(
 }
 
 static int
-isofs_hash(const struct dentry *dentry, struct qstr *qstr)
-{
-	return isofs_hash_common(qstr, 0);
-}
-
-static int
 isofs_hashi(const struct dentry *dentry, struct qstr *qstr)
 {
-	return isofs_hashi_common(qstr, 0);
+	return isofs_hashi_common(dentry, qstr, 0);
 }
 
 static int
-isofs_dentry_cmp(const struct dentry *parent, const struct dentry *dentry,
-		unsigned int len, const char *str, const struct qstr *name)
-{
-	return isofs_dentry_cmp_common(len, str, name, 0, 0);
-}
-
-static int
-isofs_dentry_cmpi(const struct dentry *parent, const struct dentry *dentry,
+isofs_dentry_cmpi(const struct dentry *dentry,
 		unsigned int len, const char *str, const struct qstr *name)
 {
 	return isofs_dentry_cmp_common(len, str, name, 0, 1);
 }
 
 #ifdef CONFIG_JOLIET
+/*
+ * Compute the hash for the isofs name corresponding to the dentry.
+ */
+static int
+isofs_hash_common(const struct dentry *dentry, struct qstr *qstr, int ms)
+{
+	const char *name;
+	int len;
+
+	len = qstr->len;
+	name = qstr->name;
+	if (ms) {
+		while (len && name[len-1] == '.')
+			len--;
+	}
+
+	qstr->hash = full_name_hash(dentry, name, len);
+
+	return 0;
+}
+
 static int
 isofs_hash_ms(const struct dentry *dentry, struct qstr *qstr)
 {
-	return isofs_hash_common(qstr, 1);
+	return isofs_hash_common(dentry, qstr, 1);
 }
 
 static int
 isofs_hashi_ms(const struct dentry *dentry, struct qstr *qstr)
 {
-	return isofs_hashi_common(qstr, 1);
+	return isofs_hashi_common(dentry, qstr, 1);
 }
 
 static int
-isofs_dentry_cmp_ms(const struct dentry *parent, const struct dentry *dentry,
+isofs_dentry_cmp_ms(const struct dentry *dentry,
 		unsigned int len, const char *str, const struct qstr *name)
 {
 	return isofs_dentry_cmp_common(len, str, name, 1, 0);
 }
 
 static int
-isofs_dentry_cmpi_ms(const struct dentry *parent, const struct dentry *dentry,
+isofs_dentry_cmpi_ms(const struct dentry *dentry,
 		unsigned int len, const char *str, const struct qstr *name)
 {
 	return isofs_dentry_cmp_common(len, str, name, 1, 1);
@@ -710,6 +687,11 @@ static int isofs_fill_super(struct super_block *s, void *data, int silent)
 	pri_bh = NULL;
 
 root_found:
+	/* We don't support read-write mounts */
+	if (!(s->s_flags & MS_RDONLY)) {
+		error = -EACCES;
+		goto out_freebh;
+	}
 
 	if (joliet_level && (pri == NULL || !opt.rock)) {
 		/* This is the case of Joliet with the norock mount flag.
@@ -929,7 +911,8 @@ root_found:
 	if (opt.check == 'r')
 		table++;
 
-	s->s_d_op = &isofs_dentry_ops[table];
+	if (table)
+		s->s_d_op = &isofs_dentry_ops[table - 1];
 
 	/* get the root dentry */
 	s->s_root = d_make_root(inode);
@@ -1040,7 +1023,7 @@ int isofs_get_blocks(struct inode *inode, sector_t iblock,
 		 * the page with useless information without generating any
 		 * I/O errors.
 		 */
-		if (b_off > ((inode->i_size + PAGE_CACHE_SIZE - 1) >> ISOFS_BUFFER_BITS(inode))) {
+		if (b_off > ((inode->i_size + PAGE_SIZE - 1) >> ISOFS_BUFFER_BITS(inode))) {
 			printk(KERN_DEBUG "%s: block >= EOF (%lu, %llu)\n",
 				__func__, b_off,
 				(unsigned long long)inode->i_size);
@@ -1436,6 +1419,7 @@ static int isofs_read_inode(struct inode *inode, int relocated)
 		inode->i_fop = &isofs_dir_operations;
 	} else if (S_ISLNK(inode->i_mode)) {
 		inode->i_op = &page_symlink_inode_operations;
+		inode_nohighmem(inode);
 		inode->i_data.a_ops = &isofs_symlink_aops;
 	} else
 		/* XXX - parse_rock_ridge_inode() had already set i_rdev. */
@@ -1522,9 +1506,6 @@ struct inode *__isofs_iget(struct super_block *sb,
 static struct dentry *isofs_mount(struct file_system_type *fs_type,
 	int flags, const char *dev_name, void *data)
 {
-	/* We don't support read-write mounts */
-	if (!(flags & MS_RDONLY))
-		return ERR_PTR(-EACCES);
 	return mount_bdev(fs_type, flags, dev_name, data, isofs_fill_super);
 }
 

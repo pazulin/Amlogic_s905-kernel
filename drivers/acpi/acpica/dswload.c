@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2013, Intel Corp.
+ * Copyright (C) 2000 - 2016, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -73,7 +73,19 @@ acpi_ds_init_callbacks(struct acpi_walk_state *walk_state, u32 pass_number)
 {
 
 	switch (pass_number) {
+	case 0:
+
+		/* Parse only - caller will setup callbacks */
+
+		walk_state->parse_flags = ACPI_PARSE_LOAD_PASS1 |
+		    ACPI_PARSE_DELETE_TREE | ACPI_PARSE_DISASSEMBLE;
+		walk_state->descending_callback = NULL;
+		walk_state->ascending_callback = NULL;
+		break;
+
 	case 1:
+
+		/* Load pass 1 */
 
 		walk_state->parse_flags = ACPI_PARSE_LOAD_PASS1 |
 		    ACPI_PARSE_DELETE_TREE;
@@ -83,6 +95,8 @@ acpi_ds_init_callbacks(struct acpi_walk_state *walk_state, u32 pass_number)
 
 	case 2:
 
+		/* Load pass 2 */
+
 		walk_state->parse_flags = ACPI_PARSE_LOAD_PASS1 |
 		    ACPI_PARSE_DELETE_TREE;
 		walk_state->descending_callback = acpi_ds_load2_begin_op;
@@ -90,6 +104,8 @@ acpi_ds_init_callbacks(struct acpi_walk_state *walk_state, u32 pass_number)
 		break;
 
 	case 3:
+
+		/* Execution pass */
 
 #ifndef ACPI_NO_METHOD_EXECUTION
 		walk_state->parse_flags |= ACPI_PARSE_EXECUTE |
@@ -121,8 +137,8 @@ acpi_ds_init_callbacks(struct acpi_walk_state *walk_state, u32 pass_number)
  ******************************************************************************/
 
 acpi_status
-acpi_ds_load1_begin_op(struct acpi_walk_state * walk_state,
-		       union acpi_parse_object ** out_op)
+acpi_ds_load1_begin_op(struct acpi_walk_state *walk_state,
+		       union acpi_parse_object **out_op)
 {
 	union acpi_parse_object *op;
 	struct acpi_namespace_node *node;
@@ -299,10 +315,19 @@ acpi_ds_load1_begin_op(struct acpi_walk_state * walk_state,
 		flags = ACPI_NS_NO_UPSEARCH;
 		if ((walk_state->opcode != AML_SCOPE_OP) &&
 		    (!(walk_state->parse_flags & ACPI_PARSE_DEFERRED_OP))) {
-			flags |= ACPI_NS_ERROR_IF_FOUND;
-			ACPI_DEBUG_PRINT((ACPI_DB_DISPATCH,
-					  "[%s] Cannot already exist\n",
-					  acpi_ut_get_type_name(object_type)));
+			if (walk_state->namespace_override) {
+				flags |= ACPI_NS_OVERRIDE_IF_FOUND;
+				ACPI_DEBUG_PRINT((ACPI_DB_DISPATCH,
+						  "[%s] Override allowed\n",
+						  acpi_ut_get_type_name
+						  (object_type)));
+			} else {
+				flags |= ACPI_NS_ERROR_IF_FOUND;
+				ACPI_DEBUG_PRINT((ACPI_DB_DISPATCH,
+						  "[%s] Cannot already exist\n",
+						  acpi_ut_get_type_name
+						  (object_type)));
+			}
 		} else {
 			ACPI_DEBUG_PRINT((ACPI_DB_DISPATCH,
 					  "[%s] Both Find or Create allowed\n",
@@ -363,7 +388,7 @@ acpi_ds_load1_begin_op(struct acpi_walk_state * walk_state,
 
 		/* Create a new op */
 
-		op = acpi_ps_alloc_op(walk_state->opcode);
+		op = acpi_ps_alloc_op(walk_state->opcode, walk_state->aml);
 		if (!op) {
 			return_ACPI_STATUS(AE_NO_MEMORY);
 		}
@@ -451,13 +476,9 @@ acpi_status acpi_ds_load1_end_op(struct acpi_walk_state *walk_state)
 			status =
 			    acpi_ex_create_region(op->named.data,
 						  op->named.length,
-						  (acpi_adr_space_type) ((op->
-									  common.
-									  value.
-									  arg)->
-									 common.
-									 value.
-									 integer),
+						  (acpi_adr_space_type)
+						  ((op->common.value.arg)->
+						   common.value.integer),
 						  walk_state);
 			if (ACPI_FAILURE(status)) {
 				return_ACPI_STATUS(status);

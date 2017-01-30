@@ -41,7 +41,6 @@ struct caam_drv_private_jr {
 	struct device		*dev;
 	int ridx;
 	struct caam_job_ring __iomem *rregs;	/* JobR's register space */
-	struct tasklet_struct irqtask;
 	int irq;			/* One per queue */
 
 	/* Number of scatterlist crypt transforms active on the JobR */
@@ -70,10 +69,11 @@ struct caam_drv_private {
 	struct platform_device *pdev;
 
 	/* Physical-presence section */
-	struct caam_ctrl *ctrl; /* controller region */
-	struct caam_deco **deco; /* DECO/CCB views */
-	struct caam_assurance *ac;
-	struct caam_queue_if *qi; /* QI control region */
+	struct caam_ctrl __iomem *ctrl; /* controller region */
+	struct caam_deco __iomem *deco; /* DECO/CCB views */
+	struct caam_assurance __iomem *assure;
+	struct caam_queue_if __iomem *qi; /* QI control region */
+	struct caam_job_ring __iomem *jr[4];	/* JobR's register space */
 
 	/*
 	 * Detected geometry block. Filled in from device tree if powerpc,
@@ -82,12 +82,18 @@ struct caam_drv_private {
 	u8 total_jobrs;		/* Total Job Rings in device */
 	u8 qi_present;		/* Nonzero if QI present in device */
 	int secvio_irq;		/* Security violation interrupt number */
+	int virt_en;		/* Virtualization enabled in CAAM */
 
 #define	RNG4_MAX_HANDLES 2
 	/* RNG4 block */
 	u32 rng4_sh_init;	/* This bitmap shows which of the State
 				   Handles of the RNG4 block are initialized
 				   by this driver */
+
+	struct clk *caam_ipg;
+	struct clk *caam_mem;
+	struct clk *caam_aclk;
+	struct clk *caam_emi_slow;
 
 	/*
 	 * debugfs entries for developer view into driver/device

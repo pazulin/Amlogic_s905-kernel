@@ -71,7 +71,6 @@
 #include <linux/swap.h>
 #include <linux/mm.h>
 #include <linux/mman.h>
-#include <linux/module.h>
 #include <linux/workqueue.h>
 #include <linux/device.h>
 #include <xen/balloon.h>
@@ -170,6 +169,7 @@ static void frontswap_selfshrink(void)
 		tgt_frontswap_pages = cur_frontswap_pages -
 			(cur_frontswap_pages / frontswap_hysteresis);
 	frontswap_shrink(tgt_frontswap_pages);
+	frontswap_inertia_counter = frontswap_inertia;
 }
 
 #endif /* CONFIG_FRONTSWAP */
@@ -195,7 +195,7 @@ static void selfballoon_process(struct work_struct *work)
 				MB2PAGES(selfballoon_reserved_mb);
 #ifdef CONFIG_FRONTSWAP
 		/* allow space for frontswap pages to be repatriated */
-		if (frontswap_selfshrinking && frontswap_enabled)
+		if (frontswap_selfshrinking)
 			goal_pages += frontswap_curr_pages();
 #endif
 		if (cur_pages > goal_pages)
@@ -230,7 +230,7 @@ static void selfballoon_process(struct work_struct *work)
 		reset_timer = true;
 	}
 #ifdef CONFIG_FRONTSWAP
-	if (frontswap_selfshrinking && frontswap_enabled) {
+	if (frontswap_selfshrinking) {
 		frontswap_selfshrink();
 		reset_timer = true;
 	}

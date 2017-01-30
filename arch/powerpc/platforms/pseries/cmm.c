@@ -555,7 +555,6 @@ static int cmm_mem_going_offline(void *arg)
 				pa_last = pa_last->next;
 				free_page((unsigned long)cmm_page_list);
 				cmm_page_list = pa_last;
-				continue;
 			}
 		}
 		pa_curr = pa_curr->next;
@@ -575,7 +574,7 @@ static int cmm_mem_going_offline(void *arg)
 				cmm_dbg("Failed to allocate memory for list "
 						"management. Memory hotplug "
 						"failed.\n");
-				return ENOMEM;
+				return -ENOMEM;
 			}
 			memcpy(npa, pa_curr, PAGE_SIZE);
 			if (pa_curr == cmm_page_list)

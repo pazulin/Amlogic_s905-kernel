@@ -868,10 +868,8 @@ static int stu300_probe(struct platform_device *pdev)
 	int ret = 0;
 
 	dev = devm_kzalloc(&pdev->dev, sizeof(struct stu300_dev), GFP_KERNEL);
-	if (!dev) {
-		dev_err(&pdev->dev, "could not allocate device struct\n");
+	if (!dev)
 		return -ENOMEM;
-	}
 
 	bus_nr = pdev->id;
 	dev->clk = devm_clk_get(&pdev->dev, NULL);
@@ -911,7 +909,7 @@ static int stu300_probe(struct platform_device *pdev)
 	adap = &dev->adapter;
 	adap->owner = THIS_MODULE;
 	/* DDC class but actually often used for more generic I2C */
-	adap->class = I2C_CLASS_DDC;
+	adap->class = I2C_CLASS_DEPRECATED;
 	strlcpy(adap->name, "ST Microelectronics DDC I2C adapter",
 		sizeof(adap->name));
 	adap->nr = bus_nr;
@@ -922,11 +920,8 @@ static int stu300_probe(struct platform_device *pdev)
 
 	/* i2c device drivers may be active on return from add_adapter() */
 	ret = i2c_add_numbered_adapter(adap);
-	if (ret) {
-		dev_err(&pdev->dev, "failure adding ST Micro DDC "
-		       "I2C adapter\n");
+	if (ret)
 		return ret;
-	}
 
 	platform_set_drvdata(pdev, dev);
 	dev_info(&pdev->dev, "ST DDC I2C @ %p, irq %d\n",
@@ -979,11 +974,11 @@ static const struct of_device_id stu300_dt_match[] = {
 	{ .compatible = "st,ddci2c" },
 	{},
 };
+MODULE_DEVICE_TABLE(of, stu300_dt_match);
 
 static struct platform_driver stu300_i2c_driver = {
 	.driver = {
 		.name	= NAME,
-		.owner	= THIS_MODULE,
 		.pm	= STU300_I2C_PM,
 		.of_match_table = stu300_dt_match,
 	},

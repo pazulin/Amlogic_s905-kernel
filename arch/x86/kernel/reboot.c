@@ -1,6 +1,6 @@
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
-#include <linux/module.h>
+#include <linux/export.h>
 #include <linux/reboot.h>
 #include <linux/init.h>
 #include <linux/pm.h>
@@ -12,6 +12,7 @@
 #include <acpi/reboot.h>
 #include <asm/io.h>
 #include <asm/apic.h>
+#include <asm/io_apic.h>
 #include <asm/desc.h>
 #include <asm/hpet.h>
 #include <asm/pgtable.h>
@@ -28,6 +29,7 @@
 #include <linux/mc146818rtc.h>
 #include <asm/realmode.h>
 #include <asm/x86_init.h>
+#include <asm/efi.h>
 
 /*
  * Power off function, if any
@@ -51,6 +53,19 @@ bool port_cf9_safe = false;
  * Reboot options and system auto-detection code provided by
  * Dell Inc. so their systems "just work". :-)
  */
+
+/*
+ * Some machines require the "reboot=a" commandline options
+ */
+static int __init set_acpi_reboot(const struct dmi_system_id *d)
+{
+	if (reboot_type != BOOT_ACPI) {
+		reboot_type = BOOT_ACPI;
+		pr_info("%s series board detected. Selecting %s-method for reboots.\n",
+			d->ident, "ACPI");
+	}
+	return 0;
+}
 
 /*
  * Some machines require the "reboot=b" or "reboot=k"  commandline options,
@@ -114,8 +129,8 @@ EXPORT_SYMBOL(machine_real_restart);
  */
 static int __init set_pci_reboot(const struct dmi_system_id *d)
 {
-	if (reboot_type != BOOT_CF9) {
-		reboot_type = BOOT_CF9;
+	if (reboot_type != BOOT_CF9_FORCE) {
+		reboot_type = BOOT_CF9_FORCE;
 		pr_info("%s series board detected. Selecting %s-method for reboots.\n",
 			d->ident, "PCI");
 	}
@@ -180,6 +195,24 @@ static struct dmi_system_id __initdata reboot_dmi_table[] = {
 			DMI_MATCH(DMI_PRODUCT_NAME, "iMac9,1"),
 		},
 	},
+	{	/* Handle problems with rebooting on the iMac10,1. */
+		.callback = set_pci_reboot,
+		.ident = "Apple iMac10,1",
+		.matches = {
+		    DMI_MATCH(DMI_SYS_VENDOR, "Apple Inc."),
+		    DMI_MATCH(DMI_PRODUCT_NAME, "iMac10,1"),
+		},
+	},
+
+	/* ASRock */
+	{	/* Handle problems with rebooting on ASRock Q1900DC-ITX */
+		.callback = set_pci_reboot,
+		.ident = "ASRock Q1900DC-ITX",
+		.matches = {
+			DMI_MATCH(DMI_BOARD_VENDOR, "ASRock"),
+			DMI_MATCH(DMI_BOARD_NAME, "Q1900DC-ITX"),
+		},
+	},
 
 	/* ASUS */
 	{	/* Handle problems with rebooting on ASUS P4S800 */
@@ -188,6 +221,16 @@ static struct dmi_system_id __initdata reboot_dmi_table[] = {
 		.matches = {
 			DMI_MATCH(DMI_BOARD_VENDOR, "ASUSTeK Computer INC."),
 			DMI_MATCH(DMI_BOARD_NAME, "P4S800"),
+		},
+	},
+
+	/* Certec */
+	{       /* Handle problems with rebooting on Certec BPC600 */
+		.callback = set_pci_reboot,
+		.ident = "Certec BPC600",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Certec"),
+			DMI_MATCH(DMI_PRODUCT_NAME, "BPC600"),
 		},
 	},
 
@@ -365,6 +408,14 @@ static struct dmi_system_id __initdata reboot_dmi_table[] = {
 			DMI_MATCH(DMI_PRODUCT_NAME, "Dell XPS710"),
 		},
 	},
+	{	/* Handle problems with rebooting on Dell Optiplex 7450 AIO */
+		.callback = set_acpi_reboot,
+		.ident = "Dell OptiPlex 7450 AIO",
+		.matches = {
+			DMI_MATCH(DMI_SYS_VENDOR, "Dell Inc."),
+			DMI_MATCH(DMI_PRODUCT_NAME, "OptiPlex 7450 AIO"),
+		},
+	},
 
 	/* Hewlett-Packard */
 	{	/* Handle problems with rebooting on HP laptops */
@@ -391,12 +442,25 @@ static struct dmi_system_id __initdata reboot_dmi_table[] = {
 
 static int __init reboot_init(void)
 {
+	int rv;
+
 	/*
 	 * Only do the DMI check if reboot_type hasn't been overridden
 	 * on the command line
 	 */
-	if (reboot_default)
-		dmi_check_system(reboot_dmi_table);
+	if (!reboot_default)
+		return 0;
+
+	/*
+	 * The DMI quirks table takes precedence. If no quirks entry
+	 * matches and the ACPI Hardware Reduced bit is set, force EFI
+	 * reboot.
+	 */
+	rv = dmi_check_system(reboot_dmi_table);
+
+	if (!rv && efi_reboot_required())
+		reboot_type = BOOT_EFI;
+
 	return 0;
 }
 core_initcall(reboot_init);
@@ -458,17 +522,23 @@ void __attribute__((weak)) mach_reboot_fixups(void)
 }
 
 /*
- * Windows compatible x86 hardware expects the following on reboot:
+ * To the best of our knowledge Windows compatible x86 hardware expects
+ * the following on reboot:
  *
  * 1) If the FADT has the ACPI reboot register flag set, try it
  * 2) If still alive, write to the keyboard controller
  * 3) If still alive, write to the ACPI reboot register again
  * 4) If still alive, write to the keyboard controller again
+ * 5) If still alive, call the EFI runtime service to reboot
+ * 6) If no EFI runtime service, call the BIOS to do a reboot
  *
- * If the machine is still alive at this stage, it gives up. We default to
- * following the same pattern, except that if we're still alive after (4) we'll
- * try to force a triple fault and then cycle between hitting the keyboard
- * controller and doing that
+ * We default to following the same pattern. We also have
+ * two other reboot methods: 'triple fault' and 'PCI', which
+ * can be triggered via the reboot= kernel boot option or
+ * via quirks.
+ *
+ * This means that this function can never return, it can misbehave
+ * by not rebooting properly and hanging.
  */
 static void native_machine_emergency_restart(void)
 {
@@ -486,9 +556,23 @@ static void native_machine_emergency_restart(void)
 	mode = reboot_mode == REBOOT_WARM ? 0x1234 : 0;
 	*((unsigned short *)__va(0x472)) = mode;
 
+	/*
+	 * If an EFI capsule has been registered with the firmware then
+	 * override the reboot= parameter.
+	 */
+	if (efi_capsule_pending(NULL)) {
+		pr_info("EFI capsule is pending, forcing EFI reboot.\n");
+		reboot_type = BOOT_EFI;
+	}
+
 	for (;;) {
 		/* Could also try the reset bit in the Hammer NB */
 		switch (reboot_type) {
+		case BOOT_ACPI:
+			acpi_reboot();
+			reboot_type = BOOT_KBD;
+			break;
+
 		case BOOT_KBD:
 			mach_reboot_fixups(); /* For board specific fixups */
 
@@ -502,45 +586,29 @@ static void native_machine_emergency_restart(void)
 				attempt = 1;
 				reboot_type = BOOT_ACPI;
 			} else {
-				reboot_type = BOOT_TRIPLE;
+				reboot_type = BOOT_EFI;
 			}
 			break;
 
-		case BOOT_TRIPLE:
-			load_idt(&no_idt);
-			__asm__ __volatile__("int3");
-
-			reboot_type = BOOT_KBD;
+		case BOOT_EFI:
+			efi_reboot(reboot_mode, NULL);
+			reboot_type = BOOT_BIOS;
 			break;
 
 		case BOOT_BIOS:
 			machine_real_restart(MRR_BIOS);
 
-			reboot_type = BOOT_KBD;
+			/* We're probably dead after this, but... */
+			reboot_type = BOOT_CF9_SAFE;
 			break;
 
-		case BOOT_ACPI:
-			acpi_reboot();
-			reboot_type = BOOT_KBD;
-			break;
-
-		case BOOT_EFI:
-			if (efi_enabled(EFI_RUNTIME_SERVICES))
-				efi.reset_system(reboot_mode == REBOOT_WARM ?
-						 EFI_RESET_WARM :
-						 EFI_RESET_COLD,
-						 EFI_SUCCESS, 0, NULL);
-			reboot_type = BOOT_KBD;
-			break;
-
-		case BOOT_CF9:
+		case BOOT_CF9_FORCE:
 			port_cf9_safe = true;
 			/* Fall through */
 
-		case BOOT_CF9_COND:
+		case BOOT_CF9_SAFE:
 			if (port_cf9_safe) {
-				u8 reboot_code = reboot_mode == REBOOT_WARM ?
-					0x06 : 0x0E;
+				u8 reboot_code = reboot_mode == REBOOT_WARM ?  0x06 : 0x0E;
 				u8 cf9 = inb(0xcf9) & ~reboot_code;
 				outb(cf9|2, 0xcf9); /* Request hard reset */
 				udelay(50);
@@ -548,6 +616,14 @@ static void native_machine_emergency_restart(void)
 				outb(cf9|reboot_code, 0xcf9);
 				udelay(50);
 			}
+			reboot_type = BOOT_TRIPLE;
+			break;
+
+		case BOOT_TRIPLE:
+			load_idt(&no_idt);
+			__asm__ __volatile__("int3");
+
+			/* We're probably dead after this, but... */
 			reboot_type = BOOT_KBD;
 			break;
 		}
@@ -629,13 +705,13 @@ static void native_machine_power_off(void)
 	tboot_shutdown(TB_SHUTDOWN_HALT);
 }
 
-struct machine_ops machine_ops = {
+struct machine_ops machine_ops __ro_after_init = {
 	.power_off = native_machine_power_off,
 	.shutdown = native_machine_shutdown,
 	.emergency_restart = native_machine_emergency_restart,
 	.restart = native_machine_restart,
 	.halt = native_machine_halt,
-#ifdef CONFIG_KEXEC
+#ifdef CONFIG_KEXEC_CORE
 	.crash_shutdown = native_machine_crash_shutdown,
 #endif
 };
@@ -665,7 +741,7 @@ void machine_halt(void)
 	machine_ops.halt();
 }
 
-#ifdef CONFIG_KEXEC
+#ifdef CONFIG_KEXEC_CORE
 void machine_crash_shutdown(struct pt_regs *regs)
 {
 	machine_ops.crash_shutdown(regs);
@@ -680,6 +756,7 @@ static int crashing_cpu;
 static nmi_shootdown_cb shootdown_callback;
 
 static atomic_t waiting_for_crash_ipi;
+static int crash_ipi_issued;
 
 static int crash_nmi_callback(unsigned int val, struct pt_regs *regs)
 {
@@ -742,6 +819,9 @@ void nmi_shootdown_cpus(nmi_shootdown_cb callback)
 
 	smp_send_nmi_allbutself();
 
+	/* Kick CPUs looping in NMI context. */
+	WRITE_ONCE(crash_ipi_issued, 1);
+
 	msecs = 1000; /* Wait at most a second for the other cpus to stop */
 	while ((atomic_read(&waiting_for_crash_ipi) > 0) && msecs) {
 		mdelay(1);
@@ -750,9 +830,35 @@ void nmi_shootdown_cpus(nmi_shootdown_cb callback)
 
 	/* Leave the nmi callback set */
 }
+
+/*
+ * Check if the crash dumping IPI got issued and if so, call its callback
+ * directly. This function is used when we have already been in NMI handler.
+ * It doesn't return.
+ */
+void run_crash_ipi_callback(struct pt_regs *regs)
+{
+	if (crash_ipi_issued)
+		crash_nmi_callback(0, regs);
+}
+
+/* Override the weak function in kernel/panic.c */
+void nmi_panic_self_stop(struct pt_regs *regs)
+{
+	while (1) {
+		/* If no CPU is preparing crash dump, we simply loop here. */
+		run_crash_ipi_callback(regs);
+		cpu_relax();
+	}
+}
+
 #else /* !CONFIG_SMP */
 void nmi_shootdown_cpus(nmi_shootdown_cb callback)
 {
 	/* No other CPUs to shoot down */
+}
+
+void run_crash_ipi_callback(struct pt_regs *regs)
+{
 }
 #endif

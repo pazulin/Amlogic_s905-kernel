@@ -36,6 +36,7 @@
 #include <linux/mutex.h>
 #include <linux/workqueue.h>
 #include <linux/debugfs.h>
+#include <linux/usb/of.h>
 
 #include <asm/io.h>
 #include <linux/scatterlist.h>
@@ -49,7 +50,18 @@ const char *usbcore_name = "usbcore";
 
 static bool nousb;	/* Disable USB when built into kernel image */
 
-#ifdef	CONFIG_PM_RUNTIME
+module_param(nousb, bool, 0444);
+
+/*
+ * for external read access to <nousb>
+ */
+int usb_disabled(void)
+{
+	return nousb;
+}
+EXPORT_SYMBOL_GPL(usb_disabled);
+
+#ifdef	CONFIG_PM
 static int usb_autosuspend_delay = 2;		/* Default delay value,
 						 * in seconds */
 module_param_named(autosuspend, usb_autosuspend_delay, int, 0644);
@@ -230,7 +242,7 @@ static int __each_dev(struct device *dev, void *data)
 	if (!is_usb_device(dev))
 		return 0;
 
-	return arg->fn(container_of(dev, struct usb_device, dev), arg->data);
+	return arg->fn(to_usb_device(dev), arg->data);
 }
 
 /**
@@ -348,13 +360,9 @@ static const struct dev_pm_ops usb_device_pm_ops = {
 	.thaw =		usb_dev_thaw,
 	.poweroff =	usb_dev_poweroff,
 	.restore =	usb_dev_restore,
-#ifdef CONFIG_PM_RUNTIME
-#if 0
 	.runtime_suspend =	usb_runtime_suspend,
 	.runtime_resume =	usb_runtime_resume,
 	.runtime_idle =		usb_runtime_idle,
-#endif
-#endif
 };
 
 #endif	/* CONFIG_PM */
@@ -374,7 +382,7 @@ struct device_type usb_device_type = {
 	.name =		"usb_device",
 	.release =	usb_release_dev,
 	.uevent =	usb_dev_uevent,
-	.devnode =	usb_devnode,
+	.devnode = 	usb_devnode,
 #ifdef CONFIG_PM
 	.pm =		&usb_device_pm_ops,
 #endif
@@ -384,7 +392,7 @@ struct device_type usb_device_type = {
 /* Returns 1 if @usb_bus is WUSB, 0 otherwise */
 static unsigned usb_bus_is_wusb(struct usb_bus *bus)
 {
-	struct usb_hcd *hcd = container_of(bus, struct usb_hcd, self);
+	struct usb_hcd *hcd = bus_to_hcd(bus);
 	return hcd->wireless;
 }
 
@@ -410,6 +418,7 @@ struct usb_device *usb_alloc_dev(struct usb_device *parent,
 	struct usb_device *dev;
 	struct usb_hcd *usb_hcd = bus_to_hcd(bus);
 	unsigned root_hub = 0;
+	unsigned raw_port = port1;
 
 	dev = kzalloc(sizeof(*dev), GFP_KERNEL);
 	if (!dev)
@@ -431,7 +440,18 @@ struct usb_device *usb_alloc_dev(struct usb_device *parent,
 	dev->dev.bus = &usb_bus_type;
 	dev->dev.type = &usb_device_type;
 	dev->dev.groups = usb_device_groups;
+	/*
+	 * Fake a dma_mask/offset for the USB device:
+	 * We cannot really use the dma-mapping API (dma_alloc_* and
+	 * dma_map_*) for USB devices but instead need to use
+	 * usb_alloc_coherent and pass data in 'urb's, but some subsystems
+	 * manually look into the mask/offset pair to determine whether
+	 * they need bounce buffers.
+	 * Note: calling dma_set_mask() on a USB device would set the
+	 * mask for the entire HCD, so don't do that.
+	 */
 	dev->dev.dma_mask = bus->controller->dma_mask;
+	dev->dev.dma_pfn_offset = bus->controller->dma_pfn_offset;
 	set_dev_node(&dev->dev, dev_to_node(bus->controller));
 	dev->state = USB_STATE_ATTACHED;
 	dev->lpm_disable_count = 1;
@@ -462,12 +482,12 @@ struct usb_device *usb_alloc_dev(struct usb_device *parent,
 	} else {
 		/* match any labeling on the hubs; it's one-based */
 		if (parent->devpath[0] == '0') {
-			snprintf(dev->devpath, sizeof(dev->devpath),
+			snprintf(dev->devpath, sizeof dev->devpath,
 				"%d", port1);
 			/* Root ports are not counted in route string */
 			dev->route = 0;
 		} else {
-			snprintf(dev->devpath, sizeof(dev->devpath),
+			snprintf(dev->devpath, sizeof dev->devpath,
 				"%s.%d", parent->devpath, port1);
 			/* Route string assumes hubs have less than 16 ports */
 			if (port1 < 15)
@@ -480,6 +500,14 @@ struct usb_device *usb_alloc_dev(struct usb_device *parent,
 
 		dev->dev.parent = &parent->dev;
 		dev_set_name(&dev->dev, "%d-%s", bus->busnum, dev->devpath);
+
+		if (!parent->parent) {
+			/* device under root hub's port */
+			raw_port = usb_hcd_find_raw_port_number(usb_hcd,
+				port1);
+		}
+		dev->dev.of_node = usb_of_get_child_node(parent->dev.of_node,
+				raw_port);
 
 		/* hub driver sets up TT records */
 	}
@@ -498,11 +526,12 @@ struct usb_device *usb_alloc_dev(struct usb_device *parent,
 	if (root_hub)	/* Root hub always ok [and always wired] */
 		dev->authorized = 1;
 	else {
-		dev->authorized = usb_hcd->authorized_default;
+		dev->authorized = !!HCD_DEV_AUTHORIZED(usb_hcd);
 		dev->wusb = usb_bus_is_wusb(bus) ? 1 : 0;
 	}
 	return dev;
 }
+EXPORT_SYMBOL_GPL(usb_alloc_dev);
 
 /**
  * usb_get_dev - increments the reference count of the usb device structure
@@ -768,13 +797,10 @@ struct urb *usb_buffer_map(struct urb *urb)
 	struct usb_bus		*bus;
 	struct device		*controller;
 
-	bus = urb->dev->bus;
-	controller = bus->controller;
-
 	if (!urb
 			|| !urb->dev
-			|| !bus
-			|| !controlle)
+			|| !(bus = urb->dev->bus)
+			|| !(controller = bus->controller))
 		return NULL;
 
 	if (controller->dma_mask) {
@@ -808,14 +834,11 @@ void usb_buffer_dmasync(struct urb *urb)
 	struct usb_bus		*bus;
 	struct device		*controller;
 
-	bus = urb->dev->bus;
-	controller = bus->controller;
-
 	if (!urb
 			|| !(urb->transfer_flags & URB_NO_TRANSFER_DMA_MAP)
 			|| !urb->dev
-			|| !bus
-			|| !controller)
+			|| !(bus = urb->dev->bus)
+			|| !(controller = bus->controller))
 		return;
 
 	if (controller->dma_mask) {
@@ -845,14 +868,11 @@ void usb_buffer_unmap(struct urb *urb)
 	struct usb_bus		*bus;
 	struct device		*controller;
 
-	bus = urb->dev->bus;
-	controller = bus->controller;
-
 	if (!urb
 			|| !(urb->transfer_flags & URB_NO_TRANSFER_DMA_MAP)
 			|| !urb->dev
-			|| !bus
-			|| !controller)
+			|| !(bus = urb->dev->bus)
+			|| !(controller = bus->controller))
 		return;
 
 	if (controller->dma_mask) {
@@ -900,12 +920,9 @@ int usb_buffer_map_sg(const struct usb_device *dev, int is_in,
 	struct usb_bus		*bus;
 	struct device		*controller;
 
-	bus = dev->bus;
-	controller = bus->controller;
-
 	if (!dev
-			|| !bus
-			|| !controller
+			|| !(bus = dev->bus)
+			|| !(controller = bus->controller)
 			|| !controller->dma_mask)
 		return -EINVAL;
 
@@ -939,12 +956,9 @@ void usb_buffer_dmasync_sg(const struct usb_device *dev, int is_in,
 	struct usb_bus		*bus;
 	struct device		*controller;
 
-	bus = dev->bus;
-	controller = bus->controller;
-
 	if (!dev
-			|| !bus
-			|| !controller
+			|| !(bus = dev->bus)
+			|| !(controller = bus->controller)
 			|| !controller->dma_mask)
 		return;
 
@@ -970,12 +984,9 @@ void usb_buffer_unmap_sg(const struct usb_device *dev, int is_in,
 	struct usb_bus		*bus;
 	struct device		*controller;
 
-	bus = dev->bus;
-	controller = bus->controller;
-
 	if (!dev
-			|| !bus
-			|| !controller
+			|| !(bus = dev->bus)
+			|| !(controller = bus->controller)
 			|| !controller->dma_mask)
 		return;
 
@@ -984,22 +995,6 @@ void usb_buffer_unmap_sg(const struct usb_device *dev, int is_in,
 }
 EXPORT_SYMBOL_GPL(usb_buffer_unmap_sg);
 #endif
-
-/* To disable USB, kernel command line is 'nousb' not 'usbcore.nousb' */
-#ifdef MODULE
-module_param(nousb, bool, 0444);
-#else
-core_param(nousb, nousb, bool, 0444);
-#endif
-
-/*
- * for external read access to <nousb>
- */
-int usb_disabled(void)
-{
-	return nousb;
-}
-EXPORT_SYMBOL_GPL(usb_disabled);
 
 /*
  * Notifications of device and interface registration
@@ -1066,10 +1061,11 @@ static void usb_debugfs_cleanup(void)
 static int __init usb_init(void)
 {
 	int retval;
-	if (nousb) {
+	if (usb_disabled()) {
 		pr_info("%s: USB support disabled\n", usbcore_name);
 		return 0;
 	}
+	usb_init_pool_max();
 
 	retval = usb_debugfs_init();
 	if (retval)
@@ -1122,7 +1118,7 @@ out:
 static void __exit usb_exit(void)
 {
 	/* This will matter if shutdown/reboot does exitcalls. */
-	if (nousb)
+	if (usb_disabled())
 		return;
 
 	usb_deregister_device_driver(&usb_generic_driver);
@@ -1134,6 +1130,7 @@ static void __exit usb_exit(void)
 	bus_unregister(&usb_bus_type);
 	usb_acpi_unregister();
 	usb_debugfs_cleanup();
+	idr_destroy(&usb_bus_idr);
 }
 
 subsys_initcall(usb_init);

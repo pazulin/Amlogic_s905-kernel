@@ -506,12 +506,10 @@ static int snd_galaxy_probe(struct device *dev, unsigned int n)
 	u8 type;
 	int err;
 
-	err = snd_card_create(index[n], id[n], THIS_MODULE, sizeof *galaxy,
-			      &card);
+	err = snd_card_new(dev, index[n], id[n], THIS_MODULE,
+			   sizeof(*galaxy), &card);
 	if (err < 0)
 		return err;
-
-	snd_card_set_dev(card, dev);
 
 	card->private_free = snd_galaxy_free;
 	galaxy = card->private_data;
@@ -571,7 +569,7 @@ static int snd_galaxy_probe(struct device *dev, unsigned int n)
 	if (err < 0)
 		goto error;
 
-	err = snd_wss_pcm(chip, 0, NULL);
+	err = snd_wss_pcm(chip, 0);
 	if (err < 0)
 		goto error;
 
@@ -579,7 +577,7 @@ static int snd_galaxy_probe(struct device *dev, unsigned int n)
 	if (err < 0)
 		goto error;
 
-	err = snd_wss_timer(chip, 0, NULL);
+	err = snd_wss_timer(chip, 0);
 	if (err < 0)
 		goto error;
 
@@ -636,15 +634,4 @@ static struct isa_driver snd_galaxy_driver = {
 	}
 };
 
-static int __init alsa_card_galaxy_init(void)
-{
-	return isa_register_driver(&snd_galaxy_driver, SNDRV_CARDS);
-}
-
-static void __exit alsa_card_galaxy_exit(void)
-{
-	isa_unregister_driver(&snd_galaxy_driver);
-}
-
-module_init(alsa_card_galaxy_init);
-module_exit(alsa_card_galaxy_exit);
+module_isa_driver(snd_galaxy_driver, SNDRV_CARDS);

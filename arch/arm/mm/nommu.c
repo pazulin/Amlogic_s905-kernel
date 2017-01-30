@@ -87,31 +87,37 @@ static unsigned long irbar_read(void)
 /* MPU initialisation functions */
 void __init sanity_check_meminfo_mpu(void)
 {
-	int i;
-	struct membank *bank = meminfo.bank;
 	phys_addr_t phys_offset = PHYS_OFFSET;
 	phys_addr_t aligned_region_size, specified_mem_size, rounded_mem_size;
+	struct memblock_region *reg;
+	bool first = true;
+	phys_addr_t mem_start;
+	phys_addr_t mem_end;
 
-	/* Initially only use memory continuous from PHYS_OFFSET */
-	if (bank_phys_start(&bank[0]) != phys_offset)
-		panic("First memory bank must be contiguous from PHYS_OFFSET");
+	for_each_memblock(memory, reg) {
+		if (first) {
+			/*
+			 * Initially only use memory continuous from
+			 * PHYS_OFFSET */
+			if (reg->base != phys_offset)
+				panic("First memory bank must be contiguous from PHYS_OFFSET");
 
-	/* Banks have already been sorted by start address */
-	for (i = 1; i < meminfo.nr_banks; i++) {
-		if (bank[i].start <= bank_phys_end(&bank[0]) &&
-		    bank_phys_end(&bank[i]) > bank_phys_end(&bank[0])) {
-			bank[0].size = bank_phys_end(&bank[i]) - bank[0].start;
+			mem_start = reg->base;
+			mem_end = reg->base + reg->size;
+			specified_mem_size = reg->size;
+			first = false;
 		} else {
-			pr_notice("Ignoring RAM after 0x%.8lx. "
-			"First non-contiguous (ignored) bank start: 0x%.8lx\n",
-				(unsigned long)bank_phys_end(&bank[0]),
-				(unsigned long)bank_phys_start(&bank[i]));
+			/*
+			 * memblock auto merges contiguous blocks, remove
+			 * all blocks afterwards in one go (we can't remove
+			 * blocks separately while iterating)
+			 */
+			pr_notice("Ignoring RAM after %pa, memory at %pa ignored\n",
+				  &mem_end, &reg->base);
+			memblock_remove(reg->base, 0 - reg->base);
 			break;
 		}
 	}
-	/* All contiguous banks are now merged in to the first bank */
-	meminfo.nr_banks = 1;
-	specified_mem_size = bank[0].size;
 
 	/*
 	 * MPU has curious alignment requirements: Size must be power of 2, and
@@ -128,23 +134,24 @@ void __init sanity_check_meminfo_mpu(void)
 	 */
 	aligned_region_size = (phys_offset - 1) ^ (phys_offset);
 	/* Find the max power-of-two sized region that fits inside our bank */
-	rounded_mem_size = (1 <<  __fls(bank[0].size)) - 1;
+	rounded_mem_size = (1 <<  __fls(specified_mem_size)) - 1;
 
 	/* The actual region size is the smaller of the two */
 	aligned_region_size = aligned_region_size < rounded_mem_size
 				? aligned_region_size + 1
 				: rounded_mem_size + 1;
 
-	if (aligned_region_size != specified_mem_size)
-		pr_warn("Truncating memory from 0x%.8lx to 0x%.8lx (MPU region constraints)",
-				(unsigned long)specified_mem_size,
-				(unsigned long)aligned_region_size);
+	if (aligned_region_size != specified_mem_size) {
+		pr_warn("Truncating memory from %pa to %pa (MPU region constraints)",
+				&specified_mem_size, &aligned_region_size);
+		memblock_remove(mem_start + aligned_region_size,
+				specified_mem_size - aligned_region_size);
 
-	meminfo.bank[0].size = aligned_region_size;
-	pr_debug("MPU Region from 0x%.8lx size 0x%.8lx (end 0x%.8lx))\n",
-		(unsigned long)phys_offset,
-		(unsigned long)aligned_region_size,
-		(unsigned long)bank_phys_end(&bank[0]));
+		mem_end = mem_start + aligned_region_size;
+	}
+
+	pr_debug("MPU Region from %pa size %pa (end %pa))\n",
+		&phys_offset, &aligned_region_size, &mem_end);
 
 }
 
@@ -255,7 +262,7 @@ void __init mpu_setup(void)
 		return;
 
 	region_err = mpu_setup_region(MPU_RAM_REGION, PHYS_OFFSET,
-					ilog2(meminfo.bank[0].size),
+					ilog2(memblock.memory.regions[0].size),
 					MPU_AP_PL1RW_PL0RW | MPU_RGN_NORMAL);
 	if (region_err) {
 		panic("MPU region initialization failure! %d", region_err);
@@ -279,7 +286,7 @@ void __init arm_mm_memblock_reserve(void)
 	 * some architectures which the DRAM is the exception vector to trap,
 	 * alloc_page breaks with error, although it is not NULL, but "0."
 	 */
-	memblock_reserve(CONFIG_VECTORS_BASE, PAGE_SIZE);
+	memblock_reserve(CONFIG_VECTORS_BASE, 2 * PAGE_SIZE);
 #else /* ifndef CONFIG_CPU_V7M */
 	/*
 	 * There is no dedicated vector page on V7-M. So nothing needs to be
@@ -292,17 +299,9 @@ void __init sanity_check_meminfo(void)
 {
 	phys_addr_t end;
 	sanity_check_meminfo_mpu();
-	end = bank_phys_end(&meminfo.bank[meminfo.nr_banks - 1]);
+	end = memblock_end_of_DRAM();
 	high_memory = __va(end - 1) + 1;
-}
-
-/*
- * early_paging_init() recreates boot time page table setup, allowing machines
- * to switch over to a high (>4G) address space on LPAE systems
- */
-void __init early_paging_init(const struct machine_desc *mdesc,
-			      struct proc_info_list *procinfo)
-{
+	memblock_set_current_limit(end);
 }
 
 /*
@@ -353,30 +352,52 @@ void __iomem *__arm_ioremap_pfn(unsigned long pfn, unsigned long offset,
 }
 EXPORT_SYMBOL(__arm_ioremap_pfn);
 
-void __iomem *__arm_ioremap_pfn_caller(unsigned long pfn, unsigned long offset,
-			   size_t size, unsigned int mtype, void *caller)
-{
-	return __arm_ioremap_pfn(pfn, offset, size, mtype);
-}
-
-void __iomem *__arm_ioremap(phys_addr_t phys_addr, size_t size,
-			    unsigned int mtype)
-{
-	return (void __iomem *)phys_addr;
-}
-EXPORT_SYMBOL(__arm_ioremap);
-
-void __iomem * (*arch_ioremap_caller)(phys_addr_t, size_t, unsigned int, void *);
-
 void __iomem *__arm_ioremap_caller(phys_addr_t phys_addr, size_t size,
 				   unsigned int mtype, void *caller)
 {
-	return __arm_ioremap(phys_addr, size, mtype);
+	return (void __iomem *)phys_addr;
 }
+
+void __iomem * (*arch_ioremap_caller)(phys_addr_t, size_t, unsigned int, void *);
+
+void __iomem *ioremap(resource_size_t res_cookie, size_t size)
+{
+	return __arm_ioremap_caller(res_cookie, size, MT_DEVICE,
+				    __builtin_return_address(0));
+}
+EXPORT_SYMBOL(ioremap);
+
+void __iomem *ioremap_cache(resource_size_t res_cookie, size_t size)
+	__alias(ioremap_cached);
+
+void __iomem *ioremap_cached(resource_size_t res_cookie, size_t size)
+{
+	return __arm_ioremap_caller(res_cookie, size, MT_DEVICE_CACHED,
+				    __builtin_return_address(0));
+}
+EXPORT_SYMBOL(ioremap_cache);
+EXPORT_SYMBOL(ioremap_cached);
+
+void __iomem *ioremap_wc(resource_size_t res_cookie, size_t size)
+{
+	return __arm_ioremap_caller(res_cookie, size, MT_DEVICE_WC,
+				    __builtin_return_address(0));
+}
+EXPORT_SYMBOL(ioremap_wc);
+
+void *arch_memremap_wb(phys_addr_t phys_addr, size_t size)
+{
+	return (void *)phys_addr;
+}
+
+void __iounmap(volatile void __iomem *addr)
+{
+}
+EXPORT_SYMBOL(__iounmap);
 
 void (*arch_iounmap)(volatile void __iomem *);
 
-void __arm_iounmap(volatile void __iomem *addr)
+void iounmap(volatile void __iomem *addr)
 {
 }
-EXPORT_SYMBOL(__arm_iounmap);
+EXPORT_SYMBOL(iounmap);

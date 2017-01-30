@@ -17,7 +17,6 @@
  * for more details.
  */
 #include <linux/init.h>
-#include <linux/module.h>
 #include <linux/debugfs.h>
 #include <linux/seq_file.h>
 #include <linux/spinlock.h>
@@ -67,11 +66,7 @@ static int __init asids_debugfs_init(void)
 					   NULL, &asids_debugfs_fops);
 	if (!asids_dentry)
 		return -ENOMEM;
-	if (IS_ERR(asids_dentry))
-		return PTR_ERR(asids_dentry);
 
-	return 0;
+	return PTR_ERR_OR_ZERO(asids_dentry);
 }
-module_init(asids_debugfs_init);
-
-MODULE_LICENSE("GPL v2");
+device_initcall(asids_debugfs_init);

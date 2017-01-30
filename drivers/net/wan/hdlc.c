@@ -256,7 +256,8 @@ static void hdlc_setup(struct net_device *dev)
 struct net_device *alloc_hdlcdev(void *priv)
 {
 	struct net_device *dev;
-	dev = alloc_netdev(sizeof(struct hdlc_device), "hdlc%d", hdlc_setup);
+	dev = alloc_netdev(sizeof(struct hdlc_device), "hdlc%d",
+			   NET_NAME_UNKNOWN, hdlc_setup);
 	if (dev)
 		dev_to_hdlc(dev)->priv = priv;
 	return dev;
@@ -265,8 +266,8 @@ struct net_device *alloc_hdlcdev(void *priv)
 void unregister_hdlc_device(struct net_device *dev)
 {
 	rtnl_lock();
-	unregister_netdevice(dev);
 	detach_hdlc_protocol(dev);
+	unregister_netdevice(dev);
 	rtnl_unlock();
 }
 
@@ -275,7 +276,11 @@ void unregister_hdlc_device(struct net_device *dev)
 int attach_hdlc_protocol(struct net_device *dev, struct hdlc_proto *proto,
 			 size_t size)
 {
-	detach_hdlc_protocol(dev);
+	int err;
+
+	err = detach_hdlc_protocol(dev);
+	if (err)
+		return err;
 
 	if (!try_module_get(proto->module))
 		return -ENOSYS;
@@ -288,15 +293,24 @@ int attach_hdlc_protocol(struct net_device *dev, struct hdlc_proto *proto,
 		}
 	}
 	dev_to_hdlc(dev)->proto = proto;
+
 	return 0;
 }
 
 
-void detach_hdlc_protocol(struct net_device *dev)
+int detach_hdlc_protocol(struct net_device *dev)
 {
 	hdlc_device *hdlc = dev_to_hdlc(dev);
+	int err;
 
 	if (hdlc->proto) {
+		err = call_netdevice_notifiers(NETDEV_PRE_TYPE_CHANGE, dev);
+		err = notifier_to_errno(err);
+		if (err) {
+			netdev_err(dev, "Refused to change device type\n");
+			return err;
+		}
+
 		if (hdlc->proto->detach)
 			hdlc->proto->detach(dev);
 		module_put(hdlc->proto->module);
@@ -305,6 +319,8 @@ void detach_hdlc_protocol(struct net_device *dev)
 	kfree(hdlc->state);
 	hdlc->state = NULL;
 	hdlc_setup_dev(dev);
+
+	return 0;
 }
 
 

@@ -24,12 +24,10 @@ static bool moving_pred(struct keybuf *buf, struct bkey *k)
 					   moving_gc_keys);
 	unsigned i;
 
-	for (i = 0; i < KEY_PTRS(k); i++) {
-		struct bucket *g = PTR_BUCKET(c, k, i);
-
-		if (GC_MOVE(g))
+	for (i = 0; i < KEY_PTRS(k); i++)
+		if (ptr_available(c, k, i) &&
+		    GC_MOVE(PTR_BUCKET(c, k, i)))
 			return true;
-	}
 
 	return false;
 }
@@ -46,11 +44,8 @@ static void write_moving_finish(struct closure *cl)
 {
 	struct moving_io *io = container_of(cl, struct moving_io, cl);
 	struct bio *bio = &io->bio.bio;
-	struct bio_vec *bv;
-	int i;
 
-	bio_for_each_segment_all(bv, bio, i)
-		__free_page(bv->bv_page);
+	bio_free_pages(bio);
 
 	if (io->op.replace_collision)
 		trace_bcache_gc_copy_collision(&io->w->key);
@@ -62,20 +57,20 @@ static void write_moving_finish(struct closure *cl)
 	closure_return_with_destructor(cl, moving_io_destructor);
 }
 
-static void read_moving_endio(struct bio *bio, int error)
+static void read_moving_endio(struct bio *bio)
 {
 	struct bbio *b = container_of(bio, struct bbio, bio);
 	struct moving_io *io = container_of(bio->bi_private,
 					    struct moving_io, cl);
 
-	if (error)
-		io->op.error = error;
+	if (bio->bi_error)
+		io->op.error = bio->bi_error;
 	else if (!KEY_DIRTY(&b->key) &&
 		 ptr_stale(io->op.c, &b->key, 0)) {
 		io->op.error = -EINTR;
 	}
 
-	bch_bbio_endio(io->op.c, bio, error, "reading data to move");
+	bch_bbio_endio(io->op.c, bio, bio->bi_error, "reading data to move");
 }
 
 static void moving_init(struct moving_io *io)
@@ -115,7 +110,7 @@ static void write_moving(struct closure *cl)
 		closure_call(&op->cl, bch_data_insert, NULL, cl);
 	}
 
-	continue_at(cl, write_moving_finish, system_wq);
+	continue_at(cl, write_moving_finish, op->wq);
 }
 
 static void read_moving_submit(struct closure *cl)
@@ -125,7 +120,7 @@ static void read_moving_submit(struct closure *cl)
 
 	bch_submit_bbio(bio, io->op.c, &io->w->key, 0);
 
-	continue_at(cl, write_moving, system_wq);
+	continue_at(cl, write_moving, io->op.wq);
 }
 
 static void read_moving(struct cache_set *c)
@@ -160,11 +155,12 @@ static void read_moving(struct cache_set *c)
 		io->w		= w;
 		io->op.inode	= KEY_INODE(&w->key);
 		io->op.c	= c;
+		io->op.wq	= c->moving_gc_wq;
 
 		moving_init(io);
 		bio = &io->bio.bio;
 
-		bio->bi_rw	= READ;
+		bio_set_op_attrs(bio, REQ_OP_READ, 0);
 		bio->bi_end_io	= read_moving_endio;
 
 		if (bio_alloc_pages(bio, GFP_KERNEL))
@@ -216,7 +212,10 @@ void bch_moving_gc(struct cache_set *c)
 		ca->heap.used = 0;
 
 		for_each_bucket(b, ca) {
-			if (!GC_SECTORS_USED(b))
+			if (GC_MARK(b) == GC_MARK_METADATA ||
+			    !GC_SECTORS_USED(b) ||
+			    GC_SECTORS_USED(b) == ca->sb.bucket_size ||
+			    atomic_read(&b->pin))
 				continue;
 
 			if (!heap_full(&ca->heap)) {

@@ -39,8 +39,8 @@
 #include <linux/spi/max7301.h>
 #include <linux/spi/mc33880.h>
 
-#include <media/timb_radio.h>
-#include <media/timb_video.h>
+#include <linux/platform_data/media/timb_radio.h>
+#include <linux/platform_data/media/timb_video.h>
 
 #include <linux/timb_dma.h>
 
@@ -715,7 +715,7 @@ static int timb_probe(struct pci_dev *dev,
 	for (i = 0; i < TIMBERDALE_NR_IRQS; i++)
 		msix_entries[i].entry = i;
 
-	err = pci_enable_msix(dev, msix_entries, TIMBERDALE_NR_IRQS);
+	err = pci_enable_msix_exact(dev, msix_entries, TIMBERDALE_NR_IRQS);
 	if (err) {
 		dev_err(&dev->dev,
 			"MSI-X init failed: %d, expected entries: %d\n",

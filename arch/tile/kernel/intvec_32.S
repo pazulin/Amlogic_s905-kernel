@@ -313,13 +313,13 @@ intvec_\vecname:
 	 movei  r3, 0
 	}
 	.else
-	.ifc \c_routine, op_handle_perf_interrupt
+	.ifc \c_routine, handle_perf_interrupt
 	{
 	 mfspr  r2, PERF_COUNT_STS
 	 movei  r3, -1   /* not used, but set for consistency */
 	}
 	.else
-	.ifc \c_routine, op_handle_aux_perf_interrupt
+	.ifc \c_routine, handle_perf_interrupt
 	{
 	 mfspr  r2, AUX_PERF_COUNT_STS
 	 movei  r3, -1   /* not used, but set for consistency */
@@ -572,7 +572,7 @@ intvec_\vecname:
 	}
 	wh64    r52
 
-#ifdef CONFIG_TRACE_IRQFLAGS
+#if defined(CONFIG_TRACE_IRQFLAGS) || defined(CONFIG_CONTEXT_TRACKING)
 	.ifnc \function,handle_nmi
 	/*
 	 * We finally have enough state set up to notify the irq
@@ -588,6 +588,9 @@ intvec_\vecname:
 	{ move r32, r2; move r33, r3 }
 	.endif
 	TRACE_IRQS_OFF
+#ifdef CONFIG_CONTEXT_TRACKING
+	jal     context_tracking_user_exit
+#endif
 	.ifnc \function,handle_syscall
 	{ move r0, r30; move r1, r31 }
 	{ move r2, r32; move r3, r33 }
@@ -846,18 +849,6 @@ STD_ENTRY(interrupt_return)
 	FEEDBACK_REENTER(interrupt_return)
 
 	/*
-	 * Use r33 to hold whether we have already loaded the callee-saves
-	 * into ptregs.  We don't want to do it twice in this loop, since
-	 * then we'd clobber whatever changes are made by ptrace, etc.
-	 * Get base of stack in r32.
-	 */
-	{
-	 GET_THREAD_INFO(r32)
-	 movei  r33, 0
-	}
-
-.Lretry_work_pending:
-	/*
 	 * Disable interrupts so as to make sure we don't
 	 * miss an interrupt that sets any of the thread flags (like
 	 * need_resched or sigpending) between sampling and the iret.
@@ -867,33 +858,27 @@ STD_ENTRY(interrupt_return)
 	IRQ_DISABLE(r20, r21)
 	TRACE_IRQS_OFF  /* Note: clobbers registers r0-r29 */
 
-
-	/* Check to see if there is any work to do before returning to user. */
-	{
-	 addi   r29, r32, THREAD_INFO_FLAGS_OFFSET
-	 moveli r1, lo16(_TIF_ALLWORK_MASK)
-	}
-	{
-	 lw     r29, r29
-	 auli   r1, r1, ha16(_TIF_ALLWORK_MASK)
-	}
-	and     r1, r29, r1
-	bzt     r1, .Lrestore_all
-
 	/*
-	 * Make sure we have all the registers saved for signal
-	 * handling, notify-resume, or single-step.  Call out to C
-	 * code to figure out exactly what we need to do for each flag bit,
-	 * then if necessary, reload the flags and recheck.
+	 * See if there are any work items (including single-shot items)
+	 * to do.  If so, save the callee-save registers to pt_regs
+	 * and then dispatch to C code.
 	 */
+	GET_THREAD_INFO(r21)
+	{
+	 addi   r22, r21, THREAD_INFO_FLAGS_OFFSET
+	 moveli r20, lo16(_TIF_ALLWORK_MASK)
+	}
+	{
+	 lw     r22, r22
+	 auli   r20, r20, ha16(_TIF_ALLWORK_MASK)
+	}
+	and     r1, r22, r20
 	{
 	 PTREGS_PTR(r0, PTREGS_OFFSET_BASE)
-	 bnz    r33, 1f
+	 bzt    r1, .Lrestore_all
 	}
 	push_extra_callee_saves r0
-	movei   r33, 1
-1:	jal     do_work_pending
-	bnz     r0, .Lretry_work_pending
+	jal     prepare_exit_to_usermode
 
 	/*
 	 * In the NMI case we
@@ -946,6 +931,13 @@ STD_ENTRY(interrupt_return)
 	bzt     r30, .Lrestore_regs
 3:
 
+	/* We are relying on INT_PERF_COUNT at 33, and AUX_PERF_COUNT at 48 */
+	{
+	 moveli r0, lo16(1 << (INT_PERF_COUNT - 32))
+	 bz     r31, .Lrestore_regs
+	}
+	auli    r0, r0, ha16(1 << (INT_AUX_PERF_COUNT - 32))
+	mtspr   SPR_INTERRUPT_MASK_RESET_K_1, r0
 
 	/*
 	 * We now commit to returning from this interrupt, since we will be
@@ -1171,6 +1163,10 @@ handle_nmi:
 	 PTREGS_PTR(r0, PTREGS_OFFSET_BASE)
 	}
 	FEEDBACK_REENTER(handle_nmi)
+	{
+	 movei  r30, 1
+	 seq    r31, r0, zero
+	}
 	j       interrupt_return
 	STD_ENDPROC(handle_nmi)
 
@@ -1213,6 +1209,7 @@ handle_syscall:
 	 jal    do_syscall_trace_enter
 	}
 	FEEDBACK_REENTER(handle_syscall)
+	blz     r0, .Lsyscall_sigreturn_skip
 
 	/*
 	 * We always reload our registers from the stack at this
@@ -1315,7 +1312,7 @@ STD_ENTRY(ret_from_kernel_thread)
 	FEEDBACK_REENTER(ret_from_kernel_thread)
 	{
 	 movei  r30, 0               /* not an NMI */
-	 j      .Lresume_userspace   /* jump into middle of interrupt_return */
+	 j      interrupt_return
 	}
 	STD_ENDPROC(ret_from_kernel_thread)
 
@@ -1835,8 +1832,9 @@ int_unalign:
 /* Include .intrpt array of interrupt vectors */
 	.section ".intrpt", "ax"
 
-#define op_handle_perf_interrupt bad_intr
-#define op_handle_aux_perf_interrupt bad_intr
+#ifndef CONFIG_USE_PMC
+#define handle_perf_interrupt bad_intr
+#endif
 
 #ifndef CONFIG_HARDWALL
 #define do_hardwall_trap bad_intr
@@ -1877,7 +1875,7 @@ int_unalign:
 	int_hand     INT_IDN_AVAIL, IDN_AVAIL, bad_intr
 	int_hand     INT_UDN_AVAIL, UDN_AVAIL, bad_intr
 	int_hand     INT_PERF_COUNT, PERF_COUNT, \
-		     op_handle_perf_interrupt, handle_nmi
+		     handle_perf_interrupt, handle_nmi
 	int_hand     INT_INTCTRL_3, INTCTRL_3, bad_intr
 #if CONFIG_KERNEL_PL == 2
 	dc_dispatch  INT_INTCTRL_2, INTCTRL_2
@@ -1902,7 +1900,7 @@ int_unalign:
 	int_hand     INT_SN_CPL, SN_CPL, bad_intr
 	int_hand     INT_DOUBLE_FAULT, DOUBLE_FAULT, do_trap
 	int_hand     INT_AUX_PERF_COUNT, AUX_PERF_COUNT, \
-		     op_handle_aux_perf_interrupt, handle_nmi
+		     handle_perf_interrupt, handle_nmi
 
 	/* Synthetic interrupt delivered only by the simulator */
 	int_hand     INT_BREAKPOINT, BREAKPOINT, do_breakpoint

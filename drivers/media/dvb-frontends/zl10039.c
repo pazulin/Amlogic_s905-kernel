@@ -111,7 +111,7 @@ static int zl10039_write(struct zl10039_state *state,
 
 	if (1 + count > sizeof(buf)) {
 		printk(KERN_WARNING
-		       "%s: i2c wr reg=%04x: len=%zd is too big!\n",
+		       "%s: i2c wr reg=%04x: len=%zu is too big!\n",
 		       KBUILD_MODNAME, reg, count);
 		return -EINVAL;
 	}
@@ -255,7 +255,7 @@ static int zl10039_release(struct dvb_frontend *fe)
 	return 0;
 }
 
-static struct dvb_tuner_ops zl10039_ops = {
+static const struct dvb_tuner_ops zl10039_ops = {
 	.release = zl10039_release,
 	.init = zl10039_init,
 	.sleep = zl10039_sleep,

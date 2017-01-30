@@ -67,9 +67,9 @@ struct tsb {
 	unsigned long pte;
 } __attribute__((aligned(TSB_ENTRY_ALIGNMENT)));
 
-extern void __tsb_insert(unsigned long ent, unsigned long tag, unsigned long pte);
-extern void tsb_flush(unsigned long ent, unsigned long tag);
-extern void tsb_init(struct tsb *tsb, unsigned long size);
+void __tsb_insert(unsigned long ent, unsigned long tag, unsigned long pte);
+void tsb_flush(unsigned long ent, unsigned long tag);
+void tsb_init(struct tsb *tsb, unsigned long size);
 
 struct tsb_config {
 	struct tsb		*tsb;
@@ -92,7 +92,8 @@ struct tsb_config {
 typedef struct {
 	spinlock_t		lock;
 	unsigned long		sparc64_ctx_val;
-	unsigned long		huge_pte_count;
+	unsigned long		hugetlb_pte_count;
+	unsigned long		thp_pte_count;
 	struct tsb_config	tsb_block[MM_NUM_TSBS];
 	struct hv_tsb_descr	tsb_descr[MM_NUM_TSBS];
 } mm_context_t;

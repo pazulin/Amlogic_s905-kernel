@@ -155,6 +155,7 @@ int usb_choose_configuration(struct usb_device *udev)
 	}
 	return i;
 }
+EXPORT_SYMBOL_GPL(usb_choose_configuration);
 
 static int generic_probe(struct usb_device *udev)
 {
@@ -170,11 +171,8 @@ static int generic_probe(struct usb_device *udev)
 		if (c >= 0) {
 			err = usb_set_configuration(udev, c);
 			if (err && err != -ENODEV) {
-				/*try to set config again*/
-				err = usb_set_configuration(udev, c);
-				if (err && err != -ENODEV)
-					dev_err(&udev->dev, "can't set config #%d, error %d\n",
-						c, err);
+				dev_err(&udev->dev, "can't set config #%d, error %d\n",
+					c, err);
 				/* This need not be fatal.  The user can try to
 				 * set other configurations. */
 			}

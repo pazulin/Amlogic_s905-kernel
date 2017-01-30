@@ -8,9 +8,11 @@
 #include <linux/security.h>
 #include <linux/file.h>
 #include <linux/seq_file.h>
+#include <linux/fs.h>
 
 #include <linux/proc_fs.h>
 
+#include "../mount.h"
 #include "internal.h"
 #include "fd.h"
 
@@ -29,7 +31,7 @@ static int seq_show(struct seq_file *m, void *v)
 	put_task_struct(task);
 
 	if (files) {
-		int fd = proc_fd(m->private);
+		unsigned int fd = proc_fd(m->private);
 
 		spin_lock(&files->file_lock);
 		file = fcheck_files(files, fd);
@@ -47,15 +49,23 @@ static int seq_show(struct seq_file *m, void *v)
 		put_files_struct(files);
 	}
 
-	if (!ret) {
-                seq_printf(m, "pos:\t%lli\nflags:\t0%o\n",
-			   (long long)file->f_pos, f_flags);
-		if (file->f_op->show_fdinfo)
-			ret = file->f_op->show_fdinfo(m, file);
-		fput(file);
-	}
+	if (ret)
+		return ret;
 
-	return ret;
+	seq_printf(m, "pos:\t%lli\nflags:\t0%o\nmnt_id:\t%i\n",
+		   (long long)file->f_pos, f_flags,
+		   real_mount(file->f_path.mnt)->mnt_id);
+
+	show_fd_locks(m, file, files);
+	if (seq_has_overflowed(m))
+		goto out;
+
+	if (file->f_op->show_fdinfo)
+		file->f_op->show_fdinfo(m, file);
+
+out:
+	fput(file);
+	return 0;
 }
 
 static int seq_fdinfo_open(struct inode *inode, struct file *file)
@@ -76,12 +86,12 @@ static int tid_fd_revalidate(struct dentry *dentry, unsigned int flags)
 	struct task_struct *task;
 	const struct cred *cred;
 	struct inode *inode;
-	int fd;
+	unsigned int fd;
 
 	if (flags & LOOKUP_RCU)
 		return -ECHILD;
 
-	inode = dentry->d_inode;
+	inode = d_inode(dentry);
 	task = get_proc_task(inode);
 	fd = proc_fd(inode);
 
@@ -127,8 +137,6 @@ static int tid_fd_revalidate(struct dentry *dentry, unsigned int flags)
 		}
 		put_task_struct(task);
 	}
-
-	d_drop(dentry);
 	return 0;
 }
 
@@ -143,14 +151,14 @@ static int proc_fd_link(struct dentry *dentry, struct path *path)
 	struct task_struct *task;
 	int ret = -ENOENT;
 
-	task = get_proc_task(dentry->d_inode);
+	task = get_proc_task(d_inode(dentry));
 	if (task) {
 		files = get_files_struct(task);
 		put_task_struct(task);
 	}
 
 	if (files) {
-		int fd = proc_fd(dentry->d_inode);
+		unsigned int fd = proc_fd(d_inode(dentry));
 		struct file *fd_file;
 
 		spin_lock(&files->file_lock);
@@ -204,7 +212,7 @@ static struct dentry *proc_lookupfd_common(struct inode *dir,
 {
 	struct task_struct *task = get_proc_task(dir);
 	int result = -ENOENT;
-	unsigned fd = name_to_int(dentry);
+	unsigned fd = name_to_int(&dentry->d_name);
 
 	if (!task)
 		goto out_no_task;
@@ -245,11 +253,12 @@ static int proc_readfd_common(struct file *file, struct dir_context *ctx,
 			continue;
 		rcu_read_unlock();
 
-		len = snprintf(name, sizeof(name), "%d", fd);
+		len = snprintf(name, sizeof(name), "%u", fd);
 		if (!proc_fill_cache(file, ctx,
 				     name, len, instantiate, p,
 				     (void *)(unsigned long)fd))
 			goto out_fd_loop;
+		cond_resched();
 		rcu_read_lock();
 	}
 	rcu_read_unlock();
@@ -267,8 +276,8 @@ static int proc_readfd(struct file *file, struct dir_context *ctx)
 
 const struct file_operations proc_fd_operations = {
 	.read		= generic_read_dir,
-	.iterate	= proc_readfd,
-	.llseek		= default_llseek,
+	.iterate_shared	= proc_readfd,
+	.llseek		= generic_file_llseek,
 };
 
 static struct dentry *proc_lookupfd(struct inode *dir, struct dentry *dentry,
@@ -283,11 +292,19 @@ static struct dentry *proc_lookupfd(struct inode *dir, struct dentry *dentry,
  */
 int proc_fd_permission(struct inode *inode, int mask)
 {
-	int rv = generic_permission(inode, mask);
+	struct task_struct *p;
+	int rv;
+
+	rv = generic_permission(inode, mask);
 	if (rv == 0)
-		return 0;
-	if (task_tgid(current) == proc_pid(inode))
+		return rv;
+
+	rcu_read_lock();
+	p = pid_task(proc_pid(inode), PIDTYPE_PID);
+	if (p && same_thread_group(p, current))
 		rv = 0;
+	rcu_read_unlock();
+
 	return rv;
 }
 
@@ -344,6 +361,6 @@ const struct inode_operations proc_fdinfo_inode_operations = {
 
 const struct file_operations proc_fdinfo_operations = {
 	.read		= generic_read_dir,
-	.iterate	= proc_readfdinfo,
-	.llseek		= default_llseek,
+	.iterate_shared	= proc_readfdinfo,
+	.llseek		= generic_file_llseek,
 };

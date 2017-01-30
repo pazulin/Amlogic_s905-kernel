@@ -1,7 +1,9 @@
 *.a
 *.aux
+*.bc
 *.bin
 *.bz2
+*.c.[012]*.*
 *.cis
 *.cpio
 *.csp
@@ -21,6 +23,7 @@
 *.i
 *.jpeg
 *.ko
+*.ll
 *.log
 *.lst
 *.lzma
@@ -35,6 +38,7 @@
 *.out
 *.patch
 *.pdf
+*.plist
 *.png
 *.pot
 *.ps
@@ -162,7 +166,6 @@ mach-types.h
 machtypes.h
 map
 map_hugetlb
-media
 mconf
 miboot*
 mk_elfconfig

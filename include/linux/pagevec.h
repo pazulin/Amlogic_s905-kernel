@@ -11,7 +11,6 @@
 /* 14 pointers + two long's align the pagevec structure to a power of two */
 #define PAGEVEC_SIZE	14
 
-#include <linux/page-isolation.h>
 struct page;
 struct address_space;
 
@@ -60,23 +59,8 @@ static inline unsigned pagevec_space(struct pagevec *pvec)
  */
 static inline unsigned pagevec_add(struct pagevec *pvec, struct page *page)
 {
-	unsigned ret = 0;
-#ifdef CONFIG_CMA
-	int migrate_type = 0;
-#endif
-
 	pvec->pages[pvec->nr++] = page;
-	ret = pagevec_space(pvec);
-
-#ifdef CONFIG_CMA
-	migrate_type = get_pageblock_migratetype(page);
-	if (is_migrate_cma(migrate_type) ||
-	   is_migrate_isolate(migrate_type)) {
-		ret = 0;
-	}
-#endif
-
-	return ret;
+	return pagevec_space(pvec);
 }
 
 static inline void pagevec_release(struct pagevec *pvec)

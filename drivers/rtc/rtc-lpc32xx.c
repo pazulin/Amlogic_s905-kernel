@@ -205,16 +205,15 @@ static int lpc32xx_rtc_probe(struct platform_device *pdev)
 	u32 tmp;
 
 	rtcirq = platform_get_irq(pdev, 0);
-	if (rtcirq < 0 || rtcirq >= NR_IRQS) {
+	if (rtcirq < 0) {
 		dev_warn(&pdev->dev, "Can't get interrupt resource\n");
 		rtcirq = -1;
 	}
 
 	rtc = devm_kzalloc(&pdev->dev, sizeof(*rtc), GFP_KERNEL);
-	if (unlikely(!rtc)) {
-		dev_err(&pdev->dev, "Can't allocate memory\n");
+	if (unlikely(!rtc))
 		return -ENOMEM;
-	}
+
 	rtc->irq = rtcirq;
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
@@ -380,7 +379,6 @@ static struct platform_driver lpc32xx_rtc_driver = {
 	.remove		= lpc32xx_rtc_remove,
 	.driver = {
 		.name	= RTC_NAME,
-		.owner	= THIS_MODULE,
 		.pm	= LPC32XX_RTC_PM_OPS,
 		.of_match_table = of_match_ptr(lpc32xx_rtc_match),
 	},

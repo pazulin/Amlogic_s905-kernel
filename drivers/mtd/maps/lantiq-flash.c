@@ -13,7 +13,6 @@
 #include <linux/kernel.h>
 #include <linux/io.h>
 #include <linux/slab.h>
-#include <linux/init.h>
 #include <linux/mtd/mtd.h>
 #include <linux/mtd/map.h>
 #include <linux/mtd/partitions.h>
@@ -46,7 +45,6 @@ struct ltq_mtd {
 };
 
 static const char ltq_map_name[] = "ltq_nor";
-static const char * const ltq_probe_types[] = { "cmdlinepart", "ofpart", NULL };
 
 static map_word
 ltq_read16(struct map_info *map, unsigned long adr)
@@ -112,7 +110,6 @@ ltq_copy_to(struct map_info *map, unsigned long to,
 static int
 ltq_mtd_probe(struct platform_device *pdev)
 {
-	struct mtd_part_parser_data ppdata;
 	struct ltq_mtd *ltq_mtd;
 	struct cfi_private *cfi;
 	int err;
@@ -162,15 +159,14 @@ ltq_mtd_probe(struct platform_device *pdev)
 		return -ENXIO;
 	}
 
-	ltq_mtd->mtd->owner = THIS_MODULE;
+	ltq_mtd->mtd->dev.parent = &pdev->dev;
+	mtd_set_of_node(ltq_mtd->mtd, pdev->dev.of_node);
 
 	cfi = ltq_mtd->map->fldrv_priv;
 	cfi->addr_unlock1 ^= 1;
 	cfi->addr_unlock2 ^= 1;
 
-	ppdata.of_node = pdev->dev.of_node;
-	err = mtd_device_parse_register(ltq_mtd->mtd, ltq_probe_types,
-					&ppdata, NULL, 0);
+	err = mtd_device_register(ltq_mtd->mtd, NULL, 0);
 	if (err) {
 		dev_err(&pdev->dev, "failed to add partitions\n");
 		goto err_destroy;
@@ -206,7 +202,6 @@ static struct platform_driver ltq_mtd_driver = {
 	.remove = ltq_mtd_remove,
 	.driver = {
 		.name = "ltq-nor",
-		.owner = THIS_MODULE,
 		.of_match_table = ltq_mtd_match,
 	},
 };
