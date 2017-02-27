@@ -81,7 +81,7 @@ static ssize_t chars_chartab_show(struct kobject *kobj,
 static void report_char_chartab_status(int reset, int received, int used,
 	int rejected, int do_characters)
 {
-	static char const *object_type[] = {
+	char *object_type[] = {
 		"character class entries",
 		"character descriptions",
 	};
@@ -232,7 +232,6 @@ static ssize_t keymap_show(struct kobject *kobj, struct kobj_attribute *attr,
 	u_char *cp1;
 	u_char ch;
 	unsigned long flags;
-
 	spin_lock_irqsave(&speakup_info.spinlock, flags);
 	cp1 = spk_key_buf + SHIFT_TBL_SIZE;
 	num_keys = (int)(*cp1);
@@ -240,8 +239,7 @@ static ssize_t keymap_show(struct kobject *kobj, struct kobj_attribute *attr,
 	cp += sprintf(cp, "%d, %d, %d,\n", KEY_MAP_VER, num_keys, nstates);
 	cp1 += 2; /* now pointing at shift states */
 	/* dump num_keys+1 as first row is shift states + flags,
-	 * each subsequent row is key + states
-	 */
+	 * each subsequent row is key + states */
 	for (n = 0; n <= num_keys; n++) {
 		for (i = 0; i <= nstates; i++) {
 			ch = *cp1++;
@@ -251,7 +249,7 @@ static ssize_t keymap_show(struct kobject *kobj, struct kobj_attribute *attr,
 	}
 	cp += sprintf(cp, "0, %d\n", KEY_MAP_VER);
 	spin_unlock_irqrestore(&speakup_info.spinlock, flags);
-	return (int)(cp - buf);
+	return (int)(cp-buf);
 }
 
 /*
@@ -288,8 +286,8 @@ static ssize_t keymap_store(struct kobject *kobj, struct kobj_attribute *attr,
 		cp = spk_s2uchar(cp, cp1);
 		cp1++;
 	}
-	i = (int)cp1[-2] + 1;
-	i *= (int)cp1[-1] + 1;
+	i = (int)cp1[-2]+1;
+	i *= (int)cp1[-1]+1;
 	i += 2; /* 0 and last map ver */
 	if (cp1[-3] != KEY_MAP_VER || cp1[-1] > 10 ||
 			i+SHIFT_TBL_SIZE+4 >= sizeof(spk_key_buf)) {
@@ -350,9 +348,9 @@ static ssize_t silent_store(struct kobject *kobj, struct kobj_attribute *attr,
 	} else {
 		shut = 0;
 	}
-	if (ch & 4)
+	if (ch&4)
 		shut |= 0x40;
-	if (ch & 1)
+	if (ch&1)
 		spk_shut_up |= shut;
 	else
 		spk_shut_up &= ~shut;
@@ -368,7 +366,7 @@ static ssize_t synth_show(struct kobject *kobj, struct kobj_attribute *attr,
 {
 	int rv;
 
-	if (!synth)
+	if (synth == NULL)
 		rv = sprintf(buf, "%s\n", "none");
 	else
 		rv = sprintf(buf, "%s\n", synth->name);
@@ -411,13 +409,11 @@ static ssize_t synth_direct_store(struct kobject *kobj,
 	int len;
 	int bytes;
 	const char *ptr = buf;
-	unsigned long flags;
 
 	if (!synth)
 		return -EPERM;
 
 	len = strlen(buf);
-	spin_lock_irqsave(&speakup_info.spinlock, flags);
 	while (len > 0) {
 		bytes = min_t(size_t, len, 250);
 		strncpy(tmp, ptr, bytes);
@@ -427,7 +423,6 @@ static ssize_t synth_direct_store(struct kobject *kobj,
 		ptr += bytes;
 		len -= bytes;
 	}
-	spin_unlock_irqrestore(&speakup_info.spinlock, flags);
 	return count;
 }
 
@@ -462,14 +457,14 @@ static ssize_t punc_show(struct kobject *kobj, struct kobj_attribute *attr,
 	unsigned long flags;
 
 	p_header = spk_var_header_by_name(attr->attr.name);
-	if (!p_header) {
+	if (p_header == NULL) {
 		pr_warn("p_header is null, attr->attr.name is %s\n",
 			attr->attr.name);
 		return -EINVAL;
 	}
 
 	var = spk_get_punc_var(p_header->var_id);
-	if (!var) {
+	if (var == NULL) {
 		pr_warn("var is null, p_header->var_id is %i\n",
 				p_header->var_id);
 		return -EINVAL;
@@ -504,14 +499,14 @@ static ssize_t punc_store(struct kobject *kobj, struct kobj_attribute *attr,
 		return -EINVAL;
 
 	p_header = spk_var_header_by_name(attr->attr.name);
-	if (!p_header) {
+	if (p_header == NULL) {
 		pr_warn("p_header is null, attr->attr.name is %s\n",
 			attr->attr.name);
 		return -EINVAL;
 	}
 
 	var = spk_get_punc_var(p_header->var_id);
-	if (!var) {
+	if (var == NULL) {
 		pr_warn("var is null, p_header->var_id is %i\n",
 				p_header->var_id);
 		return -EINVAL;
@@ -549,7 +544,7 @@ ssize_t spk_var_show(struct kobject *kobj, struct kobj_attribute *attr,
 	unsigned long flags;
 
 	param = spk_var_header_by_name(attr->attr.name);
-	if (!param)
+	if (param == NULL)
 		return -EINVAL;
 
 	spin_lock_irqsave(&speakup_info.spinlock, flags);
@@ -570,7 +565,7 @@ ssize_t spk_var_show(struct kobject *kobj, struct kobj_attribute *attr,
 				if (ch >= ' ' && ch < '~')
 					*cp1++ = ch;
 				else
-					cp1 += sprintf(cp1, "\\x%02x", ch);
+					cp1 += sprintf(cp1, "\\""x%02x", ch);
 			}
 			*cp1++ = '"';
 			*cp1++ = '\n';
@@ -625,9 +620,9 @@ ssize_t spk_var_store(struct kobject *kobj, struct kobj_attribute *attr,
 	unsigned long flags;
 
 	param = spk_var_header_by_name(attr->attr.name);
-	if (!param)
+	if (param == NULL)
 		return -EINVAL;
-	if (!param->data)
+	if (param->data == NULL)
 		return 0;
 	ret = 0;
 	cp = (char *)buf;
@@ -646,7 +641,7 @@ ssize_t spk_var_store(struct kobject *kobj, struct kobj_attribute *attr,
 		if (kstrtol(cp, 10, &value) == 0)
 			ret = spk_set_num_var(value, param, len);
 		else
-			pr_warn("overflow or parsing error has occurred");
+			pr_warn("overflow or parsing error has occured");
 		if (ret == -ERANGE) {
 			var_data = param->data;
 			pr_warn("value for %s out of range, expect %d to %d\n",
@@ -813,9 +808,9 @@ static ssize_t message_store_helper(const char *buf, size_t count,
 			if (msg_stored == -ENOMEM)
 				reset = 1;
 			break;
+		} else {
+			used++;
 		}
-
-		used++;
 
 		cp = linefeed + 1;
 	}
@@ -844,87 +839,87 @@ static ssize_t message_show(struct kobject *kobj,
 static ssize_t message_store(struct kobject *kobj, struct kobj_attribute *attr,
 	const char *buf, size_t count)
 {
+	ssize_t retval = 0;
 	struct msg_group_t *group = spk_find_msg_group(attr->attr.name);
 
 	BUG_ON(!group);
-	return message_store_helper(buf, count, group);
+	retval = message_store_helper(buf, count, group);
+	return retval;
 }
 
 /*
  * Declare the attributes.
  */
 static struct kobj_attribute keymap_attribute =
-	__ATTR_RW(keymap);
+	__ATTR(keymap, ROOT_W, keymap_show, keymap_store);
 static struct kobj_attribute silent_attribute =
-	__ATTR_WO(silent);
+	__ATTR(silent, USER_W, NULL, silent_store);
 static struct kobj_attribute synth_attribute =
-	__ATTR_RW(synth);
+	__ATTR(synth, USER_RW, synth_show, synth_store);
 static struct kobj_attribute synth_direct_attribute =
-	__ATTR_WO(synth_direct);
+	__ATTR(synth_direct, USER_W, NULL, synth_direct_store);
 static struct kobj_attribute version_attribute =
 	__ATTR_RO(version);
 
 static struct kobj_attribute delimiters_attribute =
-	__ATTR(delimiters, S_IWUSR | S_IRUGO, punc_show, punc_store);
+	__ATTR(delimiters, USER_RW, punc_show, punc_store);
 static struct kobj_attribute ex_num_attribute =
-	__ATTR(ex_num, S_IWUSR | S_IRUGO, punc_show, punc_store);
+	__ATTR(ex_num, USER_RW, punc_show, punc_store);
 static struct kobj_attribute punc_all_attribute =
-	__ATTR(punc_all, S_IWUSR | S_IRUGO, punc_show, punc_store);
+	__ATTR(punc_all, USER_RW, punc_show, punc_store);
 static struct kobj_attribute punc_most_attribute =
-	__ATTR(punc_most, S_IWUSR | S_IRUGO, punc_show, punc_store);
+	__ATTR(punc_most, USER_RW, punc_show, punc_store);
 static struct kobj_attribute punc_some_attribute =
-	__ATTR(punc_some, S_IWUSR | S_IRUGO, punc_show, punc_store);
+	__ATTR(punc_some, USER_RW, punc_show, punc_store);
 static struct kobj_attribute repeats_attribute =
-	__ATTR(repeats, S_IWUSR | S_IRUGO, punc_show, punc_store);
+	__ATTR(repeats, USER_RW, punc_show, punc_store);
 
 static struct kobj_attribute attrib_bleep_attribute =
-	__ATTR(attrib_bleep, S_IWUSR | S_IRUGO, spk_var_show, spk_var_store);
+	__ATTR(attrib_bleep, USER_RW, spk_var_show, spk_var_store);
 static struct kobj_attribute bell_pos_attribute =
-	__ATTR(bell_pos, S_IWUSR | S_IRUGO, spk_var_show, spk_var_store);
+	__ATTR(bell_pos, USER_RW, spk_var_show, spk_var_store);
 static struct kobj_attribute bleep_time_attribute =
-	__ATTR(bleep_time, S_IWUSR | S_IRUGO, spk_var_show, spk_var_store);
+	__ATTR(bleep_time, USER_RW, spk_var_show, spk_var_store);
 static struct kobj_attribute bleeps_attribute =
-	__ATTR(bleeps, S_IWUSR | S_IRUGO, spk_var_show, spk_var_store);
+	__ATTR(bleeps, USER_RW, spk_var_show, spk_var_store);
 static struct kobj_attribute cursor_time_attribute =
-	__ATTR(cursor_time, S_IWUSR | S_IRUGO, spk_var_show, spk_var_store);
+	__ATTR(cursor_time, USER_RW, spk_var_show, spk_var_store);
 static struct kobj_attribute key_echo_attribute =
-	__ATTR(key_echo, S_IWUSR | S_IRUGO, spk_var_show, spk_var_store);
+	__ATTR(key_echo, USER_RW, spk_var_show, spk_var_store);
 static struct kobj_attribute no_interrupt_attribute =
-	__ATTR(no_interrupt, S_IWUSR | S_IRUGO, spk_var_show, spk_var_store);
+	__ATTR(no_interrupt, USER_RW, spk_var_show, spk_var_store);
 static struct kobj_attribute punc_level_attribute =
-	__ATTR(punc_level, S_IWUSR | S_IRUGO, spk_var_show, spk_var_store);
+	__ATTR(punc_level, USER_RW, spk_var_show, spk_var_store);
 static struct kobj_attribute reading_punc_attribute =
-	__ATTR(reading_punc, S_IWUSR | S_IRUGO, spk_var_show, spk_var_store);
+	__ATTR(reading_punc, USER_RW, spk_var_show, spk_var_store);
 static struct kobj_attribute say_control_attribute =
-	__ATTR(say_control, S_IWUSR | S_IRUGO, spk_var_show, spk_var_store);
+	__ATTR(say_control, USER_RW, spk_var_show, spk_var_store);
 static struct kobj_attribute say_word_ctl_attribute =
-	__ATTR(say_word_ctl, S_IWUSR | S_IRUGO, spk_var_show, spk_var_store);
+	__ATTR(say_word_ctl, USER_RW, spk_var_show, spk_var_store);
 static struct kobj_attribute spell_delay_attribute =
-	__ATTR(spell_delay, S_IWUSR | S_IRUGO, spk_var_show, spk_var_store);
+	__ATTR(spell_delay, USER_RW, spk_var_show, spk_var_store);
 
 /*
  * These attributes are i18n related.
  */
 static struct kobj_attribute announcements_attribute =
-	__ATTR(announcements, S_IWUSR | S_IRUGO, message_show, message_store);
+	__ATTR(announcements, USER_RW, message_show, message_store);
 static struct kobj_attribute characters_attribute =
-	__ATTR(characters, S_IWUSR | S_IRUGO, chars_chartab_show,
-	       chars_chartab_store);
+	__ATTR(characters, USER_RW, chars_chartab_show, chars_chartab_store);
 static struct kobj_attribute chartab_attribute =
-	__ATTR(chartab, S_IWUSR | S_IRUGO, chars_chartab_show,
-	       chars_chartab_store);
+	__ATTR(chartab, USER_RW, chars_chartab_show, chars_chartab_store);
 static struct kobj_attribute ctl_keys_attribute =
-	__ATTR(ctl_keys, S_IWUSR | S_IRUGO, message_show, message_store);
+	__ATTR(ctl_keys, USER_RW, message_show, message_store);
 static struct kobj_attribute colors_attribute =
-	__ATTR(colors, S_IWUSR | S_IRUGO, message_show, message_store);
+	__ATTR(colors, USER_RW, message_show, message_store);
 static struct kobj_attribute formatted_attribute =
-	__ATTR(formatted, S_IWUSR | S_IRUGO, message_show, message_store);
+	__ATTR(formatted, USER_RW, message_show, message_store);
 static struct kobj_attribute function_names_attribute =
-	__ATTR(function_names, S_IWUSR | S_IRUGO, message_show, message_store);
+	__ATTR(function_names, USER_RW, message_show, message_store);
 static struct kobj_attribute key_names_attribute =
-	__ATTR(key_names, S_IWUSR | S_IRUGO, message_show, message_store);
+	__ATTR(key_names, USER_RW, message_show, message_store);
 static struct kobj_attribute states_attribute =
-	__ATTR(states, S_IWUSR | S_IRUGO, message_show, message_store);
+	__ATTR(states, USER_RW, message_show, message_store);
 
 /*
  * Create groups of attributes so that we can create and destroy them all
@@ -976,11 +971,11 @@ static struct attribute *i18n_attrs[] = {
  * created for the attributes with the directory being the name of the
  * attribute group.
  */
-static const struct attribute_group main_attr_group = {
+static struct attribute_group main_attr_group = {
 	.attrs = main_attrs,
 };
 
-static const struct attribute_group i18n_attr_group = {
+static struct attribute_group i18n_attr_group = {
 	.attrs = i18n_attrs,
 	.name = "i18n",
 };

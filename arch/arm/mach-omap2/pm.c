@@ -32,13 +32,11 @@
 #include "pm.h"
 #include "twl-common.h"
 
-#ifdef CONFIG_SUSPEND
 /*
  * omap_pm_suspend: points to a function that does the SoC-specific
  * suspend work
  */
-static int (*omap_pm_suspend)(void);
-#endif
+int (*omap_pm_suspend)(void);
 
 #ifdef CONFIG_PM
 /**
@@ -110,7 +108,13 @@ static void __init omap2_init_processor_devices(void)
 
 int __init omap_pm_clkdms_setup(struct clockdomain *clkdm, void *unused)
 {
-	clkdm_allow_idle(clkdm);
+	/* XXX The usecount test is racy */
+	if ((clkdm->flags & CLKDM_CAN_ENABLE_AUTO) &&
+	    !(clkdm->flags & CLKDM_MISSING_IDLE_REPORTING))
+		clkdm_allow_idle(clkdm);
+	else if (clkdm->flags & CLKDM_CAN_FORCE_SLEEP &&
+		 clkdm->usecount == 0)
+		clkdm_sleep(clkdm);
 	return 0;
 }
 
@@ -239,15 +243,6 @@ static const struct platform_suspend_ops omap_pm_ops = {
 	.valid		= suspend_valid_only_mem,
 };
 
-/**
- * omap_common_suspend_init - Set common suspend routines for OMAP SoCs
- * @pm_suspend: function pointer to SoC specific suspend function
- */
-void omap_common_suspend_init(void *pm_suspend)
-{
-	omap_pm_suspend = pm_suspend;
-	suspend_set_ops(&omap_pm_ops);
-}
 #endif /* CONFIG_SUSPEND */
 
 static void __init omap3_init_voltages(void)
@@ -271,10 +266,13 @@ static void __init omap4_init_voltages(void)
 
 static inline void omap_init_cpufreq(void)
 {
-	struct platform_device_info devinfo = { .name = "omap-cpufreq" };
+	struct platform_device_info devinfo = { };
 
 	if (!of_have_populated_dt())
-		platform_device_register_full(&devinfo);
+		devinfo.name = "omap-cpufreq";
+	else
+		devinfo.name = "cpufreq-cpu0";
+	platform_device_register_full(&devinfo);
 }
 
 static int __init omap2_common_pm_init(void)
@@ -289,24 +287,32 @@ omap_postcore_initcall(omap2_common_pm_init);
 
 int __init omap2_common_pm_late_init(void)
 {
-	if (of_have_populated_dt()) {
-		omap3_twl_init();
-		omap4_twl_init();
+	/*
+	 * In the case of DT, the PMIC and SR initialization will be done using
+	 * a completely different mechanism.
+	 * Disable this part if a DT blob is available.
+	 */
+	if (!of_have_populated_dt()) {
+
+		/* Init the voltage layer */
+		omap_pmic_late_init();
+		omap_voltage_late_init();
+
+		/* Initialize the voltages */
+		omap3_init_voltages();
+		omap4_init_voltages();
+
+		/* Smartreflex device init */
+		omap_devinit_smartreflex();
+
 	}
-
-	/* Init the voltage layer */
-	omap_pmic_late_init();
-	omap_voltage_late_init();
-
-	/* Initialize the voltages */
-	omap3_init_voltages();
-	omap4_init_voltages();
-
-	/* Smartreflex device init */
-	omap_devinit_smartreflex();
 
 	/* cpufreq dummy device instantiation */
 	omap_init_cpufreq();
+
+#ifdef CONFIG_SUSPEND
+	suspend_set_ops(&omap_pm_ops);
+#endif
 
 	return 0;
 }

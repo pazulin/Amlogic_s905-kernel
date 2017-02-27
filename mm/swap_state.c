@@ -17,6 +17,7 @@
 #include <linux/blkdev.h>
 #include <linux/pagevec.h>
 #include <linux/migrate.h>
+#include <linux/page_cgroup.h>
 
 #include <asm/pgtable.h>
 
@@ -27,18 +28,19 @@
 static const struct address_space_operations swap_aops = {
 	.writepage	= swap_writepage,
 	.set_page_dirty	= swap_set_page_dirty,
-#ifdef CONFIG_MIGRATION
 	.migratepage	= migrate_page,
-#endif
+};
+
+static struct backing_dev_info swap_backing_dev_info = {
+	.name		= "swap",
+	.capabilities	= BDI_CAP_NO_ACCT_AND_WRITEBACK | BDI_CAP_SWAP_BACKED,
 };
 
 struct address_space swapper_spaces[MAX_SWAPFILES] = {
 	[0 ... MAX_SWAPFILES - 1] = {
 		.page_tree	= RADIX_TREE_INIT(GFP_ATOMIC|__GFP_NOWARN),
-		.i_mmap_writable = ATOMIC_INIT(0),
 		.a_ops		= &swap_aops,
-		/* swap cache doesn't use writeback related tags */
-		.flags		= 1 << AS_NO_WRITEBACK_TAGS,
+		.backing_dev_info = &swap_backing_dev_info,
 	}
 };
 
@@ -87,17 +89,17 @@ int __add_to_swap_cache(struct page *page, swp_entry_t entry)
 	VM_BUG_ON_PAGE(PageSwapCache(page), page);
 	VM_BUG_ON_PAGE(!PageSwapBacked(page), page);
 
-	get_page(page);
+	page_cache_get(page);
 	SetPageSwapCache(page);
 	set_page_private(page, entry.val);
 
 	address_space = swap_address_space(entry);
 	spin_lock_irq(&address_space->tree_lock);
 	error = radix_tree_insert(&address_space->page_tree,
-				  swp_offset(entry), page);
+					entry.val, page);
 	if (likely(!error)) {
 		address_space->nrpages++;
-		__inc_node_page_state(page, NR_FILE_PAGES);
+		__inc_zone_page_state(page, NR_FILE_PAGES);
 		INC_CACHE_INFO(add_total);
 	}
 	spin_unlock_irq(&address_space->tree_lock);
@@ -111,16 +113,42 @@ int __add_to_swap_cache(struct page *page, swp_entry_t entry)
 		VM_BUG_ON(error == -EEXIST);
 		set_page_private(page, 0UL);
 		ClearPageSwapCache(page);
-		put_page(page);
+		page_cache_release(page);
 	}
 
 	return error;
 }
 
-
+#define COMPRESS_PREV_USE 1
+struct prev_use {
+	unsigned long cmpr_len;
+	struct page *page;
+};
 int add_to_swap_cache(struct page *page, swp_entry_t entry, gfp_t gfp_mask)
 {
 	int error;
+#if COMPRESS_PREV_USE
+	unsigned long cmpr_len;
+	struct prev_use prev_use;
+	struct block_device *bdev = NULL;
+	struct swap_info_struct *sis = NULL;
+	sis = swap_info_get(entry);
+	if (sis) {
+		if (sis->flags & SWP_BLKDEV) {
+			struct gendisk *disk = sis->bdev->bd_disk;
+			spin_unlock(&sis->lock);
+			if (disk && disk->fops->ioctl) {
+				prev_use.page = page;
+				disk->fops->ioctl(bdev, 80, 0,
+						 (unsigned long)&prev_use);
+				cmpr_len = prev_use.cmpr_len;
+				cmpr_len += cmpr_len >> 1;
+				if (cmpr_len > PAGE_SIZE)
+					return -EINVAL;
+			}
+		}
+	}
+#endif
 
 	error = radix_tree_maybe_preload(gfp_mask);
 	if (!error) {
@@ -145,11 +173,11 @@ void __delete_from_swap_cache(struct page *page)
 
 	entry.val = page_private(page);
 	address_space = swap_address_space(entry);
-	radix_tree_delete(&address_space->page_tree, swp_offset(entry));
+	radix_tree_delete(&address_space->page_tree, page_private(page));
 	set_page_private(page, 0);
 	ClearPageSwapCache(page);
 	address_space->nrpages--;
-	__dec_node_page_state(page, NR_FILE_PAGES);
+	__dec_zone_page_state(page, NR_FILE_PAGES);
 	INC_CACHE_INFO(del_total);
 }
 
@@ -158,7 +186,7 @@ void __delete_from_swap_cache(struct page *page)
  * @page: page we want to move to swap
  *
  * Allocate swap space for the page and add the page to the
- * swap cache.  Caller needs to hold the page lock. 
+ * swap cache.  Caller needs to hold the page lock.
  */
 int add_to_swap(struct page *page, struct list_head *list)
 {
@@ -172,14 +200,9 @@ int add_to_swap(struct page *page, struct list_head *list)
 	if (!entry.val)
 		return 0;
 
-	if (mem_cgroup_try_charge_swap(page, entry)) {
-		swapcache_free(entry);
-		return 0;
-	}
-
 	if (unlikely(PageTransHuge(page)))
 		if (unlikely(split_huge_page_to_list(page, list))) {
-			swapcache_free(entry);
+			swapcache_free(entry, NULL);
 			return 0;
 		}
 
@@ -192,19 +215,20 @@ int add_to_swap(struct page *page, struct list_head *list)
 	 * deadlock in the swap out path.
 	 */
 	/*
-	 * Add it to the swap cache.
+	 * Add it to the swap cache and mark it dirty
 	 */
 	err = add_to_swap_cache(page, entry,
 			__GFP_HIGH|__GFP_NOMEMALLOC|__GFP_NOWARN);
 
-	if (!err) {
+	if (!err) {	/* Success */
+		SetPageDirty(page);
 		return 1;
 	} else {	/* -ENOMEM radix-tree allocation failure */
 		/*
 		 * add_to_swap_cache() doesn't return -EEXIST, so we can safely
 		 * clear SWAP_HAS_CACHE flag.
 		 */
-		swapcache_free(entry);
+		swapcache_free(entry, NULL);
 		return 0;
 	}
 }
@@ -227,13 +251,13 @@ void delete_from_swap_cache(struct page *page)
 	__delete_from_swap_cache(page);
 	spin_unlock_irq(&address_space->tree_lock);
 
-	swapcache_free(entry);
-	put_page(page);
+	swapcache_free(entry, page);
+	page_cache_release(page);
 }
 
-/* 
- * If we are the only user, then try to free up the swap cache. 
- * 
+/*
+ * If we are the only user, then try to free up the swap cache.
+ *
  * Its ok to check for PageSwapCache without the page lock
  * here because we are going to recheck again inside
  * try_to_free_swap() _with_ the lock.
@@ -247,15 +271,14 @@ static inline void free_swap_cache(struct page *page)
 	}
 }
 
-/* 
+/*
  * Perform a free_page(), also freeing any swap cache associated with
  * this page if it is the last user of the page.
  */
 void free_page_and_swap_cache(struct page *page)
 {
 	free_swap_cache(page);
-	if (!is_huge_zero_page(page))
-		put_page(page);
+	page_cache_release(page);
 }
 
 /*
@@ -265,12 +288,18 @@ void free_page_and_swap_cache(struct page *page)
 void free_pages_and_swap_cache(struct page **pages, int nr)
 {
 	struct page **pagep = pages;
-	int i;
 
 	lru_add_drain();
-	for (i = 0; i < nr; i++)
-		free_swap_cache(pagep[i]);
-	release_pages(pagep, nr, false);
+	while (nr) {
+		int todo = min(nr, PAGEVEC_SIZE);
+		int i;
+
+		for (i = 0; i < todo; i++)
+			free_swap_cache(pagep[i]);
+		release_pages(pagep, todo, 0);
+		pagep += todo;
+		nr -= todo;
+	}
 }
 
 /*
@@ -283,7 +312,7 @@ struct page * lookup_swap_cache(swp_entry_t entry)
 {
 	struct page *page;
 
-	page = find_get_page(swap_address_space(entry), swp_offset(entry));
+	page = find_get_page(swap_address_space(entry), entry.val);
 
 	if (page) {
 		INC_CACHE_INFO(find_success);
@@ -295,14 +324,18 @@ struct page * lookup_swap_cache(swp_entry_t entry)
 	return page;
 }
 
-struct page *__read_swap_cache_async(swp_entry_t entry, gfp_t gfp_mask,
-			struct vm_area_struct *vma, unsigned long addr,
-			bool *new_page_allocated)
+/*
+ * Locate a page of swap in physical memory, reserving swap cache space
+ * and reading the disk if it is not already cached.
+ * A failure return means that either the page allocation failed or that
+ * the swap entry is no longer in use.
+ */
+struct page *read_swap_cache_async(swp_entry_t entry, gfp_t gfp_mask,
+			struct vm_area_struct *vma, unsigned long addr)
 {
 	struct page *found_page, *new_page = NULL;
-	struct address_space *swapper_space = swap_address_space(entry);
 	int err;
-	*new_page_allocated = false;
+	bool has_cma = false;
 
 	do {
 		/*
@@ -310,7 +343,8 @@ struct page *__read_swap_cache_async(swp_entry_t entry, gfp_t gfp_mask,
 		 * called after lookup_swap_cache() failed, re-calling
 		 * that would confuse statistics.
 		 */
-		found_page = find_get_page(swapper_space, swp_offset(entry));
+		found_page = find_get_page(swap_address_space(entry),
+					entry.val);
 		if (found_page)
 			break;
 
@@ -322,6 +356,8 @@ struct page *__read_swap_cache_async(swp_entry_t entry, gfp_t gfp_mask,
 			if (!new_page)
 				break;		/* Out of memory */
 		}
+		if (!has_cma)
+			has_cma = has_cma_page(new_page);
 
 		/*
 		 * call radix_tree_preload() while we can wait.
@@ -360,8 +396,8 @@ struct page *__read_swap_cache_async(swp_entry_t entry, gfp_t gfp_mask,
 		}
 
 		/* May fail (-ENOMEM) if radix-tree node allocation failed. */
-		__SetPageLocked(new_page);
-		__SetPageSwapBacked(new_page);
+		__set_page_locked(new_page);
+		SetPageSwapBacked(new_page);
 		err = __add_to_swap_cache(new_page, entry);
 		if (likely(!err)) {
 			radix_tree_preload_end();
@@ -369,40 +405,25 @@ struct page *__read_swap_cache_async(swp_entry_t entry, gfp_t gfp_mask,
 			 * Initiate read into locked page and return.
 			 */
 			lru_cache_add_anon(new_page);
-			*new_page_allocated = true;
+			swap_readpage(new_page);
+			wakeup_wq(has_cma);
 			return new_page;
 		}
 		radix_tree_preload_end();
-		__ClearPageLocked(new_page);
+		ClearPageSwapBacked(new_page);
+		__clear_page_locked(new_page);
 		/*
 		 * add_to_swap_cache() doesn't return -EEXIST, so we can safely
 		 * clear SWAP_HAS_CACHE flag.
 		 */
-		swapcache_free(entry);
+		swapcache_free(entry, NULL);
 	} while (err != -ENOMEM);
 
-	if (new_page)
-		put_page(new_page);
+	if (new_page) {
+		wakeup_wq(has_cma);
+		page_cache_release(new_page);
+	}
 	return found_page;
-}
-
-/*
- * Locate a page of swap in physical memory, reserving swap cache space
- * and reading the disk if it is not already cached.
- * A failure return means that either the page allocation failed or that
- * the swap entry is no longer in use.
- */
-struct page *read_swap_cache_async(swp_entry_t entry, gfp_t gfp_mask,
-			struct vm_area_struct *vma, unsigned long addr)
-{
-	bool page_was_allocated;
-	struct page *retpage = __read_swap_cache_async(entry, gfp_mask,
-			vma, addr, &page_was_allocated);
-
-	if (page_was_allocated)
-		swap_readpage(retpage);
-
-	return retpage;
 }
 
 static unsigned long swapin_nr_pages(unsigned long offset)
@@ -411,7 +432,7 @@ static unsigned long swapin_nr_pages(unsigned long offset)
 	unsigned int pages, max_pages, last_ra;
 	static atomic_t last_readahead_pages;
 
-	max_pages = 1 << READ_ONCE(page_cluster);
+	max_pages = 1 << ACCESS_ONCE(page_cluster);
 	if (max_pages <= 1)
 		return 1;
 
@@ -497,7 +518,7 @@ struct page *swapin_readahead(swp_entry_t entry, gfp_t gfp_mask,
 			continue;
 		if (offset != entry_offset)
 			SetPageReadahead(page);
-		put_page(page);
+		page_cache_release(page);
 	}
 	blk_finish_plug(&plug);
 

@@ -38,6 +38,7 @@ void rtsx_stor_get_xfer_buf(unsigned char *buffer,
 	unsigned int buflen, struct scsi_cmnd *srb);
 void rtsx_invoke_transport(struct scsi_cmnd *srb, struct rtsx_chip *chip);
 
+
 #define rtsx_init_cmd(chip)			((chip)->ci = 0)
 
 void rtsx_add_cmd(struct rtsx_chip *chip,
@@ -45,7 +46,7 @@ void rtsx_add_cmd(struct rtsx_chip *chip,
 void rtsx_send_cmd_no_wait(struct rtsx_chip *chip);
 int rtsx_send_cmd(struct rtsx_chip *chip, u8 card, int timeout);
 
-static inline u8 *rtsx_get_cmd_data(struct rtsx_chip *chip)
+extern inline u8 *rtsx_get_cmd_data(struct rtsx_chip *chip)
 {
 #ifdef CMD_USING_SG
 	return (u8 *)(chip->host_sg_tbl_ptr);

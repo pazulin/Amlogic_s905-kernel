@@ -19,6 +19,7 @@
 
 #include <sound/soc.h>
 
+#include <mach/dma.h>
 #include "regs-ac97.h"
 #include <linux/platform_data/asoc-s3c.h>
 
@@ -38,16 +39,31 @@ struct s3c_ac97_info {
 };
 static struct s3c_ac97_info s3c_ac97;
 
-static struct snd_dmaengine_dai_dma_data s3c_ac97_pcm_out = {
-	.addr_width	= 4,
+static struct s3c2410_dma_client s3c_dma_client_out = {
+	.name = "AC97 PCMOut"
 };
 
-static struct snd_dmaengine_dai_dma_data s3c_ac97_pcm_in = {
-	.addr_width	= 4,
+static struct s3c2410_dma_client s3c_dma_client_in = {
+	.name = "AC97 PCMIn"
 };
 
-static struct snd_dmaengine_dai_dma_data s3c_ac97_mic_in = {
-	.addr_width	= 4,
+static struct s3c2410_dma_client s3c_dma_client_micin = {
+	.name = "AC97 MicIn"
+};
+
+static struct s3c_dma_params s3c_ac97_pcm_out = {
+	.client		= &s3c_dma_client_out,
+	.dma_size	= 4,
+};
+
+static struct s3c_dma_params s3c_ac97_pcm_in = {
+	.client		= &s3c_dma_client_in,
+	.dma_size	= 4,
+};
+
+static struct s3c_dma_params s3c_ac97_mic_in = {
+	.client		= &s3c_dma_client_micin,
+	.dma_size	= 4,
 };
 
 static void s3c_ac97_activate(struct snd_ac97 *ac97)
@@ -74,7 +90,7 @@ static void s3c_ac97_activate(struct snd_ac97 *ac97)
 	writel(ac_glbctrl, s3c_ac97.regs + S3C_AC97_GLBCTRL);
 
 	if (!wait_for_completion_timeout(&s3c_ac97.done, HZ))
-		pr_err("AC97: Unable to activate!\n");
+		pr_err("AC97: Unable to activate!");
 }
 
 static unsigned short s3c_ac97_read(struct snd_ac97 *ac97,
@@ -100,7 +116,7 @@ static unsigned short s3c_ac97_read(struct snd_ac97 *ac97,
 	writel(ac_glbctrl, s3c_ac97.regs + S3C_AC97_GLBCTRL);
 
 	if (!wait_for_completion_timeout(&s3c_ac97.done, HZ))
-		pr_err("AC97: Unable to read!\n");
+		pr_err("AC97: Unable to read!");
 
 	stat = readl(s3c_ac97.regs + S3C_AC97_STAT);
 	addr = (stat >> 16) & 0x7f;
@@ -137,7 +153,7 @@ static void s3c_ac97_write(struct snd_ac97 *ac97, unsigned short reg,
 	writel(ac_glbctrl, s3c_ac97.regs + S3C_AC97_GLBCTRL);
 
 	if (!wait_for_completion_timeout(&s3c_ac97.done, HZ))
-		pr_err("AC97: Unable to write!\n");
+		pr_err("AC97: Unable to write!");
 
 	ac_codec_cmd = readl(s3c_ac97.regs + S3C_AC97_CODEC_CMD);
 	ac_codec_cmd |= S3C_AC97_CODEC_CMD_READ;
@@ -209,6 +225,9 @@ static int s3c_ac97_trigger(struct snd_pcm_substream *substream, int cmd,
 				struct snd_soc_dai *dai)
 {
 	u32 ac_glbctrl;
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct s3c_dma_params *dma_data =
+		snd_soc_dai_get_dma_data(rtd->cpu_dai, substream);
 
 	ac_glbctrl = readl(s3c_ac97.regs + S3C_AC97_GLBCTRL);
 	if (substream->stream == SNDRV_PCM_STREAM_CAPTURE)
@@ -234,6 +253,11 @@ static int s3c_ac97_trigger(struct snd_pcm_substream *substream, int cmd,
 
 	writel(ac_glbctrl, s3c_ac97.regs + S3C_AC97_GLBCTRL);
 
+	if (!dma_data->ops)
+		dma_data->ops = samsung_dma_get_ops();
+
+	dma_data->ops->started(dma_data->channel);
+
 	return 0;
 }
 
@@ -241,6 +265,9 @@ static int s3c_ac97_mic_trigger(struct snd_pcm_substream *substream,
 				    int cmd, struct snd_soc_dai *dai)
 {
 	u32 ac_glbctrl;
+	struct snd_soc_pcm_runtime *rtd = substream->private_data;
+	struct s3c_dma_params *dma_data =
+		snd_soc_dai_get_dma_data(rtd->cpu_dai, substream);
 
 	ac_glbctrl = readl(s3c_ac97.regs + S3C_AC97_GLBCTRL);
 	ac_glbctrl &= ~S3C_AC97_GLBCTRL_MICINTM_MASK;
@@ -260,6 +287,11 @@ static int s3c_ac97_mic_trigger(struct snd_pcm_substream *substream,
 
 	writel(ac_glbctrl, s3c_ac97.regs + S3C_AC97_GLBCTRL);
 
+	if (!dma_data->ops)
+		dma_data->ops = samsung_dma_get_ops();
+
+	dma_data->ops->started(dma_data->channel);
+
 	return 0;
 }
 
@@ -273,14 +305,14 @@ static const struct snd_soc_dai_ops s3c_ac97_mic_dai_ops = {
 
 static int s3c_ac97_dai_probe(struct snd_soc_dai *dai)
 {
-	snd_soc_dai_init_dma_data(dai, &s3c_ac97_pcm_out, &s3c_ac97_pcm_in);
+	samsung_asoc_init_dma_data(dai, &s3c_ac97_pcm_out, &s3c_ac97_pcm_in);
 
 	return 0;
 }
 
 static int s3c_ac97_mic_dai_probe(struct snd_soc_dai *dai)
 {
-	snd_soc_dai_init_dma_data(dai, NULL, &s3c_ac97_mic_in);
+	samsung_asoc_init_dma_data(dai, NULL, &s3c_ac97_mic_in);
 
 	return 0;
 }
@@ -288,7 +320,7 @@ static int s3c_ac97_mic_dai_probe(struct snd_soc_dai *dai)
 static struct snd_soc_dai_driver s3c_ac97_dai[] = {
 	[S3C_AC97_DAI_PCM] = {
 		.name =	"samsung-ac97",
-		.bus_control = true,
+		.ac97_control = 1,
 		.playback = {
 			.stream_name = "AC97 Playback",
 			.channels_min = 2,
@@ -306,7 +338,7 @@ static struct snd_soc_dai_driver s3c_ac97_dai[] = {
 	},
 	[S3C_AC97_DAI_MIC] = {
 		.name = "samsung-ac97-mic",
-		.bus_control = true,
+		.ac97_control = 1,
 		.capture = {
 			.stream_name = "AC97 Mic Capture",
 			.channels_min = 1,
@@ -324,7 +356,7 @@ static const struct snd_soc_component_driver s3c_ac97_component = {
 
 static int s3c_ac97_probe(struct platform_device *pdev)
 {
-	struct resource *mem_res, *irq_res;
+	struct resource *mem_res, *dmatx_res, *dmarx_res, *dmamic_res, *irq_res;
 	struct s3c_audio_pdata *ac97_pdata;
 	int ret;
 
@@ -335,6 +367,24 @@ static int s3c_ac97_probe(struct platform_device *pdev)
 	}
 
 	/* Check for availability of necessary resource */
+	dmatx_res = platform_get_resource(pdev, IORESOURCE_DMA, 0);
+	if (!dmatx_res) {
+		dev_err(&pdev->dev, "Unable to get AC97-TX dma resource\n");
+		return -ENXIO;
+	}
+
+	dmarx_res = platform_get_resource(pdev, IORESOURCE_DMA, 1);
+	if (!dmarx_res) {
+		dev_err(&pdev->dev, "Unable to get AC97-RX dma resource\n");
+		return -ENXIO;
+	}
+
+	dmamic_res = platform_get_resource(pdev, IORESOURCE_DMA, 2);
+	if (!dmamic_res) {
+		dev_err(&pdev->dev, "Unable to get AC97-MIC dma resource\n");
+		return -ENXIO;
+	}
+
 	irq_res = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
 	if (!irq_res) {
 		dev_err(&pdev->dev, "AC97 IRQ not provided!\n");
@@ -346,12 +396,12 @@ static int s3c_ac97_probe(struct platform_device *pdev)
 	if (IS_ERR(s3c_ac97.regs))
 		return PTR_ERR(s3c_ac97.regs);
 
-	s3c_ac97_pcm_out.filter_data = ac97_pdata->dma_playback;
-	s3c_ac97_pcm_out.addr = mem_res->start + S3C_AC97_PCM_DATA;
-	s3c_ac97_pcm_in.filter_data = ac97_pdata->dma_capture;
-	s3c_ac97_pcm_in.addr = mem_res->start + S3C_AC97_PCM_DATA;
-	s3c_ac97_mic_in.filter_data = ac97_pdata->dma_capture_mic;
-	s3c_ac97_mic_in.addr = mem_res->start + S3C_AC97_MIC_DATA;
+	s3c_ac97_pcm_out.channel = dmatx_res->start;
+	s3c_ac97_pcm_out.dma_addr = mem_res->start + S3C_AC97_PCM_DATA;
+	s3c_ac97_pcm_in.channel = dmarx_res->start;
+	s3c_ac97_pcm_in.dma_addr = mem_res->start + S3C_AC97_PCM_DATA;
+	s3c_ac97_mic_in.channel = dmamic_res->start;
+	s3c_ac97_mic_in.dma_addr = mem_res->start + S3C_AC97_MIC_DATA;
 
 	init_completion(&s3c_ac97.done);
 	mutex_init(&s3c_ac97.lock);
@@ -383,20 +433,20 @@ static int s3c_ac97_probe(struct platform_device *pdev)
 		goto err4;
 	}
 
-	ret = samsung_asoc_dma_platform_register(&pdev->dev,
-						 ac97_pdata->dma_filter,
-						 NULL, NULL);
-	if (ret) {
-		dev_err(&pdev->dev, "failed to get register DMA: %d\n", ret);
-		goto err5;
-	}
-
-	ret = devm_snd_soc_register_component(&pdev->dev, &s3c_ac97_component,
+	ret = snd_soc_register_component(&pdev->dev, &s3c_ac97_component,
 					 s3c_ac97_dai, ARRAY_SIZE(s3c_ac97_dai));
 	if (ret)
 		goto err5;
 
+	ret = samsung_asoc_dma_platform_register(&pdev->dev);
+	if (ret) {
+		dev_err(&pdev->dev, "failed to get register DMA: %d\n", ret);
+		goto err6;
+	}
+
 	return 0;
+err6:
+	snd_soc_unregister_component(&pdev->dev);
 err5:
 	free_irq(irq_res->start, NULL);
 err4:
@@ -410,6 +460,9 @@ err2:
 static int s3c_ac97_remove(struct platform_device *pdev)
 {
 	struct resource *irq_res;
+
+	samsung_asoc_dma_platform_unregister(&pdev->dev);
+	snd_soc_unregister_component(&pdev->dev);
 
 	irq_res = platform_get_resource(pdev, IORESOURCE_IRQ, 0);
 	if (irq_res)
@@ -426,6 +479,7 @@ static struct platform_driver s3c_ac97_driver = {
 	.remove = s3c_ac97_remove,
 	.driver = {
 		.name = "samsung-ac97",
+		.owner = THIS_MODULE,
 	},
 };
 

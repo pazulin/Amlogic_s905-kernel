@@ -59,7 +59,7 @@ int gma_pipe_set_base(struct drm_crtc *crtc, int x, int y,
 	struct drm_device *dev = crtc->dev;
 	struct drm_psb_private *dev_priv = dev->dev_private;
 	struct gma_crtc *gma_crtc = to_gma_crtc(crtc);
-	struct psb_framebuffer *psbfb = to_psb_fb(crtc->primary->fb);
+	struct psb_framebuffer *psbfb = to_psb_fb(crtc->fb);
 	int pipe = gma_crtc->pipe;
 	const struct psb_offset *map = &dev_priv->regmap[pipe];
 	unsigned long start, offset;
@@ -70,7 +70,7 @@ int gma_pipe_set_base(struct drm_crtc *crtc, int x, int y,
 		return 0;
 
 	/* no fb bound */
-	if (!crtc->primary->fb) {
+	if (!crtc->fb) {
 		dev_err(dev->dev, "No FB bound\n");
 		goto gma_pipe_cleaner;
 	}
@@ -81,19 +81,19 @@ int gma_pipe_set_base(struct drm_crtc *crtc, int x, int y,
 	if (ret < 0)
 		goto gma_pipe_set_base_exit;
 	start = psbfb->gtt->offset;
-	offset = y * crtc->primary->fb->pitches[0] + x * (crtc->primary->fb->bits_per_pixel / 8);
+	offset = y * crtc->fb->pitches[0] + x * (crtc->fb->bits_per_pixel / 8);
 
-	REG_WRITE(map->stride, crtc->primary->fb->pitches[0]);
+	REG_WRITE(map->stride, crtc->fb->pitches[0]);
 
 	dspcntr = REG_READ(map->cntr);
 	dspcntr &= ~DISPPLANE_PIXFORMAT_MASK;
 
-	switch (crtc->primary->fb->bits_per_pixel) {
+	switch (crtc->fb->bits_per_pixel) {
 	case 8:
 		dspcntr |= DISPPLANE_8BPP;
 		break;
 	case 16:
-		if (crtc->primary->fb->depth == 15)
+		if (crtc->fb->depth == 15)
 			dspcntr |= DISPPLANE_15_16BPP;
 		else
 			dspcntr |= DISPPLANE_16BPP;
@@ -175,21 +175,20 @@ void gma_crtc_load_lut(struct drm_crtc *crtc)
 	}
 }
 
-int gma_crtc_gamma_set(struct drm_crtc *crtc, u16 *red, u16 *green, u16 *blue,
-		       u32 size)
+void gma_crtc_gamma_set(struct drm_crtc *crtc, u16 *red, u16 *green, u16 *blue,
+			u32 start, u32 size)
 {
 	struct gma_crtc *gma_crtc = to_gma_crtc(crtc);
 	int i;
+	int end = (start + size > 256) ? 256 : start + size;
 
-	for (i = 0; i < size; i++) {
+	for (i = start; i < end; i++) {
 		gma_crtc->lut_r[i] = red[i] >> 8;
 		gma_crtc->lut_g[i] = green[i] >> 8;
 		gma_crtc->lut_b[i] = blue[i] >> 8;
 	}
 
 	gma_crtc_load_lut(crtc);
-
-	return 0;
 }
 
 /**
@@ -282,7 +281,7 @@ void gma_crtc_dpms(struct drm_crtc *crtc, int mode)
 		REG_WRITE(VGACNTRL, VGA_DISP_DISABLE);
 
 		/* Turn off vblank interrupts */
-		drm_crtc_vblank_off(crtc);
+		drm_vblank_off(dev, pipe);
 
 		/* Wait for vblank for the disable to take effect */
 		gma_wait_for_vblank(dev);
@@ -350,6 +349,8 @@ int gma_crtc_cursor_set(struct drm_crtc *crtc,
 	/* If we didn't get a handle then turn the cursor off */
 	if (!handle) {
 		temp = CURSOR_MODE_DISABLE;
+		mutex_lock(&dev->struct_mutex);
+
 		if (gma_power_begin(dev, false)) {
 			REG_WRITE(control, temp);
 			REG_WRITE(base, 0);
@@ -361,9 +362,11 @@ int gma_crtc_cursor_set(struct drm_crtc *crtc,
 			gt = container_of(gma_crtc->cursor_obj,
 					  struct gtt_range, gem);
 			psb_gtt_unpin(gt);
-			drm_gem_object_unreference_unlocked(gma_crtc->cursor_obj);
+			drm_gem_object_unreference(gma_crtc->cursor_obj);
 			gma_crtc->cursor_obj = NULL;
 		}
+
+		mutex_unlock(&dev->struct_mutex);
 		return 0;
 	}
 
@@ -373,7 +376,8 @@ int gma_crtc_cursor_set(struct drm_crtc *crtc,
 		return -EINVAL;
 	}
 
-	obj = drm_gem_object_lookup(file_priv, handle);
+	mutex_lock(&dev->struct_mutex);
+	obj = drm_gem_object_lookup(dev, file_priv, handle);
 	if (!obj) {
 		ret = -ENOENT;
 		goto unlock;
@@ -437,15 +441,17 @@ int gma_crtc_cursor_set(struct drm_crtc *crtc,
 	if (gma_crtc->cursor_obj) {
 		gt = container_of(gma_crtc->cursor_obj, struct gtt_range, gem);
 		psb_gtt_unpin(gt);
-		drm_gem_object_unreference_unlocked(gma_crtc->cursor_obj);
+		drm_gem_object_unreference(gma_crtc->cursor_obj);
 	}
 
 	gma_crtc->cursor_obj = obj;
 unlock:
+	mutex_unlock(&dev->struct_mutex);
 	return ret;
 
 unref_cursor:
-	drm_gem_object_unreference_unlocked(obj);
+	drm_gem_object_unreference(obj);
+	mutex_unlock(&dev->struct_mutex);
 	return ret;
 }
 
@@ -479,27 +485,34 @@ int gma_crtc_cursor_move(struct drm_crtc *crtc, int x, int y)
 	return 0;
 }
 
+bool gma_crtc_mode_fixup(struct drm_crtc *crtc,
+			 const struct drm_display_mode *mode,
+			 struct drm_display_mode *adjusted_mode)
+{
+	return true;
+}
+
 void gma_crtc_prepare(struct drm_crtc *crtc)
 {
-	const struct drm_crtc_helper_funcs *crtc_funcs = crtc->helper_private;
+	struct drm_crtc_helper_funcs *crtc_funcs = crtc->helper_private;
 	crtc_funcs->dpms(crtc, DRM_MODE_DPMS_OFF);
 }
 
 void gma_crtc_commit(struct drm_crtc *crtc)
 {
-	const struct drm_crtc_helper_funcs *crtc_funcs = crtc->helper_private;
+	struct drm_crtc_helper_funcs *crtc_funcs = crtc->helper_private;
 	crtc_funcs->dpms(crtc, DRM_MODE_DPMS_ON);
 }
 
 void gma_crtc_disable(struct drm_crtc *crtc)
 {
 	struct gtt_range *gt;
-	const struct drm_crtc_helper_funcs *crtc_funcs = crtc->helper_private;
+	struct drm_crtc_helper_funcs *crtc_funcs = crtc->helper_private;
 
 	crtc_funcs->dpms(crtc, DRM_MODE_DPMS_OFF);
 
-	if (crtc->primary->fb) {
-		gt = to_psb_fb(crtc->primary->fb)->gtt;
+	if (crtc->fb) {
+		gt = to_psb_fb(crtc->fb)->gtt;
 		psb_gtt_unpin(gt);
 	}
 }
@@ -636,7 +649,7 @@ void gma_crtc_restore(struct drm_crtc *crtc)
 
 void gma_encoder_prepare(struct drm_encoder *encoder)
 {
-	const struct drm_encoder_helper_funcs *encoder_funcs =
+	struct drm_encoder_helper_funcs *encoder_funcs =
 	    encoder->helper_private;
 	/* lvds has its own version of prepare see psb_intel_lvds_prepare */
 	encoder_funcs->dpms(encoder, DRM_MODE_DPMS_OFF);
@@ -644,7 +657,7 @@ void gma_encoder_prepare(struct drm_encoder *encoder)
 
 void gma_encoder_commit(struct drm_encoder *encoder)
 {
-	const struct drm_encoder_helper_funcs *encoder_funcs =
+	struct drm_encoder_helper_funcs *encoder_funcs =
 	    encoder->helper_private;
 	/* lvds has its own version of commit see psb_intel_lvds_commit */
 	encoder_funcs->dpms(encoder, DRM_MODE_DPMS_ON);

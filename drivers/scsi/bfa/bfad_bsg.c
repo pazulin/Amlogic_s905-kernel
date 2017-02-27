@@ -1,10 +1,9 @@
 /*
- * Copyright (c) 2005-2014 Brocade Communications Systems, Inc.
- * Copyright (c) 2014- QLogic Corporation.
+ * Copyright (c) 2005-2010 Brocade Communications Systems, Inc.
  * All rights reserved
- * www.qlogic.com
+ * www.brocade.com
  *
- * Linux driver for QLogic BR-series Fibre Channel Host Bus Adapter.
+ * Linux driver for Brocade Fibre Channel Host Bus Adapter.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms of the GNU General Public License (GPL) Version 2 as
@@ -27,6 +26,7 @@ int
 bfad_iocmd_ioc_enable(struct bfad_s *bfad, void *cmd)
 {
 	struct bfa_bsg_gen_s *iocmd = (struct bfa_bsg_gen_s *)cmd;
+	int	rc = 0;
 	unsigned long	flags;
 
 	spin_lock_irqsave(&bfad->bfad_lock, flags);
@@ -34,7 +34,7 @@ bfad_iocmd_ioc_enable(struct bfad_s *bfad, void *cmd)
 	if (!bfa_ioc_is_disabled(&bfad->bfa.ioc)) {
 		spin_unlock_irqrestore(&bfad->bfad_lock, flags);
 		iocmd->status = BFA_STATUS_OK;
-		return 0;
+		return rc;
 	}
 
 	init_completion(&bfad->enable_comp);
@@ -43,20 +43,21 @@ bfad_iocmd_ioc_enable(struct bfad_s *bfad, void *cmd)
 	spin_unlock_irqrestore(&bfad->bfad_lock, flags);
 	wait_for_completion(&bfad->enable_comp);
 
-	return 0;
+	return rc;
 }
 
 int
 bfad_iocmd_ioc_disable(struct bfad_s *bfad, void *cmd)
 {
 	struct bfa_bsg_gen_s *iocmd = (struct bfa_bsg_gen_s *)cmd;
+	int	rc = 0;
 	unsigned long	flags;
 
 	spin_lock_irqsave(&bfad->bfad_lock, flags);
 	if (bfa_ioc_is_disabled(&bfad->bfa.ioc)) {
 		spin_unlock_irqrestore(&bfad->bfad_lock, flags);
 		iocmd->status = BFA_STATUS_OK;
-		return 0;
+		return rc;
 	}
 
 	if (bfad->disable_active) {
@@ -73,7 +74,7 @@ bfad_iocmd_ioc_disable(struct bfad_s *bfad, void *cmd)
 	bfad->disable_active = BFA_FALSE;
 	iocmd->status = BFA_STATUS_OK;
 
-	return 0;
+	return rc;
 }
 
 static int
@@ -2303,10 +2304,8 @@ bfad_iocmd_cfg_trunk(struct bfad_s *bfad, void *cmd, unsigned int v_cmd)
 
 	spin_lock_irqsave(&bfad->bfad_lock, flags);
 
-	if (bfa_fcport_is_dport(&bfad->bfa)) {
-		spin_unlock_irqrestore(&bfad->bfad_lock, flags);
+	if (bfa_fcport_is_dport(&bfad->bfa))
 		return BFA_STATUS_DPORT_ERR;
-	}
 
 	if ((fcport->cfg.topology == BFA_PORT_TOPOLOGY_LOOP) ||
 		(fcport->topology == BFA_PORT_TOPOLOGY_LOOP))
@@ -3269,13 +3268,13 @@ bfad_fcxp_map_sg(struct bfad_s *bfad, void *payload_kbuf,
 	/* Allocate dma coherent memory */
 	buf_info = buf_base;
 	buf_info->size = payload_len;
-	buf_info->virt = dma_zalloc_coherent(&bfad->pcidev->dev,
-					     buf_info->size, &buf_info->phys,
-					     GFP_KERNEL);
+	buf_info->virt = dma_alloc_coherent(&bfad->pcidev->dev, buf_info->size,
+					&buf_info->phys, GFP_KERNEL);
 	if (!buf_info->virt)
 		goto out_free_mem;
 
 	/* copy the linear bsg buffer to buf_info */
+	memset(buf_info->virt, 0, buf_info->size);
 	memcpy(buf_info->virt, payload_kbuf, buf_info->size);
 
 	/*

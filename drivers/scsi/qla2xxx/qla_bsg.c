@@ -1,6 +1,6 @@
 /*
  * QLogic Fibre Channel HBA Driver
- * Copyright (c)  2003-2014 QLogic Corporation
+ * Copyright (c)  2003-2012 QLogic Corporation
  *
  * See LICENSE.qla2xxx for copyright and licensing details.
  */
@@ -405,7 +405,7 @@ done:
 	return rval;
 }
 
-static inline uint16_t
+inline uint16_t
 qla24xx_calc_ct_iocbs(uint16_t dsds)
 {
 	uint16_t iocbs;
@@ -1390,7 +1390,7 @@ qla2x00_optrom_setup(struct fc_bsg_job *bsg_job, scsi_qla_host_t *vha,
 		    start == (ha->flt_region_fw * 4))
 			valid = 1;
 		else if (IS_QLA24XX_TYPE(ha) || IS_QLA25XX(ha) ||
-		    IS_CNA_CAPABLE(ha) || IS_QLA2031(ha) || IS_QLA27XX(ha))
+		    IS_CNA_CAPABLE(ha) || IS_QLA2031(ha))
 			valid = 1;
 		if (!valid) {
 			ql_log(ql_log_warn, vha, 0x7058,
@@ -1437,12 +1437,9 @@ qla2x00_read_optrom(struct fc_bsg_job *bsg_job)
 	if (ha->flags.nic_core_reset_hdlr_active)
 		return -EBUSY;
 
-	mutex_lock(&ha->optrom_mutex);
 	rval = qla2x00_optrom_setup(bsg_job, vha, 0);
-	if (rval) {
-		mutex_unlock(&ha->optrom_mutex);
+	if (rval)
 		return rval;
-	}
 
 	ha->isp_ops->read_optrom(vha, ha->optrom_buffer,
 	    ha->optrom_region_start, ha->optrom_region_size);
@@ -1456,7 +1453,6 @@ qla2x00_read_optrom(struct fc_bsg_job *bsg_job)
 	vfree(ha->optrom_buffer);
 	ha->optrom_buffer = NULL;
 	ha->optrom_state = QLA_SWAITING;
-	mutex_unlock(&ha->optrom_mutex);
 	bsg_job->job_done(bsg_job);
 	return rval;
 }
@@ -1469,12 +1465,9 @@ qla2x00_update_optrom(struct fc_bsg_job *bsg_job)
 	struct qla_hw_data *ha = vha->hw;
 	int rval = 0;
 
-	mutex_lock(&ha->optrom_mutex);
 	rval = qla2x00_optrom_setup(bsg_job, vha, 1);
-	if (rval) {
-		mutex_unlock(&ha->optrom_mutex);
+	if (rval)
 		return rval;
-	}
 
 	/* Set the isp82xx_no_md_cap not to capture minidump */
 	ha->flags.isp82xx_no_md_cap = 1;
@@ -1490,7 +1483,6 @@ qla2x00_update_optrom(struct fc_bsg_job *bsg_job)
 	vfree(ha->optrom_buffer);
 	ha->optrom_buffer = NULL;
 	ha->optrom_state = QLA_SWAITING;
-	mutex_unlock(&ha->optrom_mutex);
 	bsg_job->job_done(bsg_job);
 	return rval;
 }
@@ -1733,6 +1725,7 @@ qla24xx_process_bidir_cmd(struct fc_bsg_job *bsg_job)
 	struct Scsi_Host *host = bsg_job->shost;
 	scsi_qla_host_t *vha = shost_priv(host);
 	struct qla_hw_data *ha = vha->hw;
+	uint16_t thread_id;
 	uint32_t rval = EXT_STATUS_OK;
 	uint16_t req_sg_cnt = 0;
 	uint16_t rsp_sg_cnt = 0;
@@ -1788,6 +1781,8 @@ qla24xx_process_bidir_cmd(struct fc_bsg_job *bsg_job)
 		rval = EXT_STATUS_INVALID_CFG;
 		goto done;
 	}
+
+	thread_id = bsg_job->request->rqst_data.h_vendor.vendor_cmd[1];
 
 	mutex_lock(&ha->selflogin_lock);
 	if (vha->self_login_loop_id == 0) {
@@ -2051,9 +2046,9 @@ qla26xx_serdes_op(struct fc_bsg_job *bsg_job)
 		bsg_job->reply->reply_payload_rcv_len = sizeof(sr);
 		break;
 	default:
-		ql_dbg(ql_dbg_user, vha, 0x708c,
+		ql_log(ql_log_warn, vha, 0x708c,
 		    "Unknown serdes cmd %x.\n", sr.cmd);
-		rval = -EINVAL;
+		rval = -EDOM;
 		break;
 	}
 
@@ -2063,276 +2058,6 @@ qla26xx_serdes_op(struct fc_bsg_job *bsg_job)
 	bsg_job->reply_len = sizeof(struct fc_bsg_reply);
 	bsg_job->reply->result = DID_OK << 16;
 	bsg_job->job_done(bsg_job);
-	return 0;
-}
-
-static int
-qla8044_serdes_op(struct fc_bsg_job *bsg_job)
-{
-	struct Scsi_Host *host = bsg_job->shost;
-	scsi_qla_host_t *vha = shost_priv(host);
-	int rval = 0;
-	struct qla_serdes_reg_ex sr;
-
-	memset(&sr, 0, sizeof(sr));
-
-	sg_copy_to_buffer(bsg_job->request_payload.sg_list,
-	    bsg_job->request_payload.sg_cnt, &sr, sizeof(sr));
-
-	switch (sr.cmd) {
-	case INT_SC_SERDES_WRITE_REG:
-		rval = qla8044_write_serdes_word(vha, sr.addr, sr.val);
-		bsg_job->reply->reply_payload_rcv_len = 0;
-		break;
-	case INT_SC_SERDES_READ_REG:
-		rval = qla8044_read_serdes_word(vha, sr.addr, &sr.val);
-		sg_copy_from_buffer(bsg_job->reply_payload.sg_list,
-		    bsg_job->reply_payload.sg_cnt, &sr, sizeof(sr));
-		bsg_job->reply->reply_payload_rcv_len = sizeof(sr);
-		break;
-	default:
-		ql_dbg(ql_dbg_user, vha, 0x70cf,
-		    "Unknown serdes cmd %x.\n", sr.cmd);
-		rval = -EINVAL;
-		break;
-	}
-
-	bsg_job->reply->reply_data.vendor_reply.vendor_rsp[0] =
-	    rval ? EXT_STATUS_MAILBOX : 0;
-
-	bsg_job->reply_len = sizeof(struct fc_bsg_reply);
-	bsg_job->reply->result = DID_OK << 16;
-	bsg_job->job_done(bsg_job);
-	return 0;
-}
-
-static int
-qla27xx_get_flash_upd_cap(struct fc_bsg_job *bsg_job)
-{
-	struct Scsi_Host *host = bsg_job->shost;
-	scsi_qla_host_t *vha = shost_priv(host);
-	struct qla_hw_data *ha = vha->hw;
-	struct qla_flash_update_caps cap;
-
-	if (!(IS_QLA27XX(ha)))
-		return -EPERM;
-
-	memset(&cap, 0, sizeof(cap));
-	cap.capabilities = (uint64_t)ha->fw_attributes_ext[1] << 48 |
-			   (uint64_t)ha->fw_attributes_ext[0] << 32 |
-			   (uint64_t)ha->fw_attributes_h << 16 |
-			   (uint64_t)ha->fw_attributes;
-
-	sg_copy_from_buffer(bsg_job->reply_payload.sg_list,
-	    bsg_job->reply_payload.sg_cnt, &cap, sizeof(cap));
-	bsg_job->reply->reply_payload_rcv_len = sizeof(cap);
-
-	bsg_job->reply->reply_data.vendor_reply.vendor_rsp[0] =
-	    EXT_STATUS_OK;
-
-	bsg_job->reply_len = sizeof(struct fc_bsg_reply);
-	bsg_job->reply->result = DID_OK << 16;
-	bsg_job->job_done(bsg_job);
-	return 0;
-}
-
-static int
-qla27xx_set_flash_upd_cap(struct fc_bsg_job *bsg_job)
-{
-	struct Scsi_Host *host = bsg_job->shost;
-	scsi_qla_host_t *vha = shost_priv(host);
-	struct qla_hw_data *ha = vha->hw;
-	uint64_t online_fw_attr = 0;
-	struct qla_flash_update_caps cap;
-
-	if (!(IS_QLA27XX(ha)))
-		return -EPERM;
-
-	memset(&cap, 0, sizeof(cap));
-	sg_copy_to_buffer(bsg_job->request_payload.sg_list,
-	    bsg_job->request_payload.sg_cnt, &cap, sizeof(cap));
-
-	online_fw_attr = (uint64_t)ha->fw_attributes_ext[1] << 48 |
-			 (uint64_t)ha->fw_attributes_ext[0] << 32 |
-			 (uint64_t)ha->fw_attributes_h << 16 |
-			 (uint64_t)ha->fw_attributes;
-
-	if (online_fw_attr != cap.capabilities) {
-		bsg_job->reply->reply_data.vendor_reply.vendor_rsp[0] =
-		    EXT_STATUS_INVALID_PARAM;
-		return -EINVAL;
-	}
-
-	if (cap.outage_duration < MAX_LOOP_TIMEOUT)  {
-		bsg_job->reply->reply_data.vendor_reply.vendor_rsp[0] =
-		    EXT_STATUS_INVALID_PARAM;
-		return -EINVAL;
-	}
-
-	bsg_job->reply->reply_payload_rcv_len = 0;
-
-	bsg_job->reply->reply_data.vendor_reply.vendor_rsp[0] =
-	    EXT_STATUS_OK;
-
-	bsg_job->reply_len = sizeof(struct fc_bsg_reply);
-	bsg_job->reply->result = DID_OK << 16;
-	bsg_job->job_done(bsg_job);
-	return 0;
-}
-
-static int
-qla27xx_get_bbcr_data(struct fc_bsg_job *bsg_job)
-{
-	struct Scsi_Host *host = bsg_job->shost;
-	scsi_qla_host_t *vha = shost_priv(host);
-	struct qla_hw_data *ha = vha->hw;
-	struct qla_bbcr_data bbcr;
-	uint16_t loop_id, topo, sw_cap;
-	uint8_t domain, area, al_pa, state;
-	int rval;
-
-	if (!(IS_QLA27XX(ha)))
-		return -EPERM;
-
-	memset(&bbcr, 0, sizeof(bbcr));
-
-	if (vha->flags.bbcr_enable)
-		bbcr.status = QLA_BBCR_STATUS_ENABLED;
-	else
-		bbcr.status = QLA_BBCR_STATUS_DISABLED;
-
-	if (bbcr.status == QLA_BBCR_STATUS_ENABLED) {
-		rval = qla2x00_get_adapter_id(vha, &loop_id, &al_pa,
-			&area, &domain, &topo, &sw_cap);
-		if (rval != QLA_SUCCESS) {
-			bbcr.status = QLA_BBCR_STATUS_UNKNOWN;
-			bbcr.state = QLA_BBCR_STATE_OFFLINE;
-			bbcr.mbx1 = loop_id;
-			goto done;
-		}
-
-		state = (vha->bbcr >> 12) & 0x1;
-
-		if (state) {
-			bbcr.state = QLA_BBCR_STATE_OFFLINE;
-			bbcr.offline_reason_code = QLA_BBCR_REASON_LOGIN_REJECT;
-		} else {
-			bbcr.state = QLA_BBCR_STATE_ONLINE;
-			bbcr.negotiated_bbscn = (vha->bbcr >> 8) & 0xf;
-		}
-
-		bbcr.configured_bbscn = vha->bbcr & 0xf;
-	}
-
-done:
-	sg_copy_from_buffer(bsg_job->reply_payload.sg_list,
-		bsg_job->reply_payload.sg_cnt, &bbcr, sizeof(bbcr));
-	bsg_job->reply->reply_payload_rcv_len = sizeof(bbcr);
-
-	bsg_job->reply->reply_data.vendor_reply.vendor_rsp[0] = EXT_STATUS_OK;
-
-	bsg_job->reply_len = sizeof(struct fc_bsg_reply);
-	bsg_job->reply->result = DID_OK << 16;
-	bsg_job->job_done(bsg_job);
-	return 0;
-}
-
-static int
-qla2x00_get_priv_stats(struct fc_bsg_job *bsg_job)
-{
-	struct Scsi_Host *host = bsg_job->shost;
-	scsi_qla_host_t *vha = shost_priv(host);
-	struct qla_hw_data *ha = vha->hw;
-	struct scsi_qla_host *base_vha = pci_get_drvdata(ha->pdev);
-	struct link_statistics *stats = NULL;
-	dma_addr_t stats_dma;
-	int rval;
-	uint32_t *cmd = bsg_job->request->rqst_data.h_vendor.vendor_cmd;
-	uint options = cmd[0] == QL_VND_GET_PRIV_STATS_EX ? cmd[1] : 0;
-
-	if (test_bit(UNLOADING, &vha->dpc_flags))
-		return -ENODEV;
-
-	if (unlikely(pci_channel_offline(ha->pdev)))
-		return -ENODEV;
-
-	if (qla2x00_reset_active(vha))
-		return -EBUSY;
-
-	if (!IS_FWI2_CAPABLE(ha))
-		return -EPERM;
-
-	stats = dma_alloc_coherent(&ha->pdev->dev,
-		sizeof(*stats), &stats_dma, GFP_KERNEL);
-	if (!stats) {
-		ql_log(ql_log_warn, vha, 0x70e2,
-		    "Failed to allocate memory for stats.\n");
-		return -ENOMEM;
-	}
-
-	memset(stats, 0, sizeof(*stats));
-
-	rval = qla24xx_get_isp_stats(base_vha, stats, stats_dma, options);
-
-	if (rval == QLA_SUCCESS) {
-		ql_dump_buffer(ql_dbg_user + ql_dbg_verbose, vha, 0x70e3,
-		    (uint8_t *)stats, sizeof(*stats));
-		sg_copy_from_buffer(bsg_job->reply_payload.sg_list,
-			bsg_job->reply_payload.sg_cnt, stats, sizeof(*stats));
-	}
-
-	bsg_job->reply->reply_payload_rcv_len = sizeof(*stats);
-	bsg_job->reply->reply_data.vendor_reply.vendor_rsp[0] =
-	    rval ? EXT_STATUS_MAILBOX : EXT_STATUS_OK;
-
-	bsg_job->reply_len = sizeof(*bsg_job->reply);
-	bsg_job->reply->result = DID_OK << 16;
-	bsg_job->job_done(bsg_job);
-
-	dma_free_coherent(&ha->pdev->dev, sizeof(*stats),
-		stats, stats_dma);
-
-	return 0;
-}
-
-static int
-qla2x00_do_dport_diagnostics(struct fc_bsg_job *bsg_job)
-{
-	struct Scsi_Host *host = bsg_job->shost;
-	scsi_qla_host_t *vha = shost_priv(host);
-	int rval;
-	struct qla_dport_diag *dd;
-
-	if (!IS_QLA83XX(vha->hw) && !IS_QLA27XX(vha->hw))
-		return -EPERM;
-
-	dd = kmalloc(sizeof(*dd), GFP_KERNEL);
-	if (!dd) {
-		ql_log(ql_log_warn, vha, 0x70db,
-		    "Failed to allocate memory for dport.\n");
-		return -ENOMEM;
-	}
-
-	sg_copy_to_buffer(bsg_job->request_payload.sg_list,
-	    bsg_job->request_payload.sg_cnt, dd, sizeof(*dd));
-
-	rval = qla26xx_dport_diagnostics(
-	    vha, dd->buf, sizeof(dd->buf), dd->options);
-	if (rval == QLA_SUCCESS) {
-		sg_copy_from_buffer(bsg_job->reply_payload.sg_list,
-		    bsg_job->reply_payload.sg_cnt, dd, sizeof(*dd));
-	}
-
-	bsg_job->reply->reply_payload_rcv_len = sizeof(*dd);
-	bsg_job->reply->reply_data.vendor_reply.vendor_rsp[0] =
-	    rval ? EXT_STATUS_MAILBOX : EXT_STATUS_OK;
-
-	bsg_job->reply_len = sizeof(*bsg_job->reply);
-	bsg_job->reply->result = DID_OK << 16;
-	bsg_job->job_done(bsg_job);
-
-	kfree(dd);
-
 	return 0;
 }
 
@@ -2388,25 +2113,6 @@ qla2x00_process_vendor_specific(struct fc_bsg_job *bsg_job)
 	case QL_VND_SERDES_OP:
 		return qla26xx_serdes_op(bsg_job);
 
-	case QL_VND_SERDES_OP_EX:
-		return qla8044_serdes_op(bsg_job);
-
-	case QL_VND_GET_FLASH_UPDATE_CAPS:
-		return qla27xx_get_flash_upd_cap(bsg_job);
-
-	case QL_VND_SET_FLASH_UPDATE_CAPS:
-		return qla27xx_set_flash_upd_cap(bsg_job);
-
-	case QL_VND_GET_BBCR_DATA:
-		return qla27xx_get_bbcr_data(bsg_job);
-
-	case QL_VND_GET_PRIV_STATS:
-	case QL_VND_GET_PRIV_STATS_EX:
-		return qla2x00_get_priv_stats(bsg_job);
-
-	case QL_VND_DPORT_DIAGNOSTICS:
-		return qla2x00_do_dport_diagnostics(bsg_job);
-
 	default:
 		return -ENOSYS;
 	}
@@ -2417,6 +2123,7 @@ qla24xx_bsg_request(struct fc_bsg_job *bsg_job)
 {
 	int ret = -EINVAL;
 	struct fc_rport *rport;
+	fc_port_t *fcport = NULL;
 	struct Scsi_Host *host;
 	scsi_qla_host_t *vha;
 
@@ -2425,6 +2132,7 @@ qla24xx_bsg_request(struct fc_bsg_job *bsg_job)
 
 	if (bsg_job->request->msgcode == FC_BSG_RPT_ELS) {
 		rport = bsg_job->rport;
+		fcport = *(fc_port_t **) rport->dd_data;
 		host = rport_to_shost(rport);
 		vha = shost_priv(host);
 	} else {

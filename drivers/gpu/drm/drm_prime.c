@@ -28,11 +28,7 @@
 
 #include <linux/export.h>
 #include <linux/dma-buf.h>
-#include <linux/rbtree.h>
 #include <drm/drmP.h>
-#include <drm/drm_gem.h>
-
-#include "drm_internal.h"
 
 /*
  * DMA-BUF/GEM Object references and lifetime overview:
@@ -62,11 +58,9 @@
  */
 
 struct drm_prime_member {
+	struct list_head entry;
 	struct dma_buf *dma_buf;
 	uint32_t handle;
-
-	struct rb_node dmabuf_rb;
-	struct rb_node handle_rb;
 };
 
 struct drm_prime_attachment {
@@ -74,11 +68,9 @@ struct drm_prime_attachment {
 	enum dma_data_direction dir;
 };
 
-static int drm_prime_add_buf_handle(struct drm_prime_file_private *prime_fpriv,
-				    struct dma_buf *dma_buf, uint32_t handle)
+static int drm_prime_add_buf_handle(struct drm_prime_file_private *prime_fpriv, struct dma_buf *dma_buf, uint32_t handle)
 {
 	struct drm_prime_member *member;
-	struct rb_node **p, *rb;
 
 	member = kmalloc(sizeof(*member), GFP_KERNEL);
 	if (!member)
@@ -87,56 +79,18 @@ static int drm_prime_add_buf_handle(struct drm_prime_file_private *prime_fpriv,
 	get_dma_buf(dma_buf);
 	member->dma_buf = dma_buf;
 	member->handle = handle;
-
-	rb = NULL;
-	p = &prime_fpriv->dmabufs.rb_node;
-	while (*p) {
-		struct drm_prime_member *pos;
-
-		rb = *p;
-		pos = rb_entry(rb, struct drm_prime_member, dmabuf_rb);
-		if (dma_buf > pos->dma_buf)
-			p = &rb->rb_right;
-		else
-			p = &rb->rb_left;
-	}
-	rb_link_node(&member->dmabuf_rb, rb, p);
-	rb_insert_color(&member->dmabuf_rb, &prime_fpriv->dmabufs);
-
-	rb = NULL;
-	p = &prime_fpriv->handles.rb_node;
-	while (*p) {
-		struct drm_prime_member *pos;
-
-		rb = *p;
-		pos = rb_entry(rb, struct drm_prime_member, handle_rb);
-		if (handle > pos->handle)
-			p = &rb->rb_right;
-		else
-			p = &rb->rb_left;
-	}
-	rb_link_node(&member->handle_rb, rb, p);
-	rb_insert_color(&member->handle_rb, &prime_fpriv->handles);
-
+	list_add(&member->entry, &prime_fpriv->head);
 	return 0;
 }
 
 static struct dma_buf *drm_prime_lookup_buf_by_handle(struct drm_prime_file_private *prime_fpriv,
 						      uint32_t handle)
 {
-	struct rb_node *rb;
+	struct drm_prime_member *member;
 
-	rb = prime_fpriv->handles.rb_node;
-	while (rb) {
-		struct drm_prime_member *member;
-
-		member = rb_entry(rb, struct drm_prime_member, handle_rb);
+	list_for_each_entry(member, &prime_fpriv->head, entry) {
 		if (member->handle == handle)
 			return member->dma_buf;
-		else if (member->handle < handle)
-			rb = rb->rb_right;
-		else
-			rb = rb->rb_left;
 	}
 
 	return NULL;
@@ -146,23 +100,14 @@ static int drm_prime_lookup_buf_handle(struct drm_prime_file_private *prime_fpri
 				       struct dma_buf *dma_buf,
 				       uint32_t *handle)
 {
-	struct rb_node *rb;
+	struct drm_prime_member *member;
 
-	rb = prime_fpriv->dmabufs.rb_node;
-	while (rb) {
-		struct drm_prime_member *member;
-
-		member = rb_entry(rb, struct drm_prime_member, dmabuf_rb);
+	list_for_each_entry(member, &prime_fpriv->head, entry) {
 		if (member->dma_buf == dma_buf) {
 			*handle = member->handle;
 			return 0;
-		} else if (member->dma_buf < dma_buf) {
-			rb = rb->rb_right;
-		} else {
-			rb = rb->rb_left;
 		}
 	}
-
 	return -ENOENT;
 }
 
@@ -217,30 +162,19 @@ static void drm_gem_map_detach(struct dma_buf *dma_buf,
 void drm_prime_remove_buf_handle_locked(struct drm_prime_file_private *prime_fpriv,
 					struct dma_buf *dma_buf)
 {
-	struct rb_node *rb;
+	struct drm_prime_member *member, *safe;
 
-	rb = prime_fpriv->dmabufs.rb_node;
-	while (rb) {
-		struct drm_prime_member *member;
-
-		member = rb_entry(rb, struct drm_prime_member, dmabuf_rb);
+	list_for_each_entry_safe(member, safe, &prime_fpriv->head, entry) {
 		if (member->dma_buf == dma_buf) {
-			rb_erase(&member->handle_rb, &prime_fpriv->handles);
-			rb_erase(&member->dmabuf_rb, &prime_fpriv->dmabufs);
-
 			dma_buf_put(dma_buf);
+			list_del(&member->entry);
 			kfree(member);
-			return;
-		} else if (member->dma_buf < dma_buf) {
-			rb = rb->rb_right;
-		} else {
-			rb = rb->rb_left;
 		}
 	}
 }
 
 static struct sg_table *drm_gem_map_dma_buf(struct dma_buf_attachment *attach,
-					    enum dma_data_direction dir)
+		enum dma_data_direction dir)
 {
 	struct drm_prime_attachment *prime_attach = attach->priv;
 	struct drm_gem_object *obj = attach->dmabuf->priv;
@@ -277,54 +211,17 @@ static struct sg_table *drm_gem_map_dma_buf(struct dma_buf_attachment *attach,
 }
 
 static void drm_gem_unmap_dma_buf(struct dma_buf_attachment *attach,
-				  struct sg_table *sgt,
-				  enum dma_data_direction dir)
+		struct sg_table *sgt, enum dma_data_direction dir)
 {
 	/* nothing to be done here */
 }
 
-/**
- * drm_gem_dmabuf_export - dma_buf export implementation for GEM
- * @dev: parent device for the exported dmabuf
- * @exp_info: the export information used by dma_buf_export()
- *
- * This wraps dma_buf_export() for use by generic GEM drivers that are using
- * drm_gem_dmabuf_release(). In addition to calling dma_buf_export(), we take
- * a reference to the drm_device which is released by drm_gem_dmabuf_release().
- *
- * Returns the new dmabuf.
- */
-struct dma_buf *drm_gem_dmabuf_export(struct drm_device *dev,
-				      struct dma_buf_export_info *exp_info)
-{
-	struct dma_buf *dma_buf;
-
-	dma_buf = dma_buf_export(exp_info);
-	if (!IS_ERR(dma_buf))
-		drm_dev_ref(dev);
-
-	return dma_buf;
-}
-EXPORT_SYMBOL(drm_gem_dmabuf_export);
-
-/**
- * drm_gem_dmabuf_release - dma_buf release implementation for GEM
- * @dma_buf: buffer to be released
- *
- * Generic release function for dma_bufs exported as PRIME buffers. GEM drivers
- * must use this in their dma_buf ops structure as the release callback.
- * drm_gem_dmabuf_release() should be used in conjunction with
- * drm_gem_dmabuf_export().
- */
 void drm_gem_dmabuf_release(struct dma_buf *dma_buf)
 {
 	struct drm_gem_object *obj = dma_buf->priv;
-	struct drm_device *dev = obj->dev;
 
 	/* drop the reference on the export fd holds */
 	drm_gem_object_unreference_unlocked(obj);
-
-	drm_dev_unref(dev);
 }
 EXPORT_SYMBOL(drm_gem_dmabuf_release);
 
@@ -345,30 +242,30 @@ static void drm_gem_dmabuf_vunmap(struct dma_buf *dma_buf, void *vaddr)
 }
 
 static void *drm_gem_dmabuf_kmap_atomic(struct dma_buf *dma_buf,
-					unsigned long page_num)
+		unsigned long page_num)
 {
 	return NULL;
 }
 
 static void drm_gem_dmabuf_kunmap_atomic(struct dma_buf *dma_buf,
-					 unsigned long page_num, void *addr)
+		unsigned long page_num, void *addr)
 {
 
 }
 static void *drm_gem_dmabuf_kmap(struct dma_buf *dma_buf,
-				 unsigned long page_num)
+		unsigned long page_num)
 {
 	return NULL;
 }
 
 static void drm_gem_dmabuf_kunmap(struct dma_buf *dma_buf,
-				  unsigned long page_num, void *addr)
+		unsigned long page_num, void *addr)
 {
 
 }
 
 static int drm_gem_dmabuf_mmap(struct dma_buf *dma_buf,
-			       struct vm_area_struct *vma)
+		struct vm_area_struct *vma)
 {
 	struct drm_gem_object *obj = dma_buf->priv;
 	struct drm_device *dev = obj->dev;
@@ -400,48 +297,28 @@ static const struct dma_buf_ops drm_gem_prime_dmabuf_ops =  {
  * Drivers can implement @gem_prime_export and @gem_prime_import in terms of
  * simpler APIs by using the helper functions @drm_gem_prime_export and
  * @drm_gem_prime_import.  These functions implement dma-buf support in terms of
- * six lower-level driver callbacks:
+ * five lower-level driver callbacks:
  *
  * Export callbacks:
  *
- *  * @gem_prime_pin (optional): prepare a GEM object for exporting
- *  * @gem_prime_get_sg_table: provide a scatter/gather table of pinned pages
- *  * @gem_prime_vmap: vmap a buffer exported by your driver
- *  * @gem_prime_vunmap: vunmap a buffer exported by your driver
- *  * @gem_prime_mmap (optional): mmap a buffer exported by your driver
+ *  - @gem_prime_pin (optional): prepare a GEM object for exporting
+ *
+ *  - @gem_prime_get_sg_table: provide a scatter/gather table of pinned pages
+ *
+ *  - @gem_prime_vmap: vmap a buffer exported by your driver
+ *
+ *  - @gem_prime_vunmap: vunmap a buffer exported by your driver
  *
  * Import callback:
  *
- *  * @gem_prime_import_sg_table (import): produce a GEM object from another
+ *  - @gem_prime_import_sg_table (import): produce a GEM object from another
  *    driver's scatter/gather table
  */
 
-/**
- * drm_gem_prime_export - helper library implementation of the export callback
- * @dev: drm_device to export from
- * @obj: GEM object to export
- * @flags: flags like DRM_CLOEXEC and DRM_RDWR
- *
- * This is the implementation of the gem_prime_export functions for GEM drivers
- * using the PRIME helpers.
- */
 struct dma_buf *drm_gem_prime_export(struct drm_device *dev,
-				     struct drm_gem_object *obj,
-				     int flags)
+				     struct drm_gem_object *obj, int flags)
 {
-	struct dma_buf_export_info exp_info = {
-		.exp_name = KBUILD_MODNAME, /* white lie for debug */
-		.owner = dev->driver->fops->owner,
-		.ops = &drm_gem_prime_dmabuf_ops,
-		.size = obj->size,
-		.flags = flags,
-		.priv = obj,
-	};
-
-	if (dev->driver->gem_prime_res_obj)
-		exp_info.resv = dev->driver->gem_prime_res_obj(obj);
-
-	return drm_gem_dmabuf_export(dev, &exp_info);
+	return dma_buf_export(obj, &drm_gem_prime_dmabuf_ops, obj->size, flags);
 }
 EXPORT_SYMBOL(drm_gem_prime_export);
 
@@ -478,30 +355,16 @@ static struct dma_buf *export_and_register_object(struct drm_device *dev,
 	return dmabuf;
 }
 
-/**
- * drm_gem_prime_handle_to_fd - PRIME export function for GEM drivers
- * @dev: dev to export the buffer from
- * @file_priv: drm file-private structure
- * @handle: buffer handle to export
- * @flags: flags like DRM_CLOEXEC
- * @prime_fd: pointer to storage for the fd id of the create dma-buf
- *
- * This is the PRIME export function which must be used mandatorily by GEM
- * drivers to ensure correct lifetime management of the underlying GEM object.
- * The actual exporting from GEM object to a dma-buf is done through the
- * gem_prime_export driver callback.
- */
 int drm_gem_prime_handle_to_fd(struct drm_device *dev,
-			       struct drm_file *file_priv, uint32_t handle,
-			       uint32_t flags,
-			       int *prime_fd)
+		struct drm_file *file_priv, uint32_t handle, uint32_t flags,
+		int *prime_fd)
 {
 	struct drm_gem_object *obj;
 	int ret = 0;
 	struct dma_buf *dmabuf;
 
 	mutex_lock(&file_priv->prime.lock);
-	obj = drm_gem_object_lookup(file_priv, handle);
+	obj = drm_gem_object_lookup(dev, file_priv, handle);
 	if (!obj)  {
 		ret = -ENOENT;
 		goto out_unlock;
@@ -578,14 +441,6 @@ out_unlock:
 }
 EXPORT_SYMBOL(drm_gem_prime_handle_to_fd);
 
-/**
- * drm_gem_prime_import - helper library implementation of the import callback
- * @dev: drm_device to import into
- * @dma_buf: dma-buf object to import
- *
- * This is the implementation of the gem_prime_import functions for GEM drivers
- * using the PRIME helpers.
- */
 struct drm_gem_object *drm_gem_prime_import(struct drm_device *dev,
 					    struct dma_buf *dma_buf)
 {
@@ -593,6 +448,9 @@ struct drm_gem_object *drm_gem_prime_import(struct drm_device *dev,
 	struct sg_table *sgt;
 	struct drm_gem_object *obj;
 	int ret;
+
+	if (!dev->driver->gem_prime_import_sg_table)
+		return ERR_PTR(-EINVAL);
 
 	if (dma_buf->ops == &drm_gem_prime_dmabuf_ops) {
 		obj = dma_buf->priv;
@@ -606,9 +464,6 @@ struct drm_gem_object *drm_gem_prime_import(struct drm_device *dev,
 		}
 	}
 
-	if (!dev->driver->gem_prime_import_sg_table)
-		return ERR_PTR(-EINVAL);
-
 	attach = dma_buf_attach(dma_buf, dev->dev);
 	if (IS_ERR(attach))
 		return ERR_CAST(attach);
@@ -616,12 +471,12 @@ struct drm_gem_object *drm_gem_prime_import(struct drm_device *dev,
 	get_dma_buf(dma_buf);
 
 	sgt = dma_buf_map_attachment(attach, DMA_BIDIRECTIONAL);
-	if (IS_ERR(sgt)) {
+	if (IS_ERR_OR_NULL(sgt)) {
 		ret = PTR_ERR(sgt);
 		goto fail_detach;
 	}
 
-	obj = dev->driver->gem_prime_import_sg_table(dev, attach, sgt);
+	obj = dev->driver->gem_prime_import_sg_table(dev, dma_buf->size, sgt);
 	if (IS_ERR(obj)) {
 		ret = PTR_ERR(obj);
 		goto fail_unmap;
@@ -641,21 +496,8 @@ fail_detach:
 }
 EXPORT_SYMBOL(drm_gem_prime_import);
 
-/**
- * drm_gem_prime_fd_to_handle - PRIME import function for GEM drivers
- * @dev: dev to export the buffer from
- * @file_priv: drm file-private structure
- * @prime_fd: fd id of the dma-buf which should be imported
- * @handle: pointer to storage for the handle of the imported buffer object
- *
- * This is the PRIME import function which must be used mandatorily by GEM
- * drivers to ensure correct lifetime management of the underlying GEM object.
- * The actual importing of GEM object from the dma-buf is done through the
- * gem_import_export driver callback.
- */
 int drm_gem_prime_fd_to_handle(struct drm_device *dev,
-			       struct drm_file *file_priv, int prime_fd,
-			       uint32_t *handle)
+		struct drm_file *file_priv, int prime_fd, uint32_t *handle)
 {
 	struct dma_buf *dma_buf;
 	struct drm_gem_object *obj;
@@ -687,7 +529,7 @@ int drm_gem_prime_fd_to_handle(struct drm_device *dev,
 		get_dma_buf(dma_buf);
 	}
 
-	/* _handle_create_tail unconditionally unlocks dev->object_name_lock. */
+	/* drm_gem_handle_create_tail unlocks dev->object_name_lock. */
 	ret = drm_gem_handle_create_tail(file_priv, obj, handle);
 	drm_gem_object_unreference_unlocked(obj);
 	if (ret)
@@ -695,9 +537,10 @@ int drm_gem_prime_fd_to_handle(struct drm_device *dev,
 
 	ret = drm_prime_add_buf_handle(&file_priv->prime,
 			dma_buf, *handle);
-	mutex_unlock(&file_priv->prime.lock);
 	if (ret)
 		goto fail;
+
+	mutex_unlock(&file_priv->prime.lock);
 
 	dma_buf_put(dma_buf);
 
@@ -708,14 +551,11 @@ fail:
 	 * to detach.. which seems ok..
 	 */
 	drm_gem_handle_delete(file_priv, *handle);
-	dma_buf_put(dma_buf);
-	return ret;
-
 out_unlock:
 	mutex_unlock(&dev->object_name_lock);
 out_put:
-	mutex_unlock(&file_priv->prime.lock);
 	dma_buf_put(dma_buf);
+	mutex_unlock(&file_priv->prime.lock);
 	return ret;
 }
 EXPORT_SYMBOL(drm_gem_prime_fd_to_handle);
@@ -724,6 +564,7 @@ int drm_prime_handle_to_fd_ioctl(struct drm_device *dev, void *data,
 				 struct drm_file *file_priv)
 {
 	struct drm_prime_handle *args = data;
+	uint32_t flags;
 
 	if (!drm_core_check_feature(dev, DRIVER_PRIME))
 		return -EINVAL;
@@ -732,11 +573,14 @@ int drm_prime_handle_to_fd_ioctl(struct drm_device *dev, void *data,
 		return -ENOSYS;
 
 	/* check flags are valid */
-	if (args->flags & ~(DRM_CLOEXEC | DRM_RDWR))
+	if (args->flags & ~DRM_CLOEXEC)
 		return -EINVAL;
 
+	/* we only want to pass DRM_CLOEXEC which is == O_CLOEXEC */
+	flags = args->flags & DRM_CLOEXEC;
+
 	return dev->driver->prime_handle_to_fd(dev, file_priv,
-			args->handle, args->flags, &args->fd);
+			args->handle, flags, &args->fd);
 }
 
 int drm_prime_fd_to_handle_ioctl(struct drm_device *dev, void *data,
@@ -754,16 +598,14 @@ int drm_prime_fd_to_handle_ioctl(struct drm_device *dev, void *data,
 			args->fd, &args->handle);
 }
 
-/**
- * drm_prime_pages_to_sg - converts a page array into an sg list
- * @pages: pointer to the array of page pointers to convert
- * @nr_pages: length of the page vector
+/*
+ * drm_prime_pages_to_sg
  *
- * This helper creates an sg table object from a set of pages
+ * this helper creates an sg table object from a set of pages
  * the driver is responsible for mapping the pages into the
- * importers address space for use with dma_buf itself.
+ * importers address space
  */
-struct sg_table *drm_prime_pages_to_sg(struct page **pages, unsigned int nr_pages)
+struct sg_table *drm_prime_pages_to_sg(struct page **pages, int nr_pages)
 {
 	struct sg_table *sg = NULL;
 	int ret;
@@ -786,16 +628,9 @@ out:
 }
 EXPORT_SYMBOL(drm_prime_pages_to_sg);
 
-/**
- * drm_prime_sg_to_page_addr_arrays - convert an sg table into a page array
- * @sgt: scatter-gather table to convert
- * @pages: array of page pointers to store the page array in
- * @addrs: optional array to store the dma bus address of each page
- * @max_pages: size of both the passed-in arrays
- *
- * Exports an sg table into an array of pages and addresses. This is currently
- * required by the TTM driver in order to do correct fault handling.
- */
+/* export an sg table into an array of pages and addresses
+   this is currently required by the TTM driver in order to do correct fault
+   handling */
 int drm_prime_sg_to_page_addr_arrays(struct sg_table *sgt, struct page **pages,
 				     dma_addr_t *addrs, int max_pages)
 {
@@ -828,15 +663,7 @@ int drm_prime_sg_to_page_addr_arrays(struct sg_table *sgt, struct page **pages,
 	return 0;
 }
 EXPORT_SYMBOL(drm_prime_sg_to_page_addr_arrays);
-
-/**
- * drm_prime_gem_destroy - helper to clean up a PRIME-imported GEM object
- * @obj: GEM object which was created from a dma-buf
- * @sg: the sg-table which was pinned at import time
- *
- * This is the cleanup functions which GEM drivers need to call when they use
- * @drm_gem_prime_import to import dma-bufs.
- */
+/* helper function to cleanup a GEM/prime object */
 void drm_prime_gem_destroy(struct drm_gem_object *obj, struct sg_table *sg)
 {
 	struct dma_buf_attachment *attach;
@@ -853,13 +680,14 @@ EXPORT_SYMBOL(drm_prime_gem_destroy);
 
 void drm_prime_init_file_private(struct drm_prime_file_private *prime_fpriv)
 {
+	INIT_LIST_HEAD(&prime_fpriv->head);
 	mutex_init(&prime_fpriv->lock);
-	prime_fpriv->dmabufs = RB_ROOT;
-	prime_fpriv->handles = RB_ROOT;
 }
+EXPORT_SYMBOL(drm_prime_init_file_private);
 
 void drm_prime_destroy_file_private(struct drm_prime_file_private *prime_fpriv)
 {
 	/* by now drm_gem_release should've made sure the list is empty */
-	WARN_ON(!RB_EMPTY_ROOT(&prime_fpriv->dmabufs));
+	WARN_ON(!list_empty(&prime_fpriv->head));
 }
+EXPORT_SYMBOL(drm_prime_destroy_file_private);

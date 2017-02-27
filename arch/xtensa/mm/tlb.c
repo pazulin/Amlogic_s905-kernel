@@ -149,21 +149,6 @@ void local_flush_tlb_page(struct vm_area_struct *vma, unsigned long page)
 	local_irq_restore(flags);
 }
 
-void local_flush_tlb_kernel_range(unsigned long start, unsigned long end)
-{
-	if (end > start && start >= TASK_SIZE && end <= PAGE_OFFSET &&
-	    end - start < _TLB_ENTRIES << PAGE_SHIFT) {
-		start &= PAGE_MASK;
-		while (start < end) {
-			invalidate_itlb_mapping(start);
-			invalidate_dtlb_mapping(start);
-			start += PAGE_SIZE;
-		}
-	} else {
-		local_flush_tlb_all();
-	}
-}
-
 #ifdef CONFIG_DEBUG_TLB_SANITY
 
 static unsigned get_pte_for_vaddr(unsigned vaddr)
@@ -245,7 +230,7 @@ static int check_tlb_entry(unsigned w, unsigned e, bool dtlb)
 						page_mapcount(p));
 				if (!page_count(p))
 					rc |= TLB_INSANE;
-				else if (page_mapcount(p))
+				else if (page_mapped(p))
 					rc |= TLB_SUSPICIOUS;
 			} else {
 				rc |= TLB_INSANE;

@@ -562,7 +562,7 @@ static DEFINE_MUTEX(pmc_reserve_mutex);
 static void setup_pmc_cpu(void *flags)
 {
 	int err;
-	struct cpu_hw_sf *cpusf = this_cpu_ptr(&cpu_hw_sf);
+	struct cpu_hw_sf *cpusf = &__get_cpu_var(cpu_hw_sf);
 
 	err = 0;
 	switch (*((int *) flags)) {
@@ -601,12 +601,17 @@ static void release_pmc_hardware(void)
 
 	irq_subclass_unregister(IRQ_SUBCLASS_MEASUREMENT_ALERT);
 	on_each_cpu(setup_pmc_cpu, &flags, 1);
+	perf_release_sampling();
 }
 
 static int reserve_pmc_hardware(void)
 {
 	int flags = PMC_INIT;
+	int err;
 
+	err = perf_reserve_sampling();
+	if (err)
+		return err;
 	on_each_cpu(setup_pmc_cpu, &flags, 1);
 	if (flags & PMC_FAILURE) {
 		release_pmc_hardware();
@@ -844,7 +849,7 @@ static int cpumsf_pmu_event_init(struct perf_event *event)
 
 static void cpumsf_pmu_enable(struct pmu *pmu)
 {
-	struct cpu_hw_sf *cpuhw = this_cpu_ptr(&cpu_hw_sf);
+	struct cpu_hw_sf *cpuhw = &__get_cpu_var(cpu_hw_sf);
 	struct hw_perf_event *hwc;
 	int err;
 
@@ -893,7 +898,7 @@ static void cpumsf_pmu_enable(struct pmu *pmu)
 
 static void cpumsf_pmu_disable(struct pmu *pmu)
 {
-	struct cpu_hw_sf *cpuhw = this_cpu_ptr(&cpu_hw_sf);
+	struct cpu_hw_sf *cpuhw = &__get_cpu_var(cpu_hw_sf);
 	struct hws_lsctl_request_block inactive;
 	struct hws_qsi_info_block si;
 	int err;
@@ -974,15 +979,12 @@ static int perf_push_sample(struct perf_event *event, struct sf_raw_sample *sfr)
 	struct pt_regs regs;
 	struct perf_sf_sde_regs *sde_regs;
 	struct perf_sample_data data;
-	struct perf_raw_record raw = {
-		.frag = {
-			.size = sfr->size,
-			.data = sfr,
-		},
-	};
+	struct perf_raw_record raw;
 
 	/* Setup perf sample */
 	perf_sample_data_init(&data, 0, event->hw.last_period);
+	raw.size = sfr->size;
+	raw.data = sfr;
 	data.raw = &raw;
 
 	/* Setup pt_regs to look like an CPU-measurement external interrupt
@@ -1017,16 +1019,14 @@ static int perf_push_sample(struct perf_event *event, struct sf_raw_sample *sfr)
 		break;
 	}
 
-	/*
-	 * A non-zero guest program parameter indicates a guest
-	 * sample.
-	 * Note that some early samples or samples from guests without
-	 * lpp usage would be misaccounted to the host. We use the asn
-	 * value as a heuristic to detect most of these guest samples.
-	 * If the value differs from the host hpp value, we assume
-	 * it to be a KVM guest.
+	/* The host-program-parameter (hpp) contains the sie control
+	 * block that is set by sie64a() in entry64.S.	Check if hpp
+	 * refers to a valid control block and set sde_regs flags
+	 * accordingly.  This would allow to use hpp values for other
+	 * purposes too.
+	 * For now, simply use a non-zero value as guest indicator.
 	 */
-	if (sfr->basic.gpp || sfr->basic.prim_asn != (u16) sfr->basic.hpp)
+	if (sfr->basic.hpp)
 		sde_regs->in_guest = 1;
 
 	overflow = 0;
@@ -1306,7 +1306,7 @@ static void cpumsf_pmu_read(struct perf_event *event)
  */
 static void cpumsf_pmu_start(struct perf_event *event, int flags)
 {
-	struct cpu_hw_sf *cpuhw = this_cpu_ptr(&cpu_hw_sf);
+	struct cpu_hw_sf *cpuhw = &__get_cpu_var(cpu_hw_sf);
 
 	if (WARN_ON_ONCE(!(event->hw.state & PERF_HES_STOPPED)))
 		return;
@@ -1327,7 +1327,7 @@ static void cpumsf_pmu_start(struct perf_event *event, int flags)
  */
 static void cpumsf_pmu_stop(struct perf_event *event, int flags)
 {
-	struct cpu_hw_sf *cpuhw = this_cpu_ptr(&cpu_hw_sf);
+	struct cpu_hw_sf *cpuhw = &__get_cpu_var(cpu_hw_sf);
 
 	if (event->hw.state & PERF_HES_STOPPED)
 		return;
@@ -1346,7 +1346,7 @@ static void cpumsf_pmu_stop(struct perf_event *event, int flags)
 
 static int cpumsf_pmu_add(struct perf_event *event, int flags)
 {
-	struct cpu_hw_sf *cpuhw = this_cpu_ptr(&cpu_hw_sf);
+	struct cpu_hw_sf *cpuhw = &__get_cpu_var(cpu_hw_sf);
 	int err;
 
 	if (cpuhw->flags & PMU_F_IN_USE)
@@ -1383,6 +1383,7 @@ static int cpumsf_pmu_add(struct perf_event *event, int flags)
 		cpuhw->lsctl.ed = 1;
 
 	/* Set in_use flag and store event */
+	event->hw.idx = 0;	  /* only one sampling event per CPU supported */
 	cpuhw->event = event;
 	cpuhw->flags |= PMU_F_IN_USE;
 
@@ -1396,7 +1397,7 @@ out:
 
 static void cpumsf_pmu_del(struct perf_event *event, int flags)
 {
-	struct cpu_hw_sf *cpuhw = this_cpu_ptr(&cpu_hw_sf);
+	struct cpu_hw_sf *cpuhw = &__get_cpu_var(cpu_hw_sf);
 
 	perf_pmu_disable(event->pmu);
 	cpumsf_pmu_stop(event, PERF_EF_UPDATE);
@@ -1410,12 +1411,17 @@ static void cpumsf_pmu_del(struct perf_event *event, int flags)
 	perf_pmu_enable(event->pmu);
 }
 
+static int cpumsf_pmu_event_idx(struct perf_event *event)
+{
+	return event->hw.idx;
+}
+
 CPUMF_EVENT_ATTR(SF, SF_CYCLES_BASIC, PERF_EVENT_CPUM_SF);
 CPUMF_EVENT_ATTR(SF, SF_CYCLES_BASIC_DIAG, PERF_EVENT_CPUM_SF_DIAG);
 
 static struct attribute *cpumsf_pmu_events_attr[] = {
 	CPUMF_EVENT_PTR(SF, SF_CYCLES_BASIC),
-	NULL,
+	CPUMF_EVENT_PTR(SF, SF_CYCLES_BASIC_DIAG),
 	NULL,
 };
 
@@ -1452,6 +1458,7 @@ static struct pmu cpumf_sampling = {
 	.stop	      = cpumsf_pmu_stop,
 	.read	      = cpumsf_pmu_read,
 
+	.event_idx    = cpumsf_pmu_event_idx,
 	.attr_groups  = cpumsf_pmu_attr_groups,
 };
 
@@ -1463,7 +1470,7 @@ static void cpumf_measurement_alert(struct ext_code ext_code,
 	if (!(alert & CPU_MF_INT_SF_MASK))
 		return;
 	inc_irq_stat(IRQEXT_CMS);
-	cpuhw = this_cpu_ptr(&cpu_hw_sf);
+	cpuhw = &__get_cpu_var(cpu_hw_sf);
 
 	/* Measurement alerts are shared and might happen when the PMU
 	 * is not reserved.  Ignore these alerts in this case. */
@@ -1504,28 +1511,34 @@ static void cpumf_measurement_alert(struct ext_code ext_code,
 		sf_disable();
 	}
 }
-static int cpusf_pmu_setup(unsigned int cpu, int flags)
+
+static int cpumf_pmu_notifier(struct notifier_block *self,
+			      unsigned long action, void *hcpu)
 {
+	unsigned int cpu = (long) hcpu;
+	int flags;
+
 	/* Ignore the notification if no events are scheduled on the PMU.
 	 * This might be racy...
 	 */
 	if (!atomic_read(&num_events))
-		return 0;
+		return NOTIFY_OK;
 
-	local_irq_disable();
-	setup_pmc_cpu(&flags);
-	local_irq_enable();
-	return 0;
-}
+	switch (action & ~CPU_TASKS_FROZEN) {
+	case CPU_ONLINE:
+	case CPU_ONLINE_FROZEN:
+		flags = PMC_INIT;
+		smp_call_function_single(cpu, setup_pmc_cpu, &flags, 1);
+		break;
+	case CPU_DOWN_PREPARE:
+		flags = PMC_RELEASE;
+		smp_call_function_single(cpu, setup_pmc_cpu, &flags, 1);
+		break;
+	default:
+		break;
+	}
 
-static int s390_pmu_sf_online_cpu(unsigned int cpu)
-{
-	return cpusf_pmu_setup(cpu, PMC_INIT);
-}
-
-static int s390_pmu_sf_offline_cpu(unsigned int cpu)
-{
-	return cpusf_pmu_setup(cpu, PMC_RELEASE);
+	return NOTIFY_OK;
 }
 
 static int param_get_sfb_size(char *buffer, const struct kernel_param *kp)
@@ -1566,7 +1579,7 @@ static int param_set_sfb_size(const char *val, const struct kernel_param *kp)
 }
 
 #define param_check_sfb_size(name, p) __param_check(name, p, void)
-static const struct kernel_param_ops param_ops_sfb_size = {
+static struct kernel_param_ops param_ops_sfb_size = {
 	.set = param_set_sfb_size,
 	.get = param_get_sfb_size,
 };
@@ -1600,19 +1613,15 @@ static int __init init_cpum_sampling_pmu(void)
 		return -EINVAL;
 	}
 
-	if (si.ad) {
+	if (si.ad)
 		sfb_set_limits(CPUM_SF_MIN_SDB, CPUM_SF_MAX_SDB);
-		cpumsf_pmu_events_attr[1] =
-			CPUMF_EVENT_PTR(SF, SF_CYCLES_BASIC_DIAG);
-	}
 
 	sfdbg = debug_register(KMSG_COMPONENT, 2, 1, 80);
 	if (!sfdbg)
 		pr_err("Registering for s390dbf failed\n");
 	debug_register_view(sfdbg, &debug_sprintf_view);
 
-	err = register_external_irq(EXT_IRQ_MEASURE_ALERT,
-				    cpumf_measurement_alert);
+	err = register_external_interrupt(0x1407, cpumf_measurement_alert);
 	if (err) {
 		pr_cpumsf_err(RS_INIT_FAILURE_ALRT);
 		goto out;
@@ -1621,13 +1630,10 @@ static int __init init_cpum_sampling_pmu(void)
 	err = perf_pmu_register(&cpumf_sampling, "cpum_sf", PERF_TYPE_RAW);
 	if (err) {
 		pr_cpumsf_err(RS_INIT_FAILURE_PERF);
-		unregister_external_irq(EXT_IRQ_MEASURE_ALERT,
-					cpumf_measurement_alert);
+		unregister_external_interrupt(0x1407, cpumf_measurement_alert);
 		goto out;
 	}
-
-	cpuhp_setup_state(CPUHP_AP_PERF_S390_SF_ONLINE, "AP_PERF_S390_SF_ONLINE",
-			  s390_pmu_sf_online_cpu, s390_pmu_sf_offline_cpu);
+	perf_cpu_notifier(cpumf_pmu_notifier);
 out:
 	return err;
 }

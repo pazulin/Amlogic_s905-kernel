@@ -116,7 +116,7 @@ static const struct gma_limit_t cdv_intel_limits[] = {
 	 .p1 = {.min = 1, .max = 10},
 	 .p2 = {.dot_limit = 225000, .p2_slow = 10, .p2_fast = 10},
 	 .find_pll = cdv_intel_find_dp_pll,
-	}
+	 }	
 };
 
 #define _wait_for(COND, MS, W) ({ \
@@ -245,7 +245,7 @@ cdv_dpll_set_clock_cdv(struct drm_device *dev, struct drm_crtc *crtc,
 	/* We don't know what the other fields of these regs are, so
 	 * leave them in place.
 	 */
-	/*
+	/* 
 	 * The BIT 14:13 of 0x8010/0x8030 is used to select the ref clk
 	 * for the pipe A/B. Display spec 1.06 has wrong definition.
 	 * Correct definition is like below:
@@ -256,7 +256,7 @@ cdv_dpll_set_clock_cdv(struct drm_device *dev, struct drm_crtc *crtc,
 	 *
 	 * if DPLLA sets 01 and DPLLB sets 02, both use clk from DPLLA
 	 *
-	 */
+	 */  
 	ret = cdv_sb_read(dev, ref_sfr, &ref_value);
 	if (ret)
 		return ret;
@@ -412,11 +412,8 @@ static bool cdv_intel_find_dp_pll(const struct gma_limit_t *limit,
 				  int refclk,
 				  struct gma_clock_t *best_clock)
 {
-	struct gma_crtc *gma_crtc = to_gma_crtc(crtc);
 	struct gma_clock_t clock;
-
-	switch (refclk) {
-	case 27000:
+	if (refclk == 27000) {
 		if (target < 200000) {
 			clock.p1 = 2;
 			clock.p2 = 10;
@@ -430,9 +427,7 @@ static bool cdv_intel_find_dp_pll(const struct gma_limit_t *limit,
 			clock.m1 = 0;
 			clock.m2 = 98;
 		}
-		break;
-
-	case 100000:
+	} else if (refclk == 100000) {
 		if (target < 200000) {
 			clock.p1 = 2;
 			clock.p2 = 10;
@@ -446,13 +441,12 @@ static bool cdv_intel_find_dp_pll(const struct gma_limit_t *limit,
 			clock.m1 = 0;
 			clock.m2 = 133;
 		}
-		break;
-
-	default:
+	} else
 		return false;
-	}
-
-	gma_crtc->clock_funcs->clock(refclk, &clock);
+	clock.m = clock.m2 + 2;
+	clock.p = clock.p1 * clock.p2;
+	clock.vco = (refclk * clock.m) / clock.n;
+	clock.dot = clock.vco / clock.p;
 	memcpy(best_clock, &clock, sizeof(struct gma_clock_t));
 	return true;
 }
@@ -469,9 +463,52 @@ static bool cdv_intel_pipe_enabled(struct drm_device *dev, int pipe)
 	crtc = dev_priv->pipe_to_crtc_mapping[pipe];
 	gma_crtc = to_gma_crtc(crtc);
 
-	if (crtc->primary->fb == NULL || !gma_crtc->active)
+	if (crtc->fb == NULL || !gma_crtc->active)
 		return false;
 	return true;
+}
+
+static bool cdv_intel_single_pipe_active (struct drm_device *dev)
+{
+	uint32_t pipe_enabled = 0;
+
+	if (cdv_intel_pipe_enabled(dev, 0))
+		pipe_enabled |= FIFO_PIPEA;
+
+	if (cdv_intel_pipe_enabled(dev, 1))
+		pipe_enabled |= FIFO_PIPEB;
+
+
+	DRM_DEBUG_KMS("pipe enabled %x\n", pipe_enabled);
+
+	if (pipe_enabled == FIFO_PIPEA || pipe_enabled == FIFO_PIPEB)
+		return true;
+	else
+		return false;
+}
+
+static bool is_pipeb_lvds(struct drm_device *dev, struct drm_crtc *crtc)
+{
+	struct gma_crtc *gma_crtc = to_gma_crtc(crtc);
+	struct drm_mode_config *mode_config = &dev->mode_config;
+	struct drm_connector *connector;
+
+	if (gma_crtc->pipe != 1)
+		return false;
+
+	list_for_each_entry(connector, &mode_config->connector_list, head) {
+		struct gma_encoder *gma_encoder =
+					gma_attached_encoder(connector);
+
+		if (!connector->encoder
+		    || connector->encoder->crtc != crtc)
+			continue;
+
+		if (gma_encoder->type == INTEL_OUTPUT_LVDS)
+			return true;
+	}
+
+	return false;
 }
 
 void cdv_disable_sr(struct drm_device *dev)
@@ -498,10 +535,8 @@ void cdv_disable_sr(struct drm_device *dev)
 void cdv_update_wm(struct drm_device *dev, struct drm_crtc *crtc)
 {
 	struct drm_psb_private *dev_priv = dev->dev_private;
-	struct gma_crtc *gma_crtc = to_gma_crtc(crtc);
 
-	/* Is only one pipe enabled? */
-	if (cdv_intel_pipe_enabled(dev, 0) ^ cdv_intel_pipe_enabled(dev, 1)) {
+	if (cdv_intel_single_pipe_active(dev)) {
 		u32 fw;
 
 		fw = REG_READ(DSPFW1);
@@ -522,9 +557,7 @@ void cdv_update_wm(struct drm_device *dev, struct drm_crtc *crtc)
 
 		/* ignore FW4 */
 
-		/* Is pipe b lvds ? */
-		if (gma_crtc->pipe == 1 &&
-		    gma_pipe_has_type(crtc, INTEL_OUTPUT_LVDS)) {
+		if (is_pipeb_lvds(dev, crtc)) {
 			REG_WRITE(DSPFW5, 0x00040330);
 		} else {
 			fw = (3 << DSP_PLANE_B_FIFO_WM1_SHIFT) |
@@ -646,7 +679,7 @@ static int cdv_intel_crtc_mode_set(struct drm_crtc *crtc,
 		 * for DP/eDP. When using SSC clock, the ref clk is 100MHz.Otherwise
 		 * it will be 27MHz. From the VBIOS code it seems that the pipe A choose
 		 * 27MHz for DP/eDP while the Pipe B chooses the 100MHz.
-		 */
+		 */ 
 		if (pipe == 0)
 			refclk = 27000;
 		else
@@ -659,7 +692,7 @@ static int cdv_intel_crtc_mode_set(struct drm_crtc *crtc,
 	}
 
 	drm_mode_debug_printmodeline(adjusted_mode);
-
+	
 	limit = gma_crtc->clock_funcs->limit(crtc, refclk);
 
 	ok = limit->find_pll(limit, crtc, adjusted_mode->clock, refclk,
@@ -721,7 +754,7 @@ static int cdv_intel_crtc_mode_set(struct drm_crtc *crtc,
 			pipeconf |= PIPE_6BPC;
 	} else
 		pipeconf |= PIPE_8BPC;
-
+			
 	/* Set up the display plane register */
 	dspcntr = DISPPLANE_GAMMA_ENABLE;
 
@@ -823,7 +856,7 @@ static int cdv_intel_crtc_mode_set(struct drm_crtc *crtc,
 
 	/* Flush the plane changes */
 	{
-		const struct drm_crtc_helper_funcs *crtc_funcs =
+		struct drm_crtc_helper_funcs *crtc_funcs =
 		    crtc->helper_private;
 		crtc_funcs->mode_set_base(crtc, x, y, old_fb);
 	}
@@ -974,6 +1007,7 @@ struct drm_display_mode *cdv_intel_crtc_mode_get(struct drm_device *dev,
 
 const struct drm_crtc_helper_funcs cdv_intel_helper_funcs = {
 	.dpms = gma_crtc_dpms,
+	.mode_fixup = gma_crtc_mode_fixup,
 	.mode_set = cdv_intel_crtc_mode_set,
 	.mode_set_base = gma_pipe_set_base,
 	.prepare = gma_crtc_prepare,
@@ -982,6 +1016,8 @@ const struct drm_crtc_helper_funcs cdv_intel_helper_funcs = {
 };
 
 const struct drm_crtc_funcs cdv_intel_crtc_funcs = {
+	.save = gma_crtc_save,
+	.restore = gma_crtc_restore,
 	.cursor_set = gma_crtc_cursor_set,
 	.cursor_move = gma_crtc_cursor_move,
 	.gamma_set = gma_crtc_gamma_set,

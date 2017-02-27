@@ -8,24 +8,14 @@
 #ifndef DESC_H
 #define DESC_H
 
-/*
- * 16-byte hardware scatter/gather table
- * An 8-byte table exists in the hardware spec, but has never been
- * implemented to date. The 8/16 option is selected at RTL-compile-time.
- * and this selection is visible in the Compile Time Parameters Register
- */
-
-#define SEC4_SG_LEN_EXT		0x80000000	/* Entry points to table */
-#define SEC4_SG_LEN_FIN		0x40000000	/* Last ent in table */
-#define SEC4_SG_BPID_MASK	0x000000ff
-#define SEC4_SG_BPID_SHIFT	16
-#define SEC4_SG_LEN_MASK	0x3fffffff	/* Excludes EXT and FINAL */
-#define SEC4_SG_OFFSET_MASK	0x00001fff
-
 struct sec4_sg_entry {
 	u64 ptr;
+#define SEC4_SG_LEN_FIN 0x40000000
+#define SEC4_SG_LEN_EXT 0x80000000
 	u32 len;
-	u32 bpid_offset;
+	u8 reserved;
+	u8 buf_pool_id;
+	u16 offset;
 };
 
 /* Max size of any CAAM descriptor in 32-bit words, inclusive of header */
@@ -331,6 +321,7 @@ struct sec4_sg_entry {
 /* Continue - Not the last FIFO store to come */
 #define FIFOST_CONT_SHIFT	23
 #define FIFOST_CONT_MASK	(1 << FIFOST_CONT_SHIFT)
+#define FIFOST_CONT_MASK	(1 << FIFOST_CONT_SHIFT)
 
 /*
  * Extended Length - use 32-bit extended length that
@@ -447,8 +438,6 @@ struct sec4_sg_entry {
 #define OP_PCLID_PUBLICKEYPAIR	(0x14 << OP_PCLID_SHIFT)
 #define OP_PCLID_DSASIGN	(0x15 << OP_PCLID_SHIFT)
 #define OP_PCLID_DSAVERIFY	(0x16 << OP_PCLID_SHIFT)
-#define OP_PCLID_RSAENC_PUBKEY  (0x18 << OP_PCLID_SHIFT)
-#define OP_PCLID_RSADEC_PRVKEY  (0x19 << OP_PCLID_SHIFT)
 
 /* Assuming OP_TYPE = OP_TYPE_DECAP_PROTOCOL/ENCAP_PROTOCOL */
 #define OP_PCLID_IPSEC		(0x01 << OP_PCLID_SHIFT)
@@ -1487,6 +1476,7 @@ struct sec4_sg_entry {
 #define JUMP_JSL		(1 << JUMP_JSL_SHIFT)
 
 #define JUMP_TYPE_SHIFT		22
+#define JUMP_TYPE_MASK		(0x03 << JUMP_TYPE_SHIFT)
 #define JUMP_TYPE_LOCAL		(0x00 << JUMP_TYPE_SHIFT)
 #define JUMP_TYPE_NONLOCAL	(0x01 << JUMP_TYPE_SHIFT)
 #define JUMP_TYPE_HALT		(0x02 << JUMP_TYPE_SHIFT)

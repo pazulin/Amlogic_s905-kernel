@@ -25,36 +25,41 @@ struct netprio_map {
 	u32 priomap[];
 };
 
+void sock_update_netprioidx(struct sock *sk);
+
+#if IS_BUILTIN(CONFIG_CGROUP_NET_PRIO)
 static inline u32 task_netprioidx(struct task_struct *p)
 {
 	struct cgroup_subsys_state *css;
 	u32 idx;
 
 	rcu_read_lock();
-	css = task_css(p, net_prio_cgrp_id);
+	css = task_css(p, net_prio_subsys_id);
 	idx = css->cgroup->id;
 	rcu_read_unlock();
 	return idx;
 }
-
-static inline void sock_update_netprioidx(struct sock_cgroup_data *skcd)
+#elif IS_MODULE(CONFIG_CGROUP_NET_PRIO)
+static inline u32 task_netprioidx(struct task_struct *p)
 {
-	if (in_interrupt())
-		return;
+	struct cgroup_subsys_state *css;
+	u32 idx = 0;
 
-	sock_cgroup_set_prioidx(skcd, task_netprioidx(current));
+	rcu_read_lock();
+	css = task_css(p, net_prio_subsys_id);
+	if (css)
+		idx = css->cgroup->id;
+	rcu_read_unlock();
+	return idx;
 }
-
+#endif
 #else /* !CONFIG_CGROUP_NET_PRIO */
-
 static inline u32 task_netprioidx(struct task_struct *p)
 {
 	return 0;
 }
 
-static inline void sock_update_netprioidx(struct sock_cgroup_data *skcd)
-{
-}
+#define sock_update_netprioidx(sk)
 
 #endif /* CONFIG_CGROUP_NET_PRIO */
 #endif  /* _NET_CLS_CGROUP_H */

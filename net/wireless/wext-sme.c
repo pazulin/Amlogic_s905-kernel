@@ -21,7 +21,7 @@ int cfg80211_mgd_wext_connect(struct cfg80211_registered_device *rdev,
 	const u8 *prev_bssid = NULL;
 	int err, i;
 
-	ASSERT_RTNL();
+	ASSERT_RDEV_LOCK(rdev);
 	ASSERT_WDEV_LOCK(wdev);
 
 	if (!netif_running(wdev->netdev))
@@ -35,6 +35,7 @@ int cfg80211_mgd_wext_connect(struct cfg80211_registered_device *rdev,
 
 	if (wdev->wext.keys) {
 		wdev->wext.keys->def = wdev->wext.default_key;
+		wdev->wext.keys->defmgmt = wdev->wext.default_mgmt_key;
 		if (wdev->wext.default_key != -1)
 			wdev->wext.connect.privacy = true;
 	}
@@ -42,11 +43,11 @@ int cfg80211_mgd_wext_connect(struct cfg80211_registered_device *rdev,
 	if (!wdev->wext.connect.ssid_len)
 		return 0;
 
-	if (wdev->wext.keys && wdev->wext.keys->def != -1) {
+	if (wdev->wext.keys) {
 		ck = kmemdup(wdev->wext.keys, sizeof(*ck), GFP_KERNEL);
 		if (!ck)
 			return -ENOMEM;
-		for (i = 0; i < CFG80211_MAX_WEP_KEYS; i++)
+		for (i = 0; i < 6; i++)
 			ck->params[i].key = ck->data[i];
 	}
 
@@ -56,7 +57,7 @@ int cfg80211_mgd_wext_connect(struct cfg80211_registered_device *rdev,
 	err = cfg80211_connect(rdev, wdev->netdev,
 			       &wdev->wext.connect, ck, prev_bssid);
 	if (err)
-		kzfree(ck);
+		kfree(ck);
 
 	return err;
 }
@@ -66,7 +67,7 @@ int cfg80211_mgd_wext_siwfreq(struct net_device *dev,
 			      struct iw_freq *wextfreq, char *extra)
 {
 	struct wireless_dev *wdev = dev->ieee80211_ptr;
-	struct cfg80211_registered_device *rdev = wiphy_to_rdev(wdev->wiphy);
+	struct cfg80211_registered_device *rdev = wiphy_to_dev(wdev->wiphy);
 	struct ieee80211_channel *chan = NULL;
 	int err, freq;
 
@@ -74,7 +75,7 @@ int cfg80211_mgd_wext_siwfreq(struct net_device *dev,
 	if (WARN_ON(wdev->iftype != NL80211_IFTYPE_STATION))
 		return -EINVAL;
 
-	freq = cfg80211_wext_freq(wextfreq);
+	freq = cfg80211_wext_freq(wdev->wiphy, wextfreq);
 	if (freq < 0)
 		return freq;
 
@@ -168,7 +169,7 @@ int cfg80211_mgd_wext_siwessid(struct net_device *dev,
 			       struct iw_point *data, char *ssid)
 {
 	struct wireless_dev *wdev = dev->ieee80211_ptr;
-	struct cfg80211_registered_device *rdev = wiphy_to_rdev(wdev->wiphy);
+	struct cfg80211_registered_device *rdev = wiphy_to_dev(wdev->wiphy);
 	size_t len = data->length;
 	int err;
 
@@ -259,7 +260,7 @@ int cfg80211_mgd_wext_siwap(struct net_device *dev,
 			    struct sockaddr *ap_addr, char *extra)
 {
 	struct wireless_dev *wdev = dev->ieee80211_ptr;
-	struct cfg80211_registered_device *rdev = wiphy_to_rdev(wdev->wiphy);
+	struct cfg80211_registered_device *rdev = wiphy_to_dev(wdev->wiphy);
 	u8 *bssid = ap_addr->sa_data;
 	int err;
 
@@ -321,7 +322,7 @@ int cfg80211_mgd_wext_giwap(struct net_device *dev,
 	if (wdev->current_bss)
 		memcpy(ap_addr->sa_data, wdev->current_bss->pub.bssid, ETH_ALEN);
 	else
-		eth_zero_addr(ap_addr->sa_data);
+		memset(ap_addr->sa_data, 0, ETH_ALEN);
 	wdev_unlock(wdev);
 
 	return 0;
@@ -332,7 +333,7 @@ int cfg80211_wext_siwgenie(struct net_device *dev,
 			   struct iw_point *data, char *extra)
 {
 	struct wireless_dev *wdev = dev->ieee80211_ptr;
-	struct cfg80211_registered_device *rdev = wiphy_to_rdev(wdev->wiphy);
+	struct cfg80211_registered_device *rdev = wiphy_to_dev(wdev->wiphy);
 	u8 *ie = extra;
 	int ie_len = data->length, err;
 
@@ -389,7 +390,7 @@ int cfg80211_wext_siwmlme(struct net_device *dev,
 	if (!wdev)
 		return -EOPNOTSUPP;
 
-	rdev = wiphy_to_rdev(wdev->wiphy);
+	rdev = wiphy_to_dev(wdev->wiphy);
 
 	if (wdev->iftype != NL80211_IFTYPE_STATION)
 		return -EINVAL;

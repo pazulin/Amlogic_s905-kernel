@@ -31,13 +31,10 @@
 #include <linux/cpu.h>
 #include <linux/notifier.h>
 #include <linux/topology.h>
-#include <linux/profile.h>
 
 #include <asm/ptrace.h>
 #include <linux/atomic.h>
 #include <asm/irq.h>
-#include <asm/hw_irq.h>
-#include <asm/kvm_ppc.h>
 #include <asm/page.h>
 #include <asm/pgtable.h>
 #include <asm/prom.h>
@@ -53,9 +50,6 @@
 #endif
 #include <asm/vdso.h>
 #include <asm/debug.h>
-#include <asm/kexec.h>
-#include <asm/asm-prototypes.h>
-#include <asm/cpu_has_feature.h>
 
 #ifdef DEBUG
 #include <asm/udbg.h>
@@ -151,9 +145,9 @@ static irqreturn_t reschedule_action(int irq, void *data)
 	return IRQ_HANDLED;
 }
 
-static irqreturn_t tick_broadcast_ipi_action(int irq, void *data)
+static irqreturn_t call_function_single_action(int irq, void *data)
 {
-	tick_broadcast_ipi_handler();
+	generic_smp_call_function_single_interrupt();
 	return IRQ_HANDLED;
 }
 
@@ -174,14 +168,14 @@ static irqreturn_t debug_ipi_action(int irq, void *data)
 static irq_handler_t smp_ipi_action[] = {
 	[PPC_MSG_CALL_FUNCTION] =  call_function_action,
 	[PPC_MSG_RESCHEDULE] = reschedule_action,
-	[PPC_MSG_TICK_BROADCAST] = tick_broadcast_ipi_action,
+	[PPC_MSG_CALL_FUNC_SINGLE] = call_function_single_action,
 	[PPC_MSG_DEBUGGER_BREAK] = debug_ipi_action,
 };
 
 const char *smp_ipi_name[] = {
 	[PPC_MSG_CALL_FUNCTION] =  "ipi call function",
 	[PPC_MSG_RESCHEDULE] = "ipi reschedule",
-	[PPC_MSG_TICK_BROADCAST] = "ipi tick-broadcast",
+	[PPC_MSG_CALL_FUNC_SINGLE] = "ipi call function single",
 	[PPC_MSG_DEBUGGER_BREAK] = "ipi debugger",
 };
 
@@ -209,7 +203,7 @@ int smp_request_message_ipi(int virq, int msg)
 
 #ifdef CONFIG_PPC_SMP_MUXED_IPI
 struct cpu_messages {
-	long messages;			/* current messages */
+	int messages;			/* current messages */
 	unsigned long data;		/* data for cause ipi */
 };
 static DEFINE_PER_CPU_SHARED_ALIGNED(struct cpu_messages, ipi_message);
@@ -221,7 +215,7 @@ void smp_muxed_ipi_set_data(int cpu, unsigned long data)
 	info->data = data;
 }
 
-void smp_muxed_ipi_set_message(int cpu, int msg)
+void smp_muxed_ipi_message_pass(int cpu, int msg)
 {
 	struct cpu_messages *info = &per_cpu(ipi_message, cpu);
 	char *message = (char *)&info->messages;
@@ -231,13 +225,6 @@ void smp_muxed_ipi_set_message(int cpu, int msg)
 	 */
 	smp_mb();
 	message[msg] = 1;
-}
-
-void smp_muxed_ipi_message_pass(int cpu, int msg)
-{
-	struct cpu_messages *info = &per_cpu(ipi_message, cpu);
-
-	smp_muxed_ipi_set_message(cpu, msg);
 	/*
 	 * cause_ipi functions are required to include a full barrier
 	 * before doing whatever causes the IPI.
@@ -246,37 +233,26 @@ void smp_muxed_ipi_message_pass(int cpu, int msg)
 }
 
 #ifdef __BIG_ENDIAN__
-#define IPI_MESSAGE(A) (1uL << ((BITS_PER_LONG - 8) - 8 * (A)))
+#define IPI_MESSAGE(A) (1 << (24 - 8 * (A)))
 #else
-#define IPI_MESSAGE(A) (1uL << (8 * (A)))
+#define IPI_MESSAGE(A) (1 << (8 * (A)))
 #endif
 
 irqreturn_t smp_ipi_demux(void)
 {
-	struct cpu_messages *info = this_cpu_ptr(&ipi_message);
-	unsigned long all;
+	struct cpu_messages *info = &__get_cpu_var(ipi_message);
+	unsigned int all;
 
 	mb();	/* order any irq clear */
 
 	do {
 		all = xchg(&info->messages, 0);
-#if defined(CONFIG_KVM_XICS) && defined(CONFIG_KVM_BOOK3S_HV_POSSIBLE)
-		/*
-		 * Must check for PPC_MSG_RM_HOST_ACTION messages
-		 * before PPC_MSG_CALL_FUNCTION messages because when
-		 * a VM is destroyed, we call kick_all_cpus_sync()
-		 * to ensure that any pending PPC_MSG_RM_HOST_ACTION
-		 * messages have completed before we free any VCPUs.
-		 */
-		if (all & IPI_MESSAGE(PPC_MSG_RM_HOST_ACTION))
-			kvmppc_xics_ipi_action();
-#endif
 		if (all & IPI_MESSAGE(PPC_MSG_CALL_FUNCTION))
 			generic_smp_call_function_interrupt();
 		if (all & IPI_MESSAGE(PPC_MSG_RESCHEDULE))
 			scheduler_ipi();
-		if (all & IPI_MESSAGE(PPC_MSG_TICK_BROADCAST))
-			tick_broadcast_ipi_handler();
+		if (all & IPI_MESSAGE(PPC_MSG_CALL_FUNC_SINGLE))
+			generic_smp_call_function_single_interrupt();
 		if (all & IPI_MESSAGE(PPC_MSG_DEBUGGER_BREAK))
 			debug_ipi_action(0, NULL);
 	} while (info->messages);
@@ -304,7 +280,7 @@ EXPORT_SYMBOL_GPL(smp_send_reschedule);
 
 void arch_send_call_function_single_ipi(int cpu)
 {
-	do_message_pass(cpu, PPC_MSG_CALL_FUNCTION);
+	do_message_pass(cpu, PPC_MSG_CALL_FUNC_SINGLE);
 }
 
 void arch_send_call_function_ipi_mask(const struct cpumask *mask)
@@ -314,16 +290,6 @@ void arch_send_call_function_ipi_mask(const struct cpumask *mask)
 	for_each_cpu(cpu, mask)
 		do_message_pass(cpu, PPC_MSG_CALL_FUNCTION);
 }
-
-#ifdef CONFIG_GENERIC_CLOCKEVENTS_BROADCAST
-void tick_broadcast(const struct cpumask *mask)
-{
-	unsigned int cpu;
-
-	for_each_cpu(cpu, mask)
-		do_message_pass(cpu, PPC_MSG_TICK_BROADCAST);
-}
-#endif
 
 #if defined(CONFIG_DEBUGGER) || defined(CONFIG_KEXEC)
 void smp_send_debugger_break(void)
@@ -398,14 +364,6 @@ void __init smp_prepare_cpus(unsigned int max_cpus)
 					GFP_KERNEL, cpu_to_node(cpu));
 		zalloc_cpumask_var_node(&per_cpu(cpu_core_map, cpu),
 					GFP_KERNEL, cpu_to_node(cpu));
-		/*
-		 * numa_node_id() works after this.
-		 */
-		if (cpu_present(cpu)) {
-			set_cpu_numa_node(cpu, numa_cpu_lookup_table[cpu]);
-			set_cpu_numa_mem(cpu,
-				local_memory_node(numa_cpu_lookup_table[cpu]));
-		}
 	}
 
 	cpumask_set_cpu(boot_cpuid, cpu_sibling_mask(boot_cpuid));
@@ -421,7 +379,6 @@ void smp_prepare_boot_cpu(void)
 #ifdef CONFIG_PPC64
 	paca[boot_cpuid].__current = current;
 #endif
-	set_numa_node(numa_cpu_lookup_table[boot_cpuid]);
 	current_set[boot_cpuid] = task_thread_info(current);
 }
 
@@ -448,11 +405,25 @@ void generic_cpu_die(unsigned int cpu)
 
 	for (i = 0; i < 100; i++) {
 		smp_rmb();
-		if (is_cpu_dead(cpu))
+		if (per_cpu(cpu_state, cpu) == CPU_DEAD)
 			return;
 		msleep(100);
 	}
 	printk(KERN_ERR "CPU%d didn't die...\n", cpu);
+}
+
+void generic_mach_cpu_die(void)
+{
+	unsigned int cpu;
+
+	local_irq_disable();
+	idle_task_exit();
+	cpu = smp_processor_id();
+	printk(KERN_DEBUG "CPU%d offline\n", cpu);
+	__get_cpu_var(cpu_state) = CPU_DEAD;
+	smp_wmb();
+	while (__get_cpu_var(cpu_state) != CPU_UP_PREPARE)
+		cpu_relax();
 }
 
 void generic_set_cpu_dead(unsigned int cpu)
@@ -475,14 +446,38 @@ int generic_check_cpu_restart(unsigned int cpu)
 	return per_cpu(cpu_state, cpu) == CPU_UP_PREPARE;
 }
 
-int is_cpu_dead(unsigned int cpu)
-{
-	return per_cpu(cpu_state, cpu) == CPU_DEAD;
-}
+static atomic_t secondary_inhibit_count;
 
-static bool secondaries_inhibited(void)
+/*
+ * Don't allow secondary CPU threads to come online
+ */
+void inhibit_secondary_onlining(void)
 {
-	return kvm_hv_mode_active();
+	/*
+	 * This makes secondary_inhibit_count stable during cpu
+	 * online/offline operations.
+	 */
+	get_online_cpus();
+
+	atomic_inc(&secondary_inhibit_count);
+	put_online_cpus();
+}
+EXPORT_SYMBOL_GPL(inhibit_secondary_onlining);
+
+/*
+ * Allow secondary CPU threads to come online again
+ */
+void uninhibit_secondary_onlining(void)
+{
+	get_online_cpus();
+	atomic_dec(&secondary_inhibit_count);
+	put_online_cpus();
+}
+EXPORT_SYMBOL_GPL(uninhibit_secondary_onlining);
+
+static int secondaries_inhibited(void)
+{
+	return atomic_read(&secondary_inhibit_count);
 }
 
 #else /* HOTPLUG_CPU */
@@ -511,7 +506,7 @@ int __cpu_up(unsigned int cpu, struct task_struct *tidle)
 	 * Don't allow secondary threads to come online if inhibited
 	 */
 	if (threads_per_core > 1 && secondaries_inhibited() &&
-	    cpu_thread_in_subcore(cpu))
+	    cpu % threads_per_core != 0)
 		return -EBUSY;
 
 	if (smp_ops == NULL ||
@@ -567,7 +562,7 @@ int __cpu_up(unsigned int cpu, struct task_struct *tidle)
 	if (smp_ops->give_timebase)
 		smp_ops->give_timebase();
 
-	/* Wait until cpu puts itself in the online & active maps */
+	/* Wait until cpu puts itself in the online map */
 	while (!cpu_online(cpu))
 		cpu_relax();
 
@@ -596,7 +591,6 @@ out:
 	of_node_put(np);
 	return id;
 }
-EXPORT_SYMBOL_GPL(cpu_to_core_id);
 
 /* Helper routines for cpu to core mapping */
 int cpu_core_index_of_thread(int cpu)
@@ -745,16 +739,13 @@ void start_secondary(void *unused)
 	}
 	traverse_core_siblings(cpu, true);
 
-	set_numa_node(numa_cpu_lookup_table[cpu]);
-	set_numa_mem(local_memory_node(numa_cpu_lookup_table[cpu]));
-
 	smp_wmb();
 	notify_cpu_starting(cpu);
 	set_cpu_online(cpu, true);
 
 	local_irq_enable();
 
-	cpu_startup_entry(CPUHP_AP_ONLINE_IDLE);
+	cpu_startup_entry(CPUHP_ONLINE);
 
 	BUG();
 }
@@ -763,28 +754,6 @@ int setup_profiling_timer(unsigned int multiplier)
 {
 	return 0;
 }
-
-#ifdef CONFIG_SCHED_SMT
-/* cpumask of CPUs with asymetric SMT dependancy */
-static int powerpc_smt_flags(void)
-{
-	int flags = SD_SHARE_CPUCAPACITY | SD_SHARE_PKG_RESOURCES;
-
-	if (cpu_has_feature(CPU_FTR_ASYM_SMT)) {
-		printk_once(KERN_INFO "Enabling Asymmetric SMT scheduling\n");
-		flags |= SD_ASYM_PACKING;
-	}
-	return flags;
-}
-#endif
-
-static struct sched_domain_topology_level powerpc_topology[] = {
-#ifdef CONFIG_SCHED_SMT
-	{ cpu_smt_mask, powerpc_smt_flags, SD_INIT_NAME(SMT) },
-#endif
-	{ cpu_cpu_mask, SD_INIT_NAME(DIE) },
-	{ NULL, },
-};
 
 void __init smp_cpus_done(unsigned int max_cpus)
 {
@@ -810,8 +779,15 @@ void __init smp_cpus_done(unsigned int max_cpus)
 
 	dump_numa_cpu_topology();
 
-	set_sched_topology(powerpc_topology);
+}
 
+int arch_sd_sibling_asym_packing(void)
+{
+	if (cpu_has_feature(CPU_FTR_ASYM_SMT)) {
+		printk_once(KERN_INFO "Enabling Asymmetric SMT scheduling\n");
+		return SD_ASYM_PACKING;
+	}
+	return 0;
 }
 
 #ifdef CONFIG_HOTPLUG_CPU
@@ -830,7 +806,7 @@ int __cpu_disable(void)
 
 	/* Update sibling maps */
 	base = cpu_first_thread_sibling(cpu);
-	for (i = 0; i < threads_per_core && base + i < nr_cpu_ids; i++) {
+	for (i = 0; i < threads_per_core; i++) {
 		cpumask_clear_cpu(cpu, cpu_sibling_mask(base + i));
 		cpumask_clear_cpu(base + i, cpu_sibling_mask(cpu));
 		cpumask_clear_cpu(cpu, cpu_core_mask(base + i));

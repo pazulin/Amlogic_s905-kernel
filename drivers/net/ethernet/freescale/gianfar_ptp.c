@@ -322,10 +322,10 @@ static int ptp_gianfar_adjtime(struct ptp_clock_info *ptp, s64 delta)
 	return 0;
 }
 
-static int ptp_gianfar_gettime(struct ptp_clock_info *ptp,
-			       struct timespec64 *ts)
+static int ptp_gianfar_gettime(struct ptp_clock_info *ptp, struct timespec *ts)
 {
 	u64 ns;
+	u32 remainder;
 	unsigned long flags;
 	struct etsects *etsects = container_of(ptp, struct etsects, caps);
 
@@ -335,19 +335,20 @@ static int ptp_gianfar_gettime(struct ptp_clock_info *ptp,
 
 	spin_unlock_irqrestore(&etsects->lock, flags);
 
-	*ts = ns_to_timespec64(ns);
-
+	ts->tv_sec = div_u64_rem(ns, 1000000000, &remainder);
+	ts->tv_nsec = remainder;
 	return 0;
 }
 
 static int ptp_gianfar_settime(struct ptp_clock_info *ptp,
-			       const struct timespec64 *ts)
+			       const struct timespec *ts)
 {
 	u64 ns;
 	unsigned long flags;
 	struct etsects *etsects = container_of(ptp, struct etsects, caps);
 
-	ns = timespec64_to_ns(ts);
+	ns = ts->tv_sec * 1000000000ULL;
+	ns += ts->tv_nsec;
 
 	spin_lock_irqsave(&etsects->lock, flags);
 
@@ -413,20 +414,32 @@ static struct ptp_clock_info ptp_gianfar_caps = {
 	.n_alarm	= 0,
 	.n_ext_ts	= N_EXT_TS,
 	.n_per_out	= 0,
-	.n_pins		= 0,
 	.pps		= 1,
 	.adjfreq	= ptp_gianfar_adjfreq,
 	.adjtime	= ptp_gianfar_adjtime,
-	.gettime64	= ptp_gianfar_gettime,
-	.settime64	= ptp_gianfar_settime,
+	.gettime	= ptp_gianfar_gettime,
+	.settime	= ptp_gianfar_settime,
 	.enable		= ptp_gianfar_enable,
 };
+
+/* OF device tree */
+
+static int get_of_u32(struct device_node *node, char *str, u32 *val)
+{
+	int plen;
+	const u32 *prop = of_get_property(node, str, &plen);
+
+	if (!prop || plen != sizeof(*prop))
+		return -1;
+	*val = *prop;
+	return 0;
+}
 
 static int gianfar_ptp_probe(struct platform_device *dev)
 {
 	struct device_node *node = dev->dev.of_node;
 	struct etsects *etsects;
-	struct timespec64 now;
+	struct timespec now;
 	int err = -ENOMEM;
 	u32 tmr_ctrl;
 	unsigned long flags;
@@ -439,28 +452,22 @@ static int gianfar_ptp_probe(struct platform_device *dev)
 
 	etsects->caps = ptp_gianfar_caps;
 
-	if (of_property_read_u32(node, "fsl,cksel", &etsects->cksel))
+	if (get_of_u32(node, "fsl,cksel", &etsects->cksel))
 		etsects->cksel = DEFAULT_CKSEL;
 
-	if (of_property_read_u32(node,
-				 "fsl,tclk-period", &etsects->tclk_period) ||
-	    of_property_read_u32(node,
-				 "fsl,tmr-prsc", &etsects->tmr_prsc) ||
-	    of_property_read_u32(node,
-				 "fsl,tmr-add", &etsects->tmr_add) ||
-	    of_property_read_u32(node,
-				 "fsl,tmr-fiper1", &etsects->tmr_fiper1) ||
-	    of_property_read_u32(node,
-				 "fsl,tmr-fiper2", &etsects->tmr_fiper2) ||
-	    of_property_read_u32(node,
-				 "fsl,max-adj", &etsects->caps.max_adj)) {
+	if (get_of_u32(node, "fsl,tclk-period", &etsects->tclk_period) ||
+	    get_of_u32(node, "fsl,tmr-prsc", &etsects->tmr_prsc) ||
+	    get_of_u32(node, "fsl,tmr-add", &etsects->tmr_add) ||
+	    get_of_u32(node, "fsl,tmr-fiper1", &etsects->tmr_fiper1) ||
+	    get_of_u32(node, "fsl,tmr-fiper2", &etsects->tmr_fiper2) ||
+	    get_of_u32(node, "fsl,max-adj", &etsects->caps.max_adj)) {
 		pr_err("device tree node missing required elements\n");
 		goto no_node;
 	}
 
 	etsects->irq = platform_get_irq(dev, 0);
 
-	if (etsects->irq < 0) {
+	if (etsects->irq == NO_IRQ) {
 		pr_err("irq not in device tree\n");
 		goto no_node;
 	}
@@ -487,7 +494,7 @@ static int gianfar_ptp_probe(struct platform_device *dev)
 		pr_err("ioremap ptp registers failed\n");
 		goto no_ioremap;
 	}
-	getnstimeofday64(&now);
+	getnstimeofday(&now);
 	ptp_gianfar_settime(&etsects->caps, &now);
 
 	tmr_ctrl =
@@ -546,16 +553,16 @@ static int gianfar_ptp_remove(struct platform_device *dev)
 	return 0;
 }
 
-static const struct of_device_id match_table[] = {
+static struct of_device_id match_table[] = {
 	{ .compatible = "fsl,etsec-ptp" },
 	{},
 };
-MODULE_DEVICE_TABLE(of, match_table);
 
 static struct platform_driver gianfar_ptp_driver = {
 	.driver = {
 		.name		= "gianfar_ptp",
 		.of_match_table	= match_table,
+		.owner		= THIS_MODULE,
 	},
 	.probe       = gianfar_ptp_probe,
 	.remove      = gianfar_ptp_remove,

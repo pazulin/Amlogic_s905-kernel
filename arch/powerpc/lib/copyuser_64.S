@@ -8,7 +8,6 @@
  */
 #include <asm/processor.h>
 #include <asm/ppc_asm.h>
-#include <asm/export.h>
 
 #ifdef __BIG_ENDIAN__
 #define sLd sld		/* Shift towards low-numbered address. */
@@ -19,7 +18,7 @@
 #endif
 
 	.align	7
-_GLOBAL_TOC(__copy_tofrom_user)
+_GLOBAL(__copy_tofrom_user)
 BEGIN_FTR_SECTION
 	nop
 FTR_SECTION_ELSE
@@ -360,7 +359,6 @@ END_FTR_SECTION_IFCLR(CPU_FTR_UNALIGNED_LD_STD)
 	addi	r3,r3,8
 171:
 177:
-179:
 	addi	r3,r3,8
 370:
 372:
@@ -375,6 +373,7 @@ END_FTR_SECTION_IFCLR(CPU_FTR_UNALIGNED_LD_STD)
 173:
 174:
 175:
+179:
 181:
 184:
 186:
@@ -462,7 +461,8 @@ END_FTR_SECTION_IFCLR(CPU_FTR_UNALIGNED_LD_STD)
 /*
  * Routine to copy a whole page of data, optimized for POWER4.
  * On POWER4 it is more than 50% faster than the simple loop
- * above (following the .Ldst_aligned label).
+ * above (following the .Ldst_aligned label) but it runs slightly
+ * slower on POWER3.
  */
 .Lcopy_page_4K:
 	std	r31,-32(1)
@@ -672,4 +672,3 @@ END_FTR_SECTION_IFCLR(CPU_FTR_UNALIGNED_LD_STD)
 	.llong	89b,100b
 	.llong	90b,100b
 	.llong	91b,100b
-EXPORT_SYMBOL(__copy_tofrom_user)

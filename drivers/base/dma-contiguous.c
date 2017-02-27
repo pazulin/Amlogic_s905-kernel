@@ -46,7 +46,7 @@ struct cma *dma_contiguous_default_area;
  * Users, who want to set the size of global CMA area for their system
  * should use cma= kernel parameter.
  */
-static const phys_addr_t size_bytes = (phys_addr_t)CMA_SIZE_MBYTES * SZ_1M;
+static const phys_addr_t size_bytes = CMA_SIZE_MBYTES * SZ_1M;
 static phys_addr_t size_cmdline = -1;
 static phys_addr_t base_cmdline;
 static phys_addr_t limit_cmdline;
@@ -175,7 +175,28 @@ int __init dma_contiguous_reserve_area(phys_addr_t size, phys_addr_t base,
 
 	return 0;
 }
+/**
+ * get cma size of one dev
+ */
+unsigned long dma_get_cma_size_int_byte(struct device *dev)
+{
+	unsigned long size = 0;
+	struct cma *cma = NULL;
 
+	if (!dev) {
+		pr_err("CMA: NULL DEV\n");
+		return 0;
+	}
+
+	cma = dev_get_cma_area(dev);
+	if (!cma) {
+		pr_err("CMA:  NO CMA region\n");
+		return 0;
+	}
+	size = cma_get_size(cma);
+
+	return size;
+}
 /**
  * dma_alloc_from_contiguous() - allocate pages from contiguous area
  * @dev:   Pointer to device for which the allocation is performed.
@@ -187,7 +208,7 @@ int __init dma_contiguous_reserve_area(phys_addr_t size, phys_addr_t base,
  * global one. Requires architecture specific dev_get_cma_area() helper
  * function.
  */
-struct page *dma_alloc_from_contiguous(struct device *dev, size_t count,
+struct page *dma_alloc_from_contiguous(struct device *dev, int count,
 				       unsigned int align)
 {
 	if (align > CONFIG_CMA_ALIGNMENT)
@@ -271,7 +292,7 @@ static int __init rmem_cma_setup(struct reserved_mem *rmem)
 	rmem->ops = &rmem_cma_ops;
 	rmem->priv = cma;
 
-	pr_info("Reserved memory: created CMA memory pool at %pa, size %ld MiB\n",
+	pr_debug("Reserved memory: created CMA memory pool at %pa, size %ld MiB\n",
 		&rmem->base, (unsigned long)rmem->size / SZ_1M);
 
 	return 0;

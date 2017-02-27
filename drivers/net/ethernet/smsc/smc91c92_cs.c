@@ -318,7 +318,7 @@ static int smc91c92_probe(struct pcmcia_device *link)
 
     /* The SMC91c92-specific entries in the device structure. */
     dev->netdev_ops = &smc_netdev_ops;
-    dev->ethtool_ops = &ethtool_ops;
+    SET_ETHTOOL_OPS(dev, &ethtool_ops);
     dev->watchdog_timeo = TX_TIMEOUT;
 
     smc->mii_if.dev = dev;
@@ -1070,8 +1070,11 @@ static int smc_open(struct net_device *dev)
     smc->packets_waiting = 0;
 
     smc_reset(dev);
-    setup_timer(&smc->media, media_check, (u_long)dev);
-    mod_timer(&smc->media, jiffies + HZ);
+    init_timer(&smc->media);
+    smc->media.function = media_check;
+    smc->media.data = (u_long) dev;
+    smc->media.expires = jiffies + HZ;
+    add_timer(&smc->media);
 
     return 0;
 } /* smc_open */
@@ -1172,7 +1175,7 @@ static void smc_hardware_send_packet(struct net_device * dev)
 
     smc->saved_skb = NULL;
     dev_kfree_skb_irq(skb);
-    netif_trans_update(dev);
+    dev->trans_start = jiffies;
     netif_start_queue(dev);
 }
 
@@ -1187,7 +1190,7 @@ static void smc_tx_timeout(struct net_device *dev)
 		  inw(ioaddr)&0xff, inw(ioaddr + 2));
     dev->stats.tx_errors++;
     smc_reset(dev);
-    netif_trans_update(dev); /* prevent tx timeout */
+    dev->trans_start = jiffies; /* prevent tx timeout */
     smc->saved_skb = NULL;
     netif_wake_queue(dev);
 }

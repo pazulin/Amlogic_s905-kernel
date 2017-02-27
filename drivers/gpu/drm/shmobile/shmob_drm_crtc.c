@@ -1,7 +1,7 @@
 /*
  * shmob_drm_crtc.c  --  SH Mobile DRM CRTCs
  *
- * Copyright (C) 2012 Renesas Electronics Corporation
+ * Copyright (C) 2012 Renesas Corporation
  *
  * Laurent Pinchart (laurent.pinchart@ideasonboard.com)
  *
@@ -19,7 +19,6 @@
 #include <drm/drm_crtc_helper.h>
 #include <drm/drm_fb_cma_helper.h>
 #include <drm/drm_gem_cma_helper.h>
-#include <drm/drm_plane_helper.h>
 
 #include <video/sh_mobile_meram.h>
 
@@ -174,7 +173,7 @@ static void shmob_drm_crtc_start(struct shmob_drm_crtc *scrtc)
 	if (scrtc->started)
 		return;
 
-	format = shmob_drm_format_info(crtc->primary->fb->pixel_format);
+	format = shmob_drm_format_info(crtc->fb->pixel_format);
 	if (WARN_ON(format == NULL))
 		return;
 
@@ -248,7 +247,7 @@ static void shmob_drm_crtc_start(struct shmob_drm_crtc *scrtc)
 	lcdc_write(sdev, LDDDSR, value);
 
 	/* Setup planes. */
-	drm_for_each_legacy_plane(plane, dev) {
+	list_for_each_entry(plane, &dev->mode_config.plane_list, head) {
 		if (plane->crtc == crtc)
 			shmob_drm_plane_setup(plane);
 	}
@@ -304,7 +303,7 @@ static void shmob_drm_crtc_compute_base(struct shmob_drm_crtc *scrtc,
 					int x, int y)
 {
 	struct drm_crtc *crtc = &scrtc->crtc;
-	struct drm_framebuffer *fb = crtc->primary->fb;
+	struct drm_framebuffer *fb = crtc->fb;
 	struct shmob_drm_device *sdev = crtc->dev->dev_private;
 	struct drm_gem_cma_object *gem;
 	unsigned int bpp;
@@ -359,6 +358,13 @@ static void shmob_drm_crtc_dpms(struct drm_crtc *crtc, int mode)
 	scrtc->dpms = mode;
 }
 
+static bool shmob_drm_crtc_mode_fixup(struct drm_crtc *crtc,
+				      const struct drm_display_mode *mode,
+				      struct drm_display_mode *adjusted_mode)
+{
+	return true;
+}
+
 static void shmob_drm_crtc_mode_prepare(struct drm_crtc *crtc)
 {
 	shmob_drm_crtc_dpms(crtc, DRM_MODE_DPMS_OFF);
@@ -376,15 +382,15 @@ static int shmob_drm_crtc_mode_set(struct drm_crtc *crtc,
 	const struct shmob_drm_format_info *format;
 	void *cache;
 
-	format = shmob_drm_format_info(crtc->primary->fb->pixel_format);
+	format = shmob_drm_format_info(crtc->fb->pixel_format);
 	if (format == NULL) {
 		dev_dbg(sdev->dev, "mode_set: unsupported format %08x\n",
-			crtc->primary->fb->pixel_format);
+			crtc->fb->pixel_format);
 		return -EINVAL;
 	}
 
 	scrtc->format = format;
-	scrtc->line_size = crtc->primary->fb->pitches[0];
+	scrtc->line_size = crtc->fb->pitches[0];
 
 	if (sdev->meram) {
 		/* Enable MERAM cache if configured. We need to de-init
@@ -396,7 +402,7 @@ static int shmob_drm_crtc_mode_set(struct drm_crtc *crtc,
 		}
 
 		cache = sh_mobile_meram_cache_alloc(sdev->meram, mdata,
-						    crtc->primary->fb->pitches[0],
+						    crtc->fb->pitches[0],
 						    adjusted_mode->vdisplay,
 						    format->meram,
 						    &scrtc->line_size);
@@ -424,11 +430,32 @@ static int shmob_drm_crtc_mode_set_base(struct drm_crtc *crtc, int x, int y,
 
 static const struct drm_crtc_helper_funcs crtc_helper_funcs = {
 	.dpms = shmob_drm_crtc_dpms,
+	.mode_fixup = shmob_drm_crtc_mode_fixup,
 	.prepare = shmob_drm_crtc_mode_prepare,
 	.commit = shmob_drm_crtc_mode_commit,
 	.mode_set = shmob_drm_crtc_mode_set,
 	.mode_set_base = shmob_drm_crtc_mode_set_base,
 };
+
+void shmob_drm_crtc_cancel_page_flip(struct shmob_drm_crtc *scrtc,
+				     struct drm_file *file)
+{
+	struct drm_pending_vblank_event *event;
+	struct drm_device *dev = scrtc->crtc.dev;
+	unsigned long flags;
+
+	/* Destroy the pending vertical blanking event associated with the
+	 * pending page flip, if any, and disable vertical blanking interrupts.
+	 */
+	spin_lock_irqsave(&dev->event_lock, flags);
+	event = scrtc->event;
+	if (event && event->base.file_priv == file) {
+		scrtc->event = NULL;
+		event->base.destroy(&event->base);
+		drm_vblank_put(dev, 0);
+	}
+	spin_unlock_irqrestore(&dev->event_lock, flags);
+}
 
 void shmob_drm_crtc_finish_page_flip(struct shmob_drm_crtc *scrtc)
 {
@@ -440,8 +467,8 @@ void shmob_drm_crtc_finish_page_flip(struct shmob_drm_crtc *scrtc)
 	event = scrtc->event;
 	scrtc->event = NULL;
 	if (event) {
-		drm_crtc_send_vblank_event(&scrtc->crtc, event);
-		drm_crtc_vblank_put(&scrtc->crtc);
+		drm_send_vblank_event(dev, 0, event);
+		drm_vblank_put(dev, 0);
 	}
 	spin_unlock_irqrestore(&dev->event_lock, flags);
 }
@@ -462,12 +489,12 @@ static int shmob_drm_crtc_page_flip(struct drm_crtc *crtc,
 	}
 	spin_unlock_irqrestore(&dev->event_lock, flags);
 
-	crtc->primary->fb = fb;
+	crtc->fb = fb;
 	shmob_drm_crtc_update_base(scrtc);
 
 	if (event) {
 		event->pipe = 0;
-		drm_crtc_vblank_get(&scrtc->crtc);
+		drm_vblank_get(dev, 0);
 		spin_lock_irqsave(&dev->event_lock, flags);
 		scrtc->event = event;
 		spin_unlock_irqrestore(&dev->event_lock, flags);
@@ -585,7 +612,7 @@ int shmob_drm_encoder_create(struct shmob_drm_device *sdev)
 	encoder->possible_crtcs = 1;
 
 	ret = drm_encoder_init(sdev->ddev, encoder, &encoder_funcs,
-			       DRM_MODE_ENCODER_LVDS, NULL);
+			       DRM_MODE_ENCODER_LVDS);
 	if (ret < 0)
 		return ret;
 
@@ -647,6 +674,12 @@ static int shmob_drm_connector_get_modes(struct drm_connector *connector)
 	return 1;
 }
 
+static int shmob_drm_connector_mode_valid(struct drm_connector *connector,
+					  struct drm_display_mode *mode)
+{
+	return MODE_OK;
+}
+
 static struct drm_encoder *
 shmob_drm_connector_best_encoder(struct drm_connector *connector)
 {
@@ -657,6 +690,7 @@ shmob_drm_connector_best_encoder(struct drm_connector *connector)
 
 static const struct drm_connector_helper_funcs connector_helper_funcs = {
 	.get_modes = shmob_drm_connector_get_modes,
+	.mode_valid = shmob_drm_connector_mode_valid,
 	.best_encoder = shmob_drm_connector_best_encoder,
 };
 
@@ -665,7 +699,7 @@ static void shmob_drm_connector_destroy(struct drm_connector *connector)
 	struct shmob_drm_connector *scon = to_shmob_connector(connector);
 
 	shmob_drm_backlight_exit(scon);
-	drm_connector_unregister(connector);
+	drm_sysfs_connector_remove(connector);
 	drm_connector_cleanup(connector);
 }
 
@@ -699,7 +733,7 @@ int shmob_drm_connector_create(struct shmob_drm_device *sdev,
 		return ret;
 
 	drm_connector_helper_add(connector, &connector_helper_funcs);
-	ret = drm_connector_register(connector);
+	ret = drm_sysfs_connector_add(connector);
 	if (ret < 0)
 		goto err_cleanup;
 
@@ -711,6 +745,8 @@ int shmob_drm_connector_create(struct shmob_drm_device *sdev,
 	if (ret < 0)
 		goto err_backlight;
 
+	connector->encoder = encoder;
+
 	drm_helper_connector_dpms(connector, DRM_MODE_DPMS_OFF);
 	drm_object_property_set_value(&connector->base,
 		sdev->ddev->mode_config.dpms_property, DRM_MODE_DPMS_OFF);
@@ -720,7 +756,7 @@ int shmob_drm_connector_create(struct shmob_drm_device *sdev,
 err_backlight:
 	shmob_drm_backlight_exit(&sdev->connector);
 err_sysfs:
-	drm_connector_unregister(connector);
+	drm_sysfs_connector_remove(connector);
 err_cleanup:
 	drm_connector_cleanup(connector);
 	return ret;

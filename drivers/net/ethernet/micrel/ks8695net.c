@@ -1354,7 +1354,6 @@ ks8695_probe(struct platform_device *pdev)
 	struct resource *rxirq_res, *txirq_res, *linkirq_res;
 	int ret = 0;
 	int buff_n;
-	bool inv_mac_addr = false;
 	u32 machigh, maclow;
 
 	/* Initialise a net_device */
@@ -1457,7 +1456,8 @@ ks8695_probe(struct platform_device *pdev)
 	ndev->dev_addr[5] = maclow & 0xFF;
 
 	if (!is_valid_ether_addr(ndev->dev_addr))
-		inv_mac_addr = true;
+		dev_warn(ksp->dev, "%s: Invalid ethernet MAC address. Please "
+			 "set using ifconfig\n", ndev->name);
 
 	/* In order to be efficient memory-wise, we allocate both
 	 * rings in one go.
@@ -1504,15 +1504,15 @@ ks8695_probe(struct platform_device *pdev)
 	if (ksp->phyiface_regs && ksp->link_irq == -1) {
 		ks8695_init_switch(ksp);
 		ksp->dtype = KS8695_DTYPE_LAN;
-		ndev->ethtool_ops = &ks8695_ethtool_ops;
+		SET_ETHTOOL_OPS(ndev, &ks8695_ethtool_ops);
 	} else if (ksp->phyiface_regs && ksp->link_irq != -1) {
 		ks8695_init_wan_phy(ksp);
 		ksp->dtype = KS8695_DTYPE_WAN;
-		ndev->ethtool_ops = &ks8695_wan_ethtool_ops;
+		SET_ETHTOOL_OPS(ndev, &ks8695_wan_ethtool_ops);
 	} else {
 		/* No initialisation since HPNA does not have a PHY */
 		ksp->dtype = KS8695_DTYPE_HPNA;
-		ndev->ethtool_ops = &ks8695_ethtool_ops;
+		SET_ETHTOOL_OPS(ndev, &ks8695_ethtool_ops);
 	}
 
 	/* And bring up the net_device with the net core */
@@ -1520,9 +1520,6 @@ ks8695_probe(struct platform_device *pdev)
 	ret = register_netdev(ndev);
 
 	if (ret == 0) {
-		if (inv_mac_addr)
-			dev_warn(ksp->dev, "%s: Invalid ethernet MAC address. Please set using ip\n",
-				 ndev->name);
 		dev_info(ksp->dev, "ks8695 ethernet (%s) MAC: %pM\n",
 			 ks8695_port_type(ksp), ndev->dev_addr);
 	} else {
@@ -1615,6 +1612,7 @@ ks8695_drv_remove(struct platform_device *pdev)
 static struct platform_driver ks8695_driver = {
 	.driver = {
 		.name	= MODULENAME,
+		.owner	= THIS_MODULE,
 	},
 	.probe		= ks8695_probe,
 	.remove		= ks8695_drv_remove,

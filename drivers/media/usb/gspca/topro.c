@@ -175,8 +175,6 @@ static const u8 jpeg_q[17] = {
 #error "USB buffer too small"
 #endif
 
-#define DEFAULT_FRAME_RATE 30
-
 static const u8 rates[] = {30, 20, 15, 10, 7, 5};
 static const struct framerates framerates[] = {
 	{
@@ -971,9 +969,7 @@ static void jpeg_set_qual(u8 *jpeg_hdr,
 {
 	int i, sc;
 
-	if (quality <= 0)
-		sc = 5000;
-	else if (quality < 50)
+	if (quality < 50)
 		sc = 5000 / quality;
 	else
 		sc = 200 - quality * 2;
@@ -4022,7 +4018,7 @@ static int sd_config(struct gspca_dev *gspca_dev,
 	gspca_dev->cam.mode_framerates = sd->bridge == BRIDGE_TP6800 ?
 			framerates : framerates_6810;
 
-	sd->framerate = DEFAULT_FRAME_RATE;
+	sd->framerate = 30;		/* default: 30 fps */
 	return 0;
 }
 
@@ -4635,16 +4631,8 @@ static void sd_pkt_scan(struct gspca_dev *gspca_dev,
 		}
 		data++;
 		len--;
-		if (len < 2) {
-			gspca_dev->last_packet_type = DISCARD_PACKET;
-			return;
-		}
 		if (*data == 0xff && data[1] == 0xd8) {
 /*fixme: there may be information in the 4 high bits*/
-			if (len < 7) {
-				gspca_dev->last_packet_type = DISCARD_PACKET;
-				return;
-			}
 			if ((data[6] & 0x0f) != sd->quality)
 				set_dqt(gspca_dev, data[6] & 0x0f);
 			gspca_frame_add(gspca_dev, FIRST_PACKET,
@@ -4684,7 +4672,7 @@ static void sd_pkt_scan(struct gspca_dev *gspca_dev,
 		gspca_dev->last_packet_type = DISCARD_PACKET;
 		break;
 	case 0xcc:
-		if (len >= 3 && (data[1] != 0xff || data[2] != 0xd8))
+		if (data[1] != 0xff || data[2] != 0xd8)
 			gspca_frame_add(gspca_dev, INTER_PACKET,
 					data + 1, len - 1);
 		else
@@ -4804,11 +4792,7 @@ static void sd_set_streamparm(struct gspca_dev *gspca_dev,
 	struct v4l2_fract *tpf = &cp->timeperframe;
 	int fr, i;
 
-	if (tpf->numerator == 0 || tpf->denominator == 0)
-		sd->framerate = DEFAULT_FRAME_RATE;
-	else
-		sd->framerate = tpf->denominator / tpf->numerator;
-
+	sd->framerate = tpf->denominator / tpf->numerator;
 	if (gspca_dev->streaming)
 		setframerate(gspca_dev, v4l2_ctrl_g_ctrl(gspca_dev->exposure));
 

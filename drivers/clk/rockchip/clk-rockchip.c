@@ -24,7 +24,8 @@ static DEFINE_SPINLOCK(clk_lock);
  * Gate clocks
  */
 
-static void __init rk2928_gate_clk_init(struct device_node *node)
+static void __init rk2928_gate_clk_init(struct device_node *node,
+					 void *data)
 {
 	struct clk_onecell_data *clk_data;
 	const char *clk_parent;
@@ -49,19 +50,14 @@ static void __init rk2928_gate_clk_init(struct device_node *node)
 	}
 
 	reg = of_iomap(node, 0);
-	if (!reg)
-		return;
 
 	clk_data = kzalloc(sizeof(struct clk_onecell_data), GFP_KERNEL);
-	if (!clk_data) {
-		iounmap(reg);
+	if (!clk_data)
 		return;
-	}
 
 	clk_data->clks = kzalloc(qty * sizeof(struct clk *), GFP_KERNEL);
 	if (!clk_data->clks) {
 		kfree(clk_data);
-		iounmap(reg);
 		return;
 	}
 

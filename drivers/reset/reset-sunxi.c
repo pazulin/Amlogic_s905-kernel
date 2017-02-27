@@ -70,7 +70,7 @@ static int sunxi_reset_deassert(struct reset_controller_dev *rcdev,
 	return 0;
 }
 
-static const struct reset_control_ops sunxi_reset_ops = {
+static struct reset_control_ops sunxi_reset_ops = {
 	.assert		= sunxi_reset_assert,
 	.deassert	= sunxi_reset_deassert,
 };
@@ -102,14 +102,13 @@ static int sunxi_reset_init(struct device_node *np)
 		goto err_alloc;
 	}
 
-	spin_lock_init(&data->lock);
-
 	data->rcdev.owner = THIS_MODULE;
 	data->rcdev.nr_resets = size * 32;
 	data->rcdev.ops = &sunxi_reset_ops;
 	data->rcdev.of_node = np;
+	reset_controller_register(&data->rcdev);
 
-	return reset_controller_register(&data->rcdev);
+	return 0;
 
 err_alloc:
 	kfree(data);
@@ -121,7 +120,7 @@ err_alloc:
  * our system, before we can even think of using a regular device
  * driver for it.
  */
-static const struct of_device_id sunxi_early_reset_dt_ids[] __initconst = {
+static const struct of_device_id sunxi_early_reset_dt_ids[] __initdata = {
 	{ .compatible = "allwinner,sun6i-a31-ahb1-reset", },
 	{ /* sentinel */ },
 };
@@ -146,32 +145,26 @@ MODULE_DEVICE_TABLE(of, sunxi_reset_dt_ids);
 
 static int sunxi_reset_probe(struct platform_device *pdev)
 {
-	struct sunxi_reset_data *data;
-	struct resource *res;
+	return sunxi_reset_init(pdev->dev.of_node);
+}
 
-	data = devm_kzalloc(&pdev->dev, sizeof(*data), GFP_KERNEL);
-	if (!data)
-		return -ENOMEM;
+static int sunxi_reset_remove(struct platform_device *pdev)
+{
+	struct sunxi_reset_data *data = platform_get_drvdata(pdev);
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	data->membase = devm_ioremap_resource(&pdev->dev, res);
-	if (IS_ERR(data->membase))
-		return PTR_ERR(data->membase);
+	reset_controller_unregister(&data->rcdev);
+	iounmap(data->membase);
+	kfree(data);
 
-	spin_lock_init(&data->lock);
-
-	data->rcdev.owner = THIS_MODULE;
-	data->rcdev.nr_resets = resource_size(res) * 32;
-	data->rcdev.ops = &sunxi_reset_ops;
-	data->rcdev.of_node = pdev->dev.of_node;
-
-	return devm_reset_controller_register(&pdev->dev, &data->rcdev);
+	return 0;
 }
 
 static struct platform_driver sunxi_reset_driver = {
 	.probe	= sunxi_reset_probe,
+	.remove	= sunxi_reset_remove,
 	.driver = {
 		.name		= "sunxi-reset",
+		.owner		= THIS_MODULE,
 		.of_match_table	= sunxi_reset_dt_ids,
 	},
 };

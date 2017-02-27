@@ -386,8 +386,7 @@ AES_ENDPROC(aes_ctr_encrypt)
 	.endm
 
 .Lxts_mul_x:
-CPU_LE(	.quad		1, 0x87		)
-CPU_BE(	.quad		0x87, 1		)
+	.word		1, 0, 0x87, 0
 
 AES_ENTRY(aes_xts_encrypt)
 	FRAME_PUSH

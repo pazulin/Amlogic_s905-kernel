@@ -36,8 +36,8 @@
 #include <scsi/scsi_host.h>
 #include <linux/libata.h>
 #include <linux/platform_device.h>
-#include <linux/gpio.h>
 #include <asm/dma.h>
+#include <asm/gpio.h>
 #include <asm/portmux.h>
 
 #define DRV_NAME		"pata-bf54x"
@@ -1619,7 +1619,7 @@ static int bfin_atapi_remove(struct platform_device *pdev)
 	return 0;
 }
 
-#ifdef CONFIG_PM_SLEEP
+#ifdef CONFIG_PM
 static int bfin_atapi_suspend(struct platform_device *pdev, pm_message_t state)
 {
 	struct ata_host *host = platform_get_drvdata(pdev);
@@ -1657,6 +1657,7 @@ static struct platform_driver bfin_atapi_driver = {
 	.resume			= bfin_atapi_resume,
 	.driver = {
 		.name		= DRV_NAME,
+		.owner		= THIS_MODULE,
 	},
 };
 

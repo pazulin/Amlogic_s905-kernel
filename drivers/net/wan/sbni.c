@@ -227,8 +227,7 @@ int __init sbni_probe(int unit)
 	struct net_device *dev;
 	int err;
 
-	dev = alloc_netdev(sizeof(struct net_local), "sbni",
-			   NET_NAME_UNKNOWN, sbni_devsetup);
+	dev = alloc_netdev(sizeof(struct net_local), "sbni", sbni_devsetup);
 	if (!dev)
 		return -ENOMEM;
 
@@ -582,8 +581,8 @@ handle_channel( struct net_device  *dev )
 
 
 /*
- * Routine returns 1 if it needs to acknowledge received frame.
- * Empty frame received without errors won't be acknowledged.
+ * Routine returns 1 if it need to acknoweledge received frame.
+ * Empty frame received without errors won't be acknoweledged.
  */
 
 static int
@@ -860,9 +859,9 @@ prepare_to_send( struct sk_buff  *skb,  struct net_device  *dev )
 
 	outb( inb( dev->base_addr + CSR0 ) | TR_REQ,  dev->base_addr + CSR0 );
 #ifdef CONFIG_SBNI_MULTILINE
-	netif_trans_update(nl->master);
+	nl->master->trans_start = jiffies;
 #else
-	netif_trans_update(dev);
+	dev->trans_start = jiffies;
 #endif
 }
 
@@ -889,10 +888,10 @@ drop_xmit_queue( struct net_device  *dev )
 	nl->state &= ~(FL_WAIT_ACK | FL_NEED_RESEND);
 #ifdef CONFIG_SBNI_MULTILINE
 	netif_start_queue( nl->master );
-	netif_trans_update(nl->master);
+	nl->master->trans_start = jiffies;
 #else
 	netif_start_queue( dev );
-	netif_trans_update(dev);
+	dev->trans_start = jiffies;
 #endif
 }
 
@@ -1358,8 +1357,6 @@ sbni_ioctl( struct net_device  *dev,  struct ifreq  *ifr,  int  cmd )
 		if( !slave_dev  ||  !(slave_dev->flags & IFF_UP) ) {
 			netdev_err(dev, "trying to enslave non-active device %s\n",
 				   slave_name);
-			if (slave_dev)
-				dev_put(slave_dev);
 			return  -EPERM;
 		}
 
@@ -1480,8 +1477,8 @@ int __init init_module( void )
 	int err;
 
 	while( num < SBNI_MAX_NUM_CARDS ) {
-		dev = alloc_netdev(sizeof(struct net_local), "sbni%d",
-				   NET_NAME_UNKNOWN, sbni_devsetup);
+		dev = alloc_netdev(sizeof(struct net_local), 
+				   "sbni%d", sbni_devsetup);
 		if( !dev)
 			break;
 

@@ -21,7 +21,9 @@
 
 #include <asm/processor.h>
 #include <asm/byteorder.h>
-#include <asm/barrier.h>
+
+#define smp_mb__before_clear_bit()	smp_mb()
+#define smp_mb__after_clear_bit()	smp_mb()
 
 #include <asm-generic/bitops/non-atomic.h>
 
@@ -48,7 +50,7 @@ static inline int ffz(unsigned long x)
  * __ffs: Find first bit set in word. Return 0 for bit 0
  */
 
-static inline unsigned long __ffs(unsigned long x)
+static inline int __ffs(unsigned long x)
 {
 	return 31 - __cntlz(x & -x);
 }

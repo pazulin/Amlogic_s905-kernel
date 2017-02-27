@@ -11,17 +11,13 @@
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#include <elf.h>
-#include <fcntl.h>
-#include <link.h>
-#include <sys/stat.h>
 
 #include "subunit.h"
 #include "utils.h"
 
+#define TIMEOUT		120
 #define KILL_TIMEOUT	5
 
-static uint64_t timeout = 120;
 
 int run_test(int (test_function)(void), char *name)
 {
@@ -34,17 +30,14 @@ int run_test(int (test_function)(void), char *name)
 
 	pid = fork();
 	if (pid == 0) {
-		setpgid(0, 0);
 		exit(test_function());
 	} else if (pid == -1) {
 		perror("fork");
 		return 1;
 	}
 
-	setpgid(pid, pid);
-
 	/* Wake us up in timeout seconds */
-	alarm(timeout);
+	alarm(TIMEOUT);
 	terminated = false;
 
 wait:
@@ -57,19 +50,16 @@ wait:
 
 		if (terminated) {
 			printf("!! force killing %s\n", name);
-			kill(-pid, SIGKILL);
+			kill(pid, SIGKILL);
 			return 1;
 		} else {
 			printf("!! killing %s\n", name);
-			kill(-pid, SIGTERM);
+			kill(pid, SIGTERM);
 			terminated = true;
 			alarm(KILL_TIMEOUT);
 			goto wait;
 		}
 	}
-
-	/* Kill anything else in the process group that is still running */
-	kill(-pid, SIGTERM);
 
 	if (WIFEXITED(status))
 		status = WEXITSTATUS(status);
@@ -94,11 +84,6 @@ static struct sigaction alarm_action = {
 	.sa_handler = alarm_handler,
 };
 
-void test_harness_set_timeout(uint64_t time)
-{
-	timeout = time;
-}
-
 int test_harness(int (test_function)(void), char *name)
 {
 	int rc;
@@ -114,10 +99,7 @@ int test_harness(int (test_function)(void), char *name)
 
 	rc = run_test(test_function, name);
 
-	if (rc == MAGIC_SKIP_RETURN_VALUE)
-		test_skip(name);
-	else
-		test_finish(name, rc);
+	test_finish(name, rc);
 
 	return rc;
 }

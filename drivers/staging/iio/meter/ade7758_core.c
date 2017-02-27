@@ -24,7 +24,9 @@
 #include "meter.h"
 #include "ade7758.h"
 
-int ade7758_spi_write_reg_8(struct device *dev, u8 reg_address, u8 val)
+int ade7758_spi_write_reg_8(struct device *dev,
+		u8 reg_address,
+		u8 val)
 {
 	int ret;
 	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
@@ -40,8 +42,9 @@ int ade7758_spi_write_reg_8(struct device *dev, u8 reg_address, u8 val)
 	return ret;
 }
 
-static int ade7758_spi_write_reg_16(struct device *dev, u8 reg_address,
-				    u16 value)
+static int ade7758_spi_write_reg_16(struct device *dev,
+		u8 reg_address,
+		u16 value)
 {
 	int ret;
 	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
@@ -65,8 +68,9 @@ static int ade7758_spi_write_reg_16(struct device *dev, u8 reg_address,
 	return ret;
 }
 
-static int ade7758_spi_write_reg_24(struct device *dev, u8 reg_address,
-				    u32 value)
+static int ade7758_spi_write_reg_24(struct device *dev,
+		u8 reg_address,
+		u32 value)
 {
 	int ret;
 	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
@@ -91,7 +95,9 @@ static int ade7758_spi_write_reg_24(struct device *dev, u8 reg_address,
 	return ret;
 }
 
-int ade7758_spi_read_reg_8(struct device *dev, u8 reg_address, u8 *val)
+int ade7758_spi_read_reg_8(struct device *dev,
+		u8 reg_address,
+		u8 *val)
 {
 	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
 	struct ade7758_state *st = iio_priv(indio_dev);
@@ -118,7 +124,7 @@ int ade7758_spi_read_reg_8(struct device *dev, u8 reg_address, u8 *val)
 	ret = spi_sync_transfer(st->us, xfers, ARRAY_SIZE(xfers));
 	if (ret) {
 		dev_err(&st->us->dev, "problem when reading 8 bit register 0x%02X",
-			reg_address);
+				reg_address);
 		goto error_ret;
 	}
 	*val = st->rx[0];
@@ -128,8 +134,9 @@ error_ret:
 	return ret;
 }
 
-static int ade7758_spi_read_reg_16(struct device *dev, u8 reg_address,
-				   u16 *val)
+static int ade7758_spi_read_reg_16(struct device *dev,
+		u8 reg_address,
+		u16 *val)
 {
 	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
 	struct ade7758_state *st = iio_priv(indio_dev);
@@ -149,6 +156,7 @@ static int ade7758_spi_read_reg_16(struct device *dev, u8 reg_address,
 		},
 	};
 
+
 	mutex_lock(&st->buf_lock);
 	st->tx[0] = ADE7758_READ_REG(reg_address);
 	st->tx[1] = 0;
@@ -157,7 +165,7 @@ static int ade7758_spi_read_reg_16(struct device *dev, u8 reg_address,
 	ret = spi_sync_transfer(st->us, xfers, ARRAY_SIZE(xfers));
 	if (ret) {
 		dev_err(&st->us->dev, "problem when reading 16 bit register 0x%02X",
-			reg_address);
+				reg_address);
 		goto error_ret;
 	}
 
@@ -168,8 +176,9 @@ error_ret:
 	return ret;
 }
 
-static int ade7758_spi_read_reg_24(struct device *dev, u8 reg_address,
-				   u32 *val)
+static int ade7758_spi_read_reg_24(struct device *dev,
+		u8 reg_address,
+		u32 *val)
 {
 	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
 	struct ade7758_state *st = iio_priv(indio_dev);
@@ -198,7 +207,7 @@ static int ade7758_spi_read_reg_24(struct device *dev, u8 reg_address,
 	ret = spi_sync_transfer(st->us, xfers, ARRAY_SIZE(xfers));
 	if (ret) {
 		dev_err(&st->us->dev, "problem when reading 24 bit register 0x%02X",
-			reg_address);
+				reg_address);
 		goto error_ret;
 	}
 	*val = (st->rx[0] << 16) | (st->rx[1] << 8) | st->rx[2];
@@ -209,7 +218,8 @@ error_ret:
 }
 
 static ssize_t ade7758_read_8bit(struct device *dev,
-				 struct device_attribute *attr, char *buf)
+		struct device_attribute *attr,
+		char *buf)
 {
 	int ret;
 	u8 val = 0;
@@ -223,7 +233,8 @@ static ssize_t ade7758_read_8bit(struct device *dev,
 }
 
 static ssize_t ade7758_read_16bit(struct device *dev,
-				  struct device_attribute *attr, char *buf)
+		struct device_attribute *attr,
+		char *buf)
 {
 	int ret;
 	u16 val = 0;
@@ -237,7 +248,8 @@ static ssize_t ade7758_read_16bit(struct device *dev,
 }
 
 static ssize_t ade7758_read_24bit(struct device *dev,
-				  struct device_attribute *attr, char *buf)
+		struct device_attribute *attr,
+		char *buf)
 {
 	int ret;
 	u32 val = 0;
@@ -251,8 +263,9 @@ static ssize_t ade7758_read_24bit(struct device *dev,
 }
 
 static ssize_t ade7758_write_8bit(struct device *dev,
-				  struct device_attribute *attr,
-				  const char *buf, size_t len)
+		struct device_attribute *attr,
+		const char *buf,
+		size_t len)
 {
 	struct iio_dev_attr *this_attr = to_iio_dev_attr(attr);
 	int ret;
@@ -268,8 +281,9 @@ error_ret:
 }
 
 static ssize_t ade7758_write_16bit(struct device *dev,
-				   struct device_attribute *attr,
-				   const char *buf, size_t len)
+		struct device_attribute *attr,
+		const char *buf,
+		size_t len)
 {
 	struct iio_dev_attr *this_attr = to_iio_dev_attr(attr);
 	int ret;
@@ -288,16 +302,14 @@ static int ade7758_reset(struct device *dev)
 {
 	int ret;
 	u8 val;
+	ade7758_spi_read_reg_8(dev,
+			ADE7758_OPMODE,
+			&val);
+	val |= 1 << 6; /* Software Chip Reset */
+	ret = ade7758_spi_write_reg_8(dev,
+			ADE7758_OPMODE,
+			val);
 
-	ret = ade7758_spi_read_reg_8(dev, ADE7758_OPMODE, &val);
-	if (ret < 0) {
-		dev_err(dev, "Failed to read opmode reg\n");
-		return ret;
-	}
-	val |= BIT(6); /* Software Chip Reset */
-	ret = ade7758_spi_write_reg_8(dev, ADE7758_OPMODE, val);
-	if (ret < 0)
-		dev_err(dev, "Failed to write opmode reg\n");
 	return ret;
 }
 
@@ -406,20 +418,21 @@ int ade7758_set_irq(struct device *dev, bool enable)
 {
 	int ret;
 	u32 irqen;
-
 	ret = ade7758_spi_read_reg_24(dev, ADE7758_MASK, &irqen);
 	if (ret)
-		return ret;
+		goto error_ret;
 
 	if (enable)
-		irqen |= BIT(16); /* Enables an interrupt when a data is
-				   * present in the waveform register
-				   */
+		irqen |= 1 << 16; /* Enables an interrupt when a data is
+				     present in the waveform register */
 	else
-		irqen &= ~BIT(16);
+		irqen &= ~(1 << 16);
 
 	ret = ade7758_spi_write_reg_24(dev, ADE7758_MASK, irqen);
+	if (ret)
+		goto error_ret;
 
+error_ret:
 	return ret;
 }
 
@@ -428,16 +441,14 @@ static int ade7758_stop_device(struct device *dev)
 {
 	int ret;
 	u8 val;
-
-	ret = ade7758_spi_read_reg_8(dev, ADE7758_OPMODE, &val);
-	if (ret < 0) {
-		dev_err(dev, "Failed to read opmode reg\n");
-		return ret;
-	}
+	ade7758_spi_read_reg_8(dev,
+			ADE7758_OPMODE,
+			&val);
 	val |= 7 << 3;  /* ADE7758 powered down */
-	ret = ade7758_spi_write_reg_8(dev, ADE7758_OPMODE, val);
-	if (ret < 0)
-		dev_err(dev, "Failed to write opmode reg\n");
+	ret = ade7758_spi_write_reg_8(dev,
+			ADE7758_OPMODE,
+			val);
+
 	return ret;
 }
 
@@ -466,25 +477,29 @@ err_ret:
 }
 
 static ssize_t ade7758_read_frequency(struct device *dev,
-				      struct device_attribute *attr, char *buf)
+		struct device_attribute *attr,
+		char *buf)
 {
-	int ret;
+	int ret, len = 0;
 	u8 t;
 	int sps;
-
-	ret = ade7758_spi_read_reg_8(dev, ADE7758_WAVMODE, &t);
+	ret = ade7758_spi_read_reg_8(dev,
+			ADE7758_WAVMODE,
+			&t);
 	if (ret)
 		return ret;
 
 	t = (t >> 5) & 0x3;
 	sps = 26040 / (1 << t);
 
-	return sprintf(buf, "%d SPS\n", sps);
+	len = sprintf(buf, "%d SPS\n", sps);
+	return len;
 }
 
 static ssize_t ade7758_write_frequency(struct device *dev,
-				       struct device_attribute *attr,
-				       const char *buf, size_t len)
+		struct device_attribute *attr,
+		const char *buf,
+		size_t len)
 {
 	struct iio_dev *indio_dev = dev_to_iio_dev(dev);
 	u16 val;
@@ -515,14 +530,18 @@ static ssize_t ade7758_write_frequency(struct device *dev,
 		goto out;
 	}
 
-	ret = ade7758_spi_read_reg_8(dev, ADE7758_WAVMODE, &reg);
+	ret = ade7758_spi_read_reg_8(dev,
+			ADE7758_WAVMODE,
+			&reg);
 	if (ret)
 		goto out;
 
 	reg &= ~(5 << 3);
 	reg |= t << 5;
 
-	ret = ade7758_spi_write_reg_8(dev, ADE7758_WAVMODE, reg);
+	ret = ade7758_spi_write_reg_8(dev,
+			ADE7758_WAVMODE,
+			reg);
 
 out:
 	mutex_unlock(&indio_dev->mlock);
@@ -809,7 +828,7 @@ static int ade7758_probe(struct spi_device *spi)
 	if (!st->rx)
 		return -ENOMEM;
 	st->tx = kcalloc(ADE7758_MAX_TX, sizeof(*st->tx), GFP_KERNEL);
-	if (!st->tx) {
+	if (st->tx == NULL) {
 		ret = -ENOMEM;
 		goto error_free_rx;
 	}
@@ -827,15 +846,23 @@ static int ade7758_probe(struct spi_device *spi)
 	if (ret)
 		goto error_free_tx;
 
+	ret = iio_buffer_register(indio_dev,
+				  &ade7758_channels[0],
+				  ARRAY_SIZE(ade7758_channels));
+	if (ret) {
+		dev_err(&spi->dev, "failed to initialize the ring\n");
+		goto error_unreg_ring_funcs;
+	}
+
 	/* Get the device into a sane initial state */
 	ret = ade7758_initial_setup(indio_dev);
 	if (ret)
-		goto error_unreg_ring_funcs;
+		goto error_uninitialize_ring;
 
 	if (spi->irq) {
 		ret = ade7758_probe_trigger(indio_dev);
 		if (ret)
-			goto error_unreg_ring_funcs;
+			goto error_uninitialize_ring;
 	}
 
 	ret = iio_device_register(indio_dev);
@@ -847,6 +874,8 @@ static int ade7758_probe(struct spi_device *spi)
 error_remove_trigger:
 	if (spi->irq)
 		ade7758_remove_trigger(indio_dev);
+error_uninitialize_ring:
+	ade7758_uninitialize_ring(indio_dev);
 error_unreg_ring_funcs:
 	ade7758_unconfigure_ring(indio_dev);
 error_free_tx:
@@ -864,6 +893,7 @@ static int ade7758_remove(struct spi_device *spi)
 	iio_device_unregister(indio_dev);
 	ade7758_stop_device(&indio_dev->dev);
 	ade7758_remove_trigger(indio_dev);
+	ade7758_uninitialize_ring(indio_dev);
 	ade7758_unconfigure_ring(indio_dev);
 	kfree(st->tx);
 	kfree(st->rx);
@@ -880,6 +910,7 @@ MODULE_DEVICE_TABLE(spi, ade7758_id);
 static struct spi_driver ade7758_driver = {
 	.driver = {
 		.name = "ade7758",
+		.owner = THIS_MODULE,
 	},
 	.probe = ade7758_probe,
 	.remove = ade7758_remove,

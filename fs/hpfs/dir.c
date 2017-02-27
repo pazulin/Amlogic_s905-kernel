@@ -33,10 +33,10 @@ static loff_t hpfs_dir_lseek(struct file *filp, loff_t off, int whence)
 	if (whence == SEEK_DATA || whence == SEEK_HOLE)
 		return -EINVAL;
 
-	inode_lock(i);
+	mutex_lock(&i->i_mutex);
 	hpfs_lock(s);
 
-	/*pr_info("dir lseek\n");*/
+	/*printk("dir lseek\n");*/
 	if (new_off == 0 || new_off == 1 || new_off == 11 || new_off == 12 || new_off == 13) goto ok;
 	pos = ((loff_t) hpfs_de_as_down_as_possible(s, hpfs_inode->i_dno) << 4) + 1;
 	while (pos != new_off) {
@@ -44,20 +44,16 @@ static loff_t hpfs_dir_lseek(struct file *filp, loff_t off, int whence)
 		else goto fail;
 		if (pos == 12) goto fail;
 	}
-	if (unlikely(hpfs_add_pos(i, &filp->f_pos) < 0)) {
-		hpfs_unlock(s);
-		inode_unlock(i);
-		return -ENOMEM;
-	}
+	hpfs_add_pos(i, &filp->f_pos);
 ok:
 	filp->f_pos = new_off;
 	hpfs_unlock(s);
-	inode_unlock(i);
+	mutex_unlock(&i->i_mutex);
 	return new_off;
 fail:
-	/*pr_warn("illegal lseek: %016llx\n", new_off);*/
+	/*printk("illegal lseek: %016llx\n", new_off);*/
 	hpfs_unlock(s);
-	inode_unlock(i);
+	mutex_unlock(&i->i_mutex);
 	return -ESPIPE;
 }
 
@@ -131,7 +127,7 @@ static int hpfs_readdir(struct file *file, struct dir_context *ctx)
 		if (ctx->pos == 12)
 			goto out;
 		if (ctx->pos == 3 || ctx->pos == 4 || ctx->pos == 5) {
-			pr_err("pos==%d\n", (int)ctx->pos);
+			printk("HPFS: warning: pos==%d\n",(int)ctx->pos);
 			goto out;
 		}
 		if (ctx->pos == 0) {
@@ -145,10 +141,8 @@ static int hpfs_readdir(struct file *file, struct dir_context *ctx)
 			ctx->pos = 1;
 		}
 		if (ctx->pos == 1) {
-			ret = hpfs_add_pos(inode, &file->f_pos);
-			if (unlikely(ret < 0))
-				goto out;
 			ctx->pos = ((loff_t) hpfs_de_as_down_as_possible(inode->i_sb, hpfs_inode->i_dno) << 4) + 1;
+			hpfs_add_pos(inode, &file->f_pos);
 			file->f_version = inode->i_version;
 		}
 		next_pos = ctx->pos;
@@ -330,8 +324,7 @@ const struct file_operations hpfs_dir_ops =
 {
 	.llseek		= hpfs_dir_lseek,
 	.read		= generic_read_dir,
-	.iterate_shared	= hpfs_readdir,
+	.iterate	= hpfs_readdir,
 	.release	= hpfs_dir_release,
 	.fsync		= hpfs_file_fsync,
-	.unlocked_ioctl	= hpfs_ioctl,
 };

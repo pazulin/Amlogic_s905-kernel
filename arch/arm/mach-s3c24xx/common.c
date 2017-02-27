@@ -21,19 +21,17 @@
  * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 */
 
-#include <linux/dma-mapping.h>
+
 #include <linux/init.h>
 #include <linux/module.h>
 #include <linux/interrupt.h>
 #include <linux/ioport.h>
 #include <linux/serial_core.h>
-#include <linux/serial_s3c.h>
 #include <clocksource/samsung_pwm.h>
 #include <linux/platform_device.h>
 #include <linux/delay.h>
 #include <linux/io.h>
 #include <linux/platform_data/dma-s3c24xx.h>
-#include <linux/dmaengine.h>
 
 #include <mach/hardware.h>
 #include <mach/regs-clock.h>
@@ -46,11 +44,14 @@
 #include <asm/mach/map.h>
 
 #include <mach/regs-gpio.h>
+#include <plat/regs-serial.h>
 #include <mach/dma.h>
 
 #include <plat/cpu.h>
 #include <plat/devs.h>
+#include <plat/clock.h>
 #include <plat/cpu-freq.h>
+#include <plat/pll.h>
 #include <plat/pwm-core.h>
 
 #include "common.h"
@@ -72,6 +73,7 @@ static struct cpu_table cpu_ids[] __initdata = {
 		.idcode		= 0x32410000,
 		.idmask		= 0xffffffff,
 		.map_io		= s3c2410_map_io,
+		.init_clocks	= s3c2410_init_clocks,
 		.init_uarts	= s3c2410_init_uarts,
 		.init		= s3c2410_init,
 		.name		= name_s3c2410
@@ -80,6 +82,7 @@ static struct cpu_table cpu_ids[] __initdata = {
 		.idcode		= 0x32410002,
 		.idmask		= 0xffffffff,
 		.map_io		= s3c2410_map_io,
+		.init_clocks	= s3c2410_init_clocks,
 		.init_uarts	= s3c2410_init_uarts,
 		.init		= s3c2410a_init,
 		.name		= name_s3c2410a
@@ -88,6 +91,7 @@ static struct cpu_table cpu_ids[] __initdata = {
 		.idcode		= 0x32440000,
 		.idmask		= 0xffffffff,
 		.map_io		= s3c2440_map_io,
+		.init_clocks	= s3c244x_init_clocks,
 		.init_uarts	= s3c244x_init_uarts,
 		.init		= s3c2440_init,
 		.name		= name_s3c2440
@@ -96,6 +100,7 @@ static struct cpu_table cpu_ids[] __initdata = {
 		.idcode		= 0x32440001,
 		.idmask		= 0xffffffff,
 		.map_io		= s3c2440_map_io,
+		.init_clocks	= s3c244x_init_clocks,
 		.init_uarts	= s3c244x_init_uarts,
 		.init		= s3c2440_init,
 		.name		= name_s3c2440a
@@ -104,6 +109,7 @@ static struct cpu_table cpu_ids[] __initdata = {
 		.idcode		= 0x32440aaa,
 		.idmask		= 0xffffffff,
 		.map_io		= s3c2442_map_io,
+		.init_clocks	= s3c244x_init_clocks,
 		.init_uarts	= s3c244x_init_uarts,
 		.init		= s3c2442_init,
 		.name		= name_s3c2442
@@ -112,6 +118,7 @@ static struct cpu_table cpu_ids[] __initdata = {
 		.idcode		= 0x32440aab,
 		.idmask		= 0xffffffff,
 		.map_io		= s3c2442_map_io,
+		.init_clocks	= s3c244x_init_clocks,
 		.init_uarts	= s3c244x_init_uarts,
 		.init		= s3c2442_init,
 		.name		= name_s3c2442b
@@ -120,6 +127,7 @@ static struct cpu_table cpu_ids[] __initdata = {
 		.idcode		= 0x32412001,
 		.idmask		= 0xffffffff,
 		.map_io		= s3c2412_map_io,
+		.init_clocks	= s3c2412_init_clocks,
 		.init_uarts	= s3c2412_init_uarts,
 		.init		= s3c2412_init,
 		.name		= name_s3c2412,
@@ -128,6 +136,7 @@ static struct cpu_table cpu_ids[] __initdata = {
 		.idcode		= 0x32412003,
 		.idmask		= 0xffffffff,
 		.map_io		= s3c2412_map_io,
+		.init_clocks	= s3c2412_init_clocks,
 		.init_uarts	= s3c2412_init_uarts,
 		.init		= s3c2412_init,
 		.name		= name_s3c2412,
@@ -136,6 +145,7 @@ static struct cpu_table cpu_ids[] __initdata = {
 		.idcode		= 0x32450003,
 		.idmask		= 0xffffffff,
 		.map_io		= s3c2416_map_io,
+		.init_clocks	= s3c2416_init_clocks,
 		.init_uarts	= s3c2416_init_uarts,
 		.init		= s3c2416_init,
 		.name		= name_s3c2416,
@@ -144,6 +154,7 @@ static struct cpu_table cpu_ids[] __initdata = {
 		.idcode		= 0x32443001,
 		.idmask		= 0xffffffff,
 		.map_io		= s3c2443_map_io,
+		.init_clocks	= s3c2443_init_clocks,
 		.init_uarts	= s3c2443_init_uarts,
 		.init		= s3c2443_init,
 		.name		= name_s3c2443,
@@ -229,6 +240,7 @@ void __init s3c24xx_init_io(struct map_desc *mach_desc, int size)
 	} else {
 		samsung_cpu_id = s3c24xx_read_idcode_v4();
 	}
+	s3c24xx_init_cpu();
 
 	s3c_init_cpu(samsung_cpu_id, cpu_ids, ARRAY_SIZE(cpu_ids));
 
@@ -305,7 +317,20 @@ struct s3c24xx_uart_resources s3c2410_uart_resources[] __initdata = {
 	},
 };
 
-#define s3c24xx_device_dma_mask (*((u64[]) { DMA_BIT_MASK(32) }))
+/* initialise all the clocks */
+
+void __init_or_cpufreq s3c24xx_setup_clocks(unsigned long fclk,
+					   unsigned long hclk,
+					   unsigned long pclk)
+{
+	clk_upll.rate = s3c24xx_get_pll(__raw_readl(S3C2410_UPLLCON),
+					clk_xtal.rate);
+
+	clk_mpll.rate = fclk;
+	clk_h.rate = hclk;
+	clk_p.rate = pclk;
+	clk_f.rate = fclk;
+}
 
 #if defined(CONFIG_CPU_S3C2410) || defined(CONFIG_CPU_S3C2412) || \
 	defined(CONFIG_CPU_S3C2440) || defined(CONFIG_CPU_S3C2442)
@@ -357,9 +382,7 @@ struct platform_device s3c2410_device_dma = {
 	.num_resources	= ARRAY_SIZE(s3c2410_dma_resource),
 	.resource	= s3c2410_dma_resource,
 	.dev	= {
-		.dma_mask = &s3c24xx_device_dma_mask,
-		.coherent_dma_mask = DMA_BIT_MASK(32),
-		.platform_data = &s3c2410_dma_platdata,
+		.platform_data	= &s3c2410_dma_platdata,
 	},
 };
 #endif
@@ -400,9 +423,7 @@ struct platform_device s3c2412_device_dma = {
 	.num_resources	= ARRAY_SIZE(s3c2410_dma_resource),
 	.resource	= s3c2410_dma_resource,
 	.dev	= {
-		.dma_mask = &s3c24xx_device_dma_mask,
-		.coherent_dma_mask = DMA_BIT_MASK(32),
-		.platform_data = &s3c2412_dma_platdata,
+		.platform_data	= &s3c2412_dma_platdata,
 	},
 };
 #endif
@@ -446,44 +467,10 @@ static struct s3c24xx_dma_channel s3c2440_dma_channels[DMACH_MAX] = {
 	[DMACH_USB_EP4] = { S3C24XX_DMA_APB, true, S3C24XX_DMA_CHANREQ(4, 3), },
 };
 
-static const struct dma_slave_map s3c2440_dma_slave_map[] = {
-	/* TODO: DMACH_XD0 */
-	/* TODO: DMACH_XD1 */
-	{ "s3c2440-sdi", "rx-tx", (void *)DMACH_SDI },
-	{ "s3c2410-spi.0", "rx", (void *)DMACH_SPI0 },
-	{ "s3c2410-spi.0", "tx", (void *)DMACH_SPI0 },
-	{ "s3c2410-spi.1", "rx", (void *)DMACH_SPI1 },
-	{ "s3c2410-spi.1", "tx", (void *)DMACH_SPI1 },
-	{ "s3c2440-uart.0", "rx", (void *)DMACH_UART0 },
-	{ "s3c2440-uart.0", "tx", (void *)DMACH_UART0 },
-	{ "s3c2440-uart.1", "rx", (void *)DMACH_UART1 },
-	{ "s3c2440-uart.1", "tx", (void *)DMACH_UART1 },
-	{ "s3c2440-uart.2", "rx", (void *)DMACH_UART2 },
-	{ "s3c2440-uart.2", "tx", (void *)DMACH_UART2 },
-	{ "s3c2440-uart.3", "rx", (void *)DMACH_UART3 },
-	{ "s3c2440-uart.3", "tx", (void *)DMACH_UART3 },
-	/* TODO: DMACH_TIMER */
-	{ "s3c24xx-iis", "rx", (void *)DMACH_I2S_IN },
-	{ "s3c24xx-iis", "tx", (void *)DMACH_I2S_OUT },
-	{ "samsung-ac97", "rx", (void *)DMACH_PCM_IN },
-	{ "samsung-ac97", "tx", (void *)DMACH_PCM_OUT },
-	{ "samsung-ac97", "rx", (void *)DMACH_MIC_IN },
-	{ "s3c-hsudc", "rx0", (void *)DMACH_USB_EP1 },
-	{ "s3c-hsudc", "rx1", (void *)DMACH_USB_EP2 },
-	{ "s3c-hsudc", "rx2", (void *)DMACH_USB_EP3 },
-	{ "s3c-hsudc", "rx3", (void *)DMACH_USB_EP4 },
-	{ "s3c-hsudc", "tx0", (void *)DMACH_USB_EP1 },
-	{ "s3c-hsudc", "tx1", (void *)DMACH_USB_EP2 },
-	{ "s3c-hsudc", "tx2", (void *)DMACH_USB_EP3 },
-	{ "s3c-hsudc", "tx3", (void *)DMACH_USB_EP4 }
-};
-
 static struct s3c24xx_dma_platdata s3c2440_dma_platdata = {
 	.num_phy_channels = 4,
 	.channels = s3c2440_dma_channels,
 	.num_channels = DMACH_MAX,
-	.slave_map = s3c2440_dma_slave_map,
-	.slavecnt = ARRAY_SIZE(s3c2440_dma_slave_map),
 };
 
 struct platform_device s3c2440_device_dma = {
@@ -492,14 +479,12 @@ struct platform_device s3c2440_device_dma = {
 	.num_resources	= ARRAY_SIZE(s3c2410_dma_resource),
 	.resource	= s3c2410_dma_resource,
 	.dev	= {
-		.dma_mask = &s3c24xx_device_dma_mask,
-		.coherent_dma_mask = DMA_BIT_MASK(32),
-		.platform_data = &s3c2440_dma_platdata,
+		.platform_data	= &s3c2440_dma_platdata,
 	},
 };
 #endif
 
-#if defined(CONFIG_CPU_S3C2443) || defined(CONFIG_CPU_S3C2416)
+#if defined(CONFIG_CPUS_3C2443) || defined(CONFIG_CPU_S3C2416)
 static struct resource s3c2443_dma_resource[] = {
 	[0] = DEFINE_RES_MEM(S3C24XX_PA_DMA, S3C24XX_SZ_DMA),
 	[1] = DEFINE_RES_IRQ(IRQ_S3C2443_DMA0),
@@ -546,65 +531,7 @@ struct platform_device s3c2443_device_dma = {
 	.num_resources	= ARRAY_SIZE(s3c2443_dma_resource),
 	.resource	= s3c2443_dma_resource,
 	.dev	= {
-		.dma_mask = &s3c24xx_device_dma_mask,
-		.coherent_dma_mask = DMA_BIT_MASK(32),
-		.platform_data = &s3c2443_dma_platdata,
+		.platform_data	= &s3c2443_dma_platdata,
 	},
-};
-#endif
-
-#if defined(CONFIG_COMMON_CLK) && defined(CONFIG_CPU_S3C2410)
-void __init s3c2410_init_clocks(int xtal)
-{
-	s3c2410_common_clk_init(NULL, xtal, 0, S3C24XX_VA_CLKPWR);
-}
-#endif
-
-#ifdef CONFIG_CPU_S3C2412
-void __init s3c2412_init_clocks(int xtal)
-{
-	s3c2412_common_clk_init(NULL, xtal, 0, S3C24XX_VA_CLKPWR);
-}
-#endif
-
-#ifdef CONFIG_CPU_S3C2416
-void __init s3c2416_init_clocks(int xtal)
-{
-	s3c2443_common_clk_init(NULL, xtal, 0, S3C24XX_VA_CLKPWR);
-}
-#endif
-
-#if defined(CONFIG_COMMON_CLK) && defined(CONFIG_CPU_S3C2440)
-void __init s3c2440_init_clocks(int xtal)
-{
-	s3c2410_common_clk_init(NULL, xtal, 1, S3C24XX_VA_CLKPWR);
-}
-#endif
-
-#if defined(CONFIG_COMMON_CLK) && defined(CONFIG_CPU_S3C2442)
-void __init s3c2442_init_clocks(int xtal)
-{
-	s3c2410_common_clk_init(NULL, xtal, 2, S3C24XX_VA_CLKPWR);
-}
-#endif
-
-#ifdef CONFIG_CPU_S3C2443
-void __init s3c2443_init_clocks(int xtal)
-{
-	s3c2443_common_clk_init(NULL, xtal, 1, S3C24XX_VA_CLKPWR);
-}
-#endif
-
-#if defined(CONFIG_CPU_S3C2410) || defined(CONFIG_CPU_S3C2440) || \
-	defined(CONFIG_CPU_S3C2442)
-static struct resource s3c2410_dclk_resource[] = {
-	[0] = DEFINE_RES_MEM(0x56000084, 0x4),
-};
-
-struct platform_device s3c2410_device_dclk = {
-	.name		= "s3c2410-dclk",
-	.id		= 0,
-	.num_resources	= ARRAY_SIZE(s3c2410_dclk_resource),
-	.resource	= s3c2410_dclk_resource,
 };
 #endif
