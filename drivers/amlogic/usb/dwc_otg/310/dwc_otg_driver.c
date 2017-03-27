@@ -1,4 +1,4 @@
-/* ==========================================================================
+/*
  * $File: //dwh/usb_iip/dev/software/otg/linux/drivers/dwc_otg_driver.c $
  * $Revision: #94 $
  * $Date: 2012/12/21 $
@@ -231,7 +231,7 @@ static struct dwc_otg_driver_module_params dwc_otg_module_params = {
 	.adp_enable = -1,
 };
 
-bool force_device_mode = 0;
+bool force_device_mode;
 module_param_named(otg_device, force_device_mode,
 		bool, S_IRUGO | S_IWUSR);
 
@@ -997,7 +997,7 @@ static int dwc_otg_driver_probe(struct platform_device *pdev)
 				} else {
 					gpio_vbus_power_pin = 1;
 					usb_gd = gpiod_get_index(&pdev->dev,
-								 NULL, 0);
+								 NULL, 0, GPIOD_OUT_LOW);
 					if (IS_ERR(usb_gd))
 						return -1;
 				}
@@ -1006,22 +1006,6 @@ static int dwc_otg_driver_probe(struct platform_device *pdev)
 					gpio_work_mask = of_read_ulong(prop, 1);
 			}
 
-#if defined(CONFIG_ARCH_MESON64_ODROIDC2)
-			gpio_name = of_get_property(of_node,
-						"gpio-hub-rst", NULL);
-			if (gpio_name) {
-				struct gpio_desc *hub_gd =
-					gpiod_get_index(&pdev->dev, NULL, 0);
-				if (IS_ERR(hub_gd))
-					return -1;
-
-				gpiod_direction_output(hub_gd, 0);
-				mdelay(20);
-				gpiod_direction_output(hub_gd, 1);
-				mdelay(20);
-				gpiod_put(hub_gd);
-			}
-#endif
 			prop = of_get_property(of_node, "host-only-core", NULL);
 			if (prop)
 				host_only_core = of_read_ulong(prop, 1);
@@ -1249,7 +1233,7 @@ static int dwc_otg_driver_probe(struct platform_device *pdev)
 	DWC_DEBUGPL(DBG_CIL, "registering (common) handler for irq%d\n",
 		    irq);
 	retval = request_irq(irq, dwc_otg_common_irq,
-			     IRQF_SHARED | IRQF_DISABLED | IRQ_LEVEL, "dwc_otg",
+			     IRQF_SHARED | IRQ_LEVEL, "dwc_otg",
 			     dwc_otg_device);
 	if (retval) {
 		DWC_ERROR("request of irq%d failed\n", irq);

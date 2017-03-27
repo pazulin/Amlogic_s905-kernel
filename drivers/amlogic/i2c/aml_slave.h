@@ -1,7 +1,7 @@
 /*
  * drivers/amlogic/i2c/aml_slave.h
  *
- * Copyright (C) 2015 Amlogic, Inc. All rights reserved.
+ * Copyright (C) 2017 Amlogic, Inc. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
-*/
+ */
 
 #ifndef AML_I2C_SLAVE
 #define AML_I2C_SLAVE
@@ -31,8 +31,9 @@ struct aml_i2c_slave_reg_ctrl {
 	unsigned int en_irq;
 	/*15-8*/
 	/*HOLD TIME:  Data hold time after the falling edge of SCL.  T
-	his hold time is computed as
-	Hold time = (MPEG system clock period) * (value + 1).*/
+	 *his hold time is computed as
+	 *Hold time = (MPEG system clock period) * (value + 1).
+	 */
 	unsigned int hold_time:8;
 	/*23-16*/
 	/*Slave Address:  .*/
@@ -72,20 +73,12 @@ struct aml_i2c_reg_slave {
 struct aml_i2c_slave {
 	struct aml_i2c_reg_slave __iomem *slave_regs;
 	unsigned int  __iomem *s_reset;
-
 	const char *slave_state_name;
-
 	struct pinctrl *p;
-
 	unsigned int irq;
-
 	struct class      cls;
-
 	struct timer_list timer;
-
 	unsigned int time_out;
-
 	struct mutex *lock;
-
 };
 #endif

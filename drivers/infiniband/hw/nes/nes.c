@@ -68,7 +68,6 @@ MODULE_VERSION(DRV_VERSION);
 int max_mtu = 9000;
 int interrupt_mod_interval = 0;
 
-
 /* Interoperability */
 int mpa_version = 1;
 module_param(mpa_version, int, 0644);

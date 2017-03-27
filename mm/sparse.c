@@ -5,10 +5,12 @@
 #include <linux/slab.h>
 #include <linux/mmzone.h>
 #include <linux/bootmem.h>
+#include <linux/compiler.h>
 #include <linux/highmem.h>
 #include <linux/export.h>
 #include <linux/spinlock.h>
 #include <linux/vmalloc.h>
+
 #include "internal.h"
 #include <asm/dma.h>
 #include <asm/pgalloc.h>
@@ -57,7 +59,7 @@ static inline void set_section_nid(unsigned long section_nr, int nid)
 #endif
 
 #ifdef CONFIG_SPARSEMEM_EXTREME
-static struct mem_section noinline __init_refok *sparse_index_alloc(int nid)
+static noinline struct mem_section __ref *sparse_index_alloc(int nid)
 {
 	struct mem_section *section = NULL;
 	unsigned long array_size = SECTIONS_PER_ROOT *
@@ -98,11 +100,7 @@ static inline int sparse_index_init(unsigned long section_nr, int nid)
 }
 #endif
 
-/*
- * Although written for the SPARSEMEM_EXTREME case, this happens
- * to also work for the flat array case because
- * NR_SECTION_ROOTS==NR_MEM_SECTIONS.
- */
+#ifdef CONFIG_SPARSEMEM_EXTREME
 int __section_nr(struct mem_section* ms)
 {
 	unsigned long root_nr;
@@ -121,6 +119,12 @@ int __section_nr(struct mem_section* ms)
 
 	return (root_nr * SECTIONS_PER_ROOT) + (ms - root);
 }
+#else
+int __section_nr(struct mem_section* ms)
+{
+	return (int)(ms - mem_section[0]);
+}
+#endif
 
 /*
  * During early boot, before section_mem_map is used for an actual
@@ -268,7 +272,7 @@ sparse_early_usemaps_alloc_pgdat_section(struct pglist_data *pgdat,
 	/*
 	 * A page may contain usemaps for other sections preventing the
 	 * page being freed and making a section unremovable while
-	 * other sections referencing the usemap retmain active. Similarly,
+	 * other sections referencing the usemap remain active. Similarly,
 	 * a pgdat can prevent a section being removed. If section A
 	 * contains a pgdat and section B contains the usemap, both
 	 * sections become inter-dependent. This allocates usemaps
@@ -311,9 +315,8 @@ static void __init check_usemap_section_nr(int nid, unsigned long *usemap)
 
 	usemap_nid = sparse_early_nid(__nr_to_section(usemap_snr));
 	if (usemap_nid != nid) {
-		printk(KERN_INFO
-		       "node %d must be removed before remove section %ld\n",
-		       nid, usemap_snr);
+		pr_info("node %d must be removed before remove section %ld\n",
+			nid, usemap_snr);
 		return;
 	}
 	/*
@@ -322,10 +325,8 @@ static void __init check_usemap_section_nr(int nid, unsigned long *usemap)
 	 * gather other removable sections for dynamic partitioning.
 	 * Just notify un-removable section's number here.
 	 */
-	printk(KERN_INFO "Section %ld and %ld (node %d)", usemap_snr,
-	       pgdat_snr, nid);
-	printk(KERN_CONT
-	       " have a circular dependency on usemap and pgdat allocations\n");
+	pr_info("Section %ld and %ld (node %d) have a circular dependency on usemap and pgdat allocations\n",
+		usemap_snr, pgdat_snr, nid);
 }
 #else
 static unsigned long * __init
@@ -353,7 +354,7 @@ static void __init sparse_early_usemaps_alloc_node(void *data,
 	usemap = sparse_early_usemaps_alloc_pgdat_section(NODE_DATA(nodeid),
 							  size * usemap_count);
 	if (!usemap) {
-		printk(KERN_WARNING "%s: allocation failed\n", __func__);
+		pr_warn("%s: allocation failed\n", __func__);
 		return;
 	}
 
@@ -426,8 +427,8 @@ void __init sparse_mem_maps_populate_node(struct page **map_map,
 		if (map_map[pnum])
 			continue;
 		ms = __nr_to_section(pnum);
-		printk(KERN_ERR "%s: sparsemem memory map backing failed "
-			"some memory will not be available.\n", __func__);
+		pr_err("%s: sparsemem memory map backing failed some memory will not be available\n",
+		       __func__);
 		ms->section_mem_map = 0;
 	}
 }
@@ -454,14 +455,14 @@ static struct page __init *sparse_early_mem_map_alloc(unsigned long pnum)
 	if (map)
 		return map;
 
-	printk(KERN_ERR "%s: sparsemem memory map backing failed "
-			"some memory will not be available.\n", __func__);
+	pr_err("%s: sparsemem memory map backing failed some memory will not be available\n",
+	       __func__);
 	ms->section_mem_map = 0;
 	return NULL;
 }
 #endif
 
-void __attribute__((weak)) __meminit vmemmap_populate_print_last(void)
+void __weak __meminit vmemmap_populate_print_last(void)
 {
 }
 
@@ -746,7 +747,7 @@ static void clear_hwpoisoned_pages(struct page *memmap, int nr_pages)
 	if (!memmap)
 		return;
 
-	for (i = 0; i < PAGES_PER_SECTION; i++) {
+	for (i = 0; i < nr_pages; i++) {
 		if (PageHWPoison(&memmap[i])) {
 			atomic_long_sub(1, &num_poisoned_pages);
 			ClearPageHWPoison(&memmap[i]);
@@ -786,7 +787,8 @@ static void free_section_usemap(struct page *memmap, unsigned long *usemap)
 		free_map_bootmem(memmap);
 }
 
-void sparse_remove_one_section(struct zone *zone, struct mem_section *ms)
+void sparse_remove_one_section(struct zone *zone, struct mem_section *ms,
+		unsigned long map_offset)
 {
 	struct page *memmap = NULL;
 	unsigned long *usemap = NULL, flags;
@@ -802,7 +804,8 @@ void sparse_remove_one_section(struct zone *zone, struct mem_section *ms)
 	}
 	pgdat_resize_unlock(pgdat, &flags);
 
-	clear_hwpoisoned_pages(memmap, PAGES_PER_SECTION);
+	clear_hwpoisoned_pages(memmap + map_offset,
+			PAGES_PER_SECTION - map_offset);
 	free_section_usemap(memmap, usemap);
 }
 #endif /* CONFIG_MEMORY_HOTREMOVE */

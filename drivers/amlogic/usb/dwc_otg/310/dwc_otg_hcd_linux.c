@@ -395,7 +395,7 @@ int hcd_init(struct platform_device *pdev)
 	if (irq < 0)
 		return -ENODEV;
 
-	retval = usb_add_hcd(hcd, irq, IRQF_SHARED | IRQF_DISABLED);
+	retval = usb_add_hcd(hcd, irq, IRQF_SHARED);
 	if (retval < 0)
 		goto error2;
 

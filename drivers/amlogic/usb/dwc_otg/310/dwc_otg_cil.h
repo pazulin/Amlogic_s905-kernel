@@ -42,7 +42,7 @@
 #include "dwc_otg_adp.h"
 #include <linux/device.h>
 #include <linux/ioport.h>
-#include <linux/amlogic/usb-meson8.h>
+#include <linux/amlogic/usb-common.h>
 #include <linux/amlogic/usbtype.h>
 #include <linux/amlogic/aml_gpio_consumer.h>
 

@@ -7,6 +7,7 @@
  *
  * Copyright (C) 1995  Linus Torvalds
  * Copyright (C) 2001 - 2005  Tensilica Inc.
+ * Copyright (C) 2014 - 2016  Cadence Design Systems Inc.
  *
  * Chris Zankel	<chris@zankel.net>
  * Joe Taylor	<joe@tensilica.com, joetylr@yahoo.com>
@@ -22,10 +23,9 @@
 #include <linux/bootmem.h>
 #include <linux/kernel.h>
 #include <linux/percpu.h>
-#include <linux/clk-provider.h>
 #include <linux/cpu.h>
+#include <linux/of.h>
 #include <linux/of_fdt.h>
-#include <linux/of_platform.h>
 
 #if defined(CONFIG_VGA_CONSOLE) || defined(CONFIG_DUMMY_CONSOLE)
 # include <linux/console.h>
@@ -50,6 +50,7 @@
 #include <asm/param.h>
 #include <asm/traps.h>
 #include <asm/smp.h>
+#include <asm/sysmem.h>
 
 #include <platform/hardware.h>
 
@@ -73,7 +74,6 @@ extern int initrd_below_start_ok;
 #endif
 
 #ifdef CONFIG_OF
-extern u32 __dtb_start[];
 void *dtb_start = __dtb_start;
 #endif
 
@@ -87,12 +87,6 @@ static char __initdata command_line[COMMAND_LINE_SIZE];
 #ifdef CONFIG_CMDLINE_BOOL
 static char default_command_line[COMMAND_LINE_SIZE] __initdata = CONFIG_CMDLINE;
 #endif
-
-sysmem_info_t __initdata sysmem;
-
-extern int mem_reserve(unsigned long, unsigned long, int);
-extern void bootmem_init(void);
-extern void zones_init(void);
 
 /*
  * Boot parameter parsing.
@@ -113,31 +107,14 @@ typedef struct tagtable {
 
 /* parse current tag */
 
-static int __init add_sysmem_bank(unsigned long type, unsigned long start,
-		unsigned long end)
-{
-	if (sysmem.nr_banks >= SYSMEM_BANKS_MAX) {
-		printk(KERN_WARNING
-				"Ignoring memory bank 0x%08lx size %ldKB\n",
-				start, end - start);
-		return -EINVAL;
-	}
-	sysmem.bank[sysmem.nr_banks].type  = type;
-	sysmem.bank[sysmem.nr_banks].start = PAGE_ALIGN(start);
-	sysmem.bank[sysmem.nr_banks].end   = end & PAGE_MASK;
-	sysmem.nr_banks++;
-
-	return 0;
-}
-
 static int __init parse_tag_mem(const bp_tag_t *tag)
 {
-	meminfo_t *mi = (meminfo_t *)(tag->data);
+	struct bp_meminfo *mi = (struct bp_meminfo *)(tag->data);
 
 	if (mi->type != MEMORY_TYPE_CONVENTIONAL)
 		return -1;
 
-	return add_sysmem_bank(mi->type, mi->start, mi->end);
+	return memblock_add(mi->start, mi->end - mi->start);
 }
 
 __tagtable(BP_TAG_MEMORY, parse_tag_mem);
@@ -146,8 +123,8 @@ __tagtable(BP_TAG_MEMORY, parse_tag_mem);
 
 static int __init parse_tag_initrd(const bp_tag_t* tag)
 {
-	meminfo_t* mi;
-	mi = (meminfo_t*)(tag->data);
+	struct bp_meminfo *mi = (struct bp_meminfo *)(tag->data);
+
 	initrd_start = (unsigned long)__va(mi->start);
 	initrd_end = (unsigned long)__va(mi->end);
 
@@ -211,9 +188,8 @@ static int __init parse_bootparam(const bp_tag_t* tag)
 }
 
 #ifdef CONFIG_OF
-bool __initdata dt_memory_scan = false;
 
-#if XCHAL_HAVE_PTP_MMU && XCHAL_HAVE_SPANNING_WAY
+#if !XCHAL_HAVE_PTP_MMU || XCHAL_HAVE_SPANNING_WAY
 unsigned long xtensa_kio_paddr = XCHAL_KIO_DEFAULT_PADDR;
 EXPORT_SYMBOL(xtensa_kio_paddr);
 
@@ -251,11 +227,8 @@ static int __init xtensa_dt_io_area(unsigned long node, const char *uname,
 
 void __init early_init_dt_add_memory_arch(u64 base, u64 size)
 {
-	if (!dt_memory_scan)
-		return;
-
 	size &= PAGE_MASK;
-	add_sysmem_bank(MEMORY_TYPE_CONVENTIONAL, base, base + size);
+	memblock_add(base, size);
 }
 
 void * __init early_init_dt_alloc_memory_arch(u64 size, u64 align)
@@ -265,24 +238,12 @@ void * __init early_init_dt_alloc_memory_arch(u64 size, u64 align)
 
 void __init early_init_devtree(void *params)
 {
-	if (sysmem.nr_banks == 0)
-		dt_memory_scan = true;
-
 	early_init_dt_scan(params);
 	of_scan_flat_dt(xtensa_dt_io_area, NULL);
 
 	if (!command_line[0])
 		strlcpy(command_line, boot_command_line, COMMAND_LINE_SIZE);
 }
-
-static int __init xtensa_device_probe(void)
-{
-	of_clk_init(NULL);
-	of_platform_populate(NULL, of_default_bus_match_table, NULL, NULL);
-	return 0;
-}
-
-device_initcall(xtensa_device_probe);
 
 #endif /* CONFIG_OF */
 
@@ -292,8 +253,6 @@ device_initcall(xtensa_device_probe);
 
 void __init init_arch(bp_tag_t *bp_start)
 {
-	sysmem.nr_banks = 0;
-
 	/* Parse boot parameters */
 
 	if (bp_start)
@@ -302,13 +261,6 @@ void __init init_arch(bp_tag_t *bp_start)
 #ifdef CONFIG_OF
 	early_init_devtree(dtb_start);
 #endif
-
-	if (sysmem.nr_banks == 0) {
-		sysmem.nr_banks = 1;
-		sysmem.bank[0].start = PLATFORM_DEFAULT_MEM_START;
-		sysmem.bank[0].end = PLATFORM_DEFAULT_MEM_START
-				     + PLATFORM_DEFAULT_MEM_SIZE;
-	}
 
 #ifdef CONFIG_CMDLINE_BOOL
 	if (!command_line[0])
@@ -360,7 +312,10 @@ extern char _Level5InterruptVector_text_end;
 extern char _Level6InterruptVector_text_start;
 extern char _Level6InterruptVector_text_end;
 #endif
-
+#ifdef CONFIG_SMP
+extern char _SecondaryResetVector_text_start;
+extern char _SecondaryResetVector_text_end;
+#endif
 
 
 #ifdef CONFIG_S32C1I_SELFTEST
@@ -476,6 +431,10 @@ static int __init check_s32c1i(void)
 early_initcall(check_s32c1i);
 #endif /* CONFIG_S32C1I_SELFTEST */
 
+static inline int mem_reserve(unsigned long start, unsigned long end)
+{
+	return memblock_reserve(start, end - start);
+}
 
 void __init setup_arch(char **cmdline_p)
 {
@@ -487,51 +446,56 @@ void __init setup_arch(char **cmdline_p)
 #ifdef CONFIG_BLK_DEV_INITRD
 	if (initrd_start < initrd_end) {
 		initrd_is_mapped = mem_reserve(__pa(initrd_start),
-					       __pa(initrd_end), 0);
+					       __pa(initrd_end)) == 0;
 		initrd_below_start_ok = 1;
 	} else {
 		initrd_start = 0;
 	}
 #endif
 
-	mem_reserve(__pa(&_stext),__pa(&_end), 1);
+	mem_reserve(__pa(&_stext), __pa(&_end));
 
 	mem_reserve(__pa(&_WindowVectors_text_start),
-		    __pa(&_WindowVectors_text_end), 0);
+		    __pa(&_WindowVectors_text_end));
 
 	mem_reserve(__pa(&_DebugInterruptVector_literal_start),
-		    __pa(&_DebugInterruptVector_text_end), 0);
+		    __pa(&_DebugInterruptVector_text_end));
 
 	mem_reserve(__pa(&_KernelExceptionVector_literal_start),
-		    __pa(&_KernelExceptionVector_text_end), 0);
+		    __pa(&_KernelExceptionVector_text_end));
 
 	mem_reserve(__pa(&_UserExceptionVector_literal_start),
-		    __pa(&_UserExceptionVector_text_end), 0);
+		    __pa(&_UserExceptionVector_text_end));
 
 	mem_reserve(__pa(&_DoubleExceptionVector_literal_start),
-		    __pa(&_DoubleExceptionVector_text_end), 0);
+		    __pa(&_DoubleExceptionVector_text_end));
 
 #if XCHAL_EXCM_LEVEL >= 2
 	mem_reserve(__pa(&_Level2InterruptVector_text_start),
-		    __pa(&_Level2InterruptVector_text_end), 0);
+		    __pa(&_Level2InterruptVector_text_end));
 #endif
 #if XCHAL_EXCM_LEVEL >= 3
 	mem_reserve(__pa(&_Level3InterruptVector_text_start),
-		    __pa(&_Level3InterruptVector_text_end), 0);
+		    __pa(&_Level3InterruptVector_text_end));
 #endif
 #if XCHAL_EXCM_LEVEL >= 4
 	mem_reserve(__pa(&_Level4InterruptVector_text_start),
-		    __pa(&_Level4InterruptVector_text_end), 0);
+		    __pa(&_Level4InterruptVector_text_end));
 #endif
 #if XCHAL_EXCM_LEVEL >= 5
 	mem_reserve(__pa(&_Level5InterruptVector_text_start),
-		    __pa(&_Level5InterruptVector_text_end), 0);
+		    __pa(&_Level5InterruptVector_text_end));
 #endif
 #if XCHAL_EXCM_LEVEL >= 6
 	mem_reserve(__pa(&_Level6InterruptVector_text_start),
-		    __pa(&_Level6InterruptVector_text_end), 0);
+		    __pa(&_Level6InterruptVector_text_end));
 #endif
 
+#ifdef CONFIG_SMP
+	mem_reserve(__pa(&_SecondaryResetVector_text_start),
+		    __pa(&_SecondaryResetVector_text_end));
+#endif
+	parse_early_param();
 	bootmem_init();
 
 	unflatten_and_copy_device_tree();
@@ -574,6 +538,137 @@ static int __init topology_init(void)
 }
 subsys_initcall(topology_init);
 
+void cpu_reset(void)
+{
+#if XCHAL_HAVE_PTP_MMU
+	local_irq_disable();
+	/*
+	 * We have full MMU: all autoload ways, ways 7, 8 and 9 of DTLB must
+	 * be flushed.
+	 * Way 4 is not currently used by linux.
+	 * Ways 5 and 6 shall not be touched on MMUv2 as they are hardwired.
+	 * Way 5 shall be flushed and way 6 shall be set to identity mapping
+	 * on MMUv3.
+	 */
+	local_flush_tlb_all();
+	invalidate_page_directory();
+#if XCHAL_HAVE_SPANNING_WAY
+	/* MMU v3 */
+	{
+		unsigned long vaddr = (unsigned long)cpu_reset;
+		unsigned long paddr = __pa(vaddr);
+		unsigned long tmpaddr = vaddr + SZ_512M;
+		unsigned long tmp0, tmp1, tmp2, tmp3;
+
+		/*
+		 * Find a place for the temporary mapping. It must not be
+		 * in the same 512MB region with vaddr or paddr, otherwise
+		 * there may be multihit exception either on entry to the
+		 * temporary mapping, or on entry to the identity mapping.
+		 * (512MB is the biggest page size supported by TLB.)
+		 */
+		while (((tmpaddr ^ paddr) & -SZ_512M) == 0)
+			tmpaddr += SZ_512M;
+
+		/* Invalidate mapping in the selected temporary area */
+		if (itlb_probe(tmpaddr) & 0x8)
+			invalidate_itlb_entry(itlb_probe(tmpaddr));
+		if (itlb_probe(tmpaddr + PAGE_SIZE) & 0x8)
+			invalidate_itlb_entry(itlb_probe(tmpaddr + PAGE_SIZE));
+
+		/*
+		 * Map two consecutive pages starting at the physical address
+		 * of this function to the temporary mapping area.
+		 */
+		write_itlb_entry(__pte((paddr & PAGE_MASK) |
+				       _PAGE_HW_VALID |
+				       _PAGE_HW_EXEC |
+				       _PAGE_CA_BYPASS),
+				 tmpaddr & PAGE_MASK);
+		write_itlb_entry(__pte(((paddr & PAGE_MASK) + PAGE_SIZE) |
+				       _PAGE_HW_VALID |
+				       _PAGE_HW_EXEC |
+				       _PAGE_CA_BYPASS),
+				 (tmpaddr & PAGE_MASK) + PAGE_SIZE);
+
+		/* Reinitialize TLB */
+		__asm__ __volatile__ ("movi	%0, 1f\n\t"
+				      "movi	%3, 2f\n\t"
+				      "add	%0, %0, %4\n\t"
+				      "add	%3, %3, %5\n\t"
+				      "jx	%0\n"
+				      /*
+				       * No literal, data or stack access
+				       * below this point
+				       */
+				      "1:\n\t"
+				      /* Initialize *tlbcfg */
+				      "movi	%0, 0\n\t"
+				      "wsr	%0, itlbcfg\n\t"
+				      "wsr	%0, dtlbcfg\n\t"
+				      /* Invalidate TLB way 5 */
+				      "movi	%0, 4\n\t"
+				      "movi	%1, 5\n"
+				      "1:\n\t"
+				      "iitlb	%1\n\t"
+				      "idtlb	%1\n\t"
+				      "add	%1, %1, %6\n\t"
+				      "addi	%0, %0, -1\n\t"
+				      "bnez	%0, 1b\n\t"
+				      /* Initialize TLB way 6 */
+				      "movi	%0, 7\n\t"
+				      "addi	%1, %9, 3\n\t"
+				      "addi	%2, %9, 6\n"
+				      "1:\n\t"
+				      "witlb	%1, %2\n\t"
+				      "wdtlb	%1, %2\n\t"
+				      "add	%1, %1, %7\n\t"
+				      "add	%2, %2, %7\n\t"
+				      "addi	%0, %0, -1\n\t"
+				      "bnez	%0, 1b\n\t"
+				      /* Jump to identity mapping */
+				      "jx	%3\n"
+				      "2:\n\t"
+				      /* Complete way 6 initialization */
+				      "witlb	%1, %2\n\t"
+				      "wdtlb	%1, %2\n\t"
+				      /* Invalidate temporary mapping */
+				      "sub	%0, %9, %7\n\t"
+				      "iitlb	%0\n\t"
+				      "add	%0, %0, %8\n\t"
+				      "iitlb	%0"
+				      : "=&a"(tmp0), "=&a"(tmp1), "=&a"(tmp2),
+					"=&a"(tmp3)
+				      : "a"(tmpaddr - vaddr),
+					"a"(paddr - vaddr),
+					"a"(SZ_128M), "a"(SZ_512M),
+					"a"(PAGE_SIZE),
+					"a"((tmpaddr + SZ_512M) & PAGE_MASK)
+				      : "memory");
+	}
+#endif
+#endif
+	__asm__ __volatile__ ("movi	a2, 0\n\t"
+			      "wsr	a2, icountlevel\n\t"
+			      "movi	a2, 0\n\t"
+			      "wsr	a2, icount\n\t"
+#if XCHAL_NUM_IBREAK > 0
+			      "wsr	a2, ibreakenable\n\t"
+#endif
+#if XCHAL_HAVE_LOOPS
+			      "wsr	a2, lcount\n\t"
+#endif
+			      "movi	a2, 0x1f\n\t"
+			      "wsr	a2, ps\n\t"
+			      "isync\n\t"
+			      "jx	%0\n\t"
+			      :
+			      : "a" (XCHAL_RESET_VECTOR_VADDR)
+			      : "a2");
+	for (;;)
+		;
+}
+
 void machine_restart(char * cmd)
 {
 	platform_restart();
@@ -599,12 +694,9 @@ void machine_power_off(void)
 static int
 c_show(struct seq_file *f, void *slot)
 {
-	char buf[NR_CPUS * 5];
-
-	cpulist_scnprintf(buf, sizeof(buf), cpu_online_mask);
 	/* high-level stuff */
 	seq_printf(f, "CPU count\t: %u\n"
-		      "CPU list\t: %s\n"
+		      "CPU list\t: %*pbl\n"
 		      "vendor_id\t: Tensilica\n"
 		      "model\t\t: Xtensa " XCHAL_HW_VERSION_NAME "\n"
 		      "core ID\t\t: " XCHAL_CORE_ID "\n"
@@ -613,7 +705,7 @@ c_show(struct seq_file *f, void *slot)
 		      "cpu MHz\t\t: %lu.%02lu\n"
 		      "bogomips\t: %lu.%02lu\n",
 		      num_online_cpus(),
-		      buf,
+		      cpumask_pr_args(cpu_online_mask),
 		      XCHAL_BUILD_UNIQUE_ID,
 		      XCHAL_HAVE_BE ?  "big" : "little",
 		      ccount_freq/1000000,

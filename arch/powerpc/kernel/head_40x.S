@@ -41,6 +41,7 @@
 #include <asm/ppc_asm.h>
 #include <asm/asm-offsets.h>
 #include <asm/ptrace.h>
+#include <asm/export.h>
 
 /* As with the other PowerPC ports, it is expected that when code
  * execution begins here, the following registers contain valid, yet
@@ -930,25 +931,6 @@ initial_mmu:
 	tlbwe	r4,r0,TLB_DATA		/* Load the data portion of the entry */
 	tlbwe	r3,r0,TLB_TAG		/* Load the tag portion of the entry */
 
-#if defined(CONFIG_SERIAL_TEXT_DEBUG) && defined(SERIAL_DEBUG_IO_BASE)
-
-	/* Load a TLB entry for the UART, so that ppc4xx_progress() can use
-	 * the UARTs nice and early.  We use a 4k real==virtual mapping. */
-
-	lis	r3,SERIAL_DEBUG_IO_BASE@h
-	ori	r3,r3,SERIAL_DEBUG_IO_BASE@l
-	mr	r4,r3
-	clrrwi	r4,r4,12
-	ori	r4,r4,(TLB_WR|TLB_I|TLB_M|TLB_G)
-
-	clrrwi	r3,r3,12
-	ori	r3,r3,(TLB_VALID | TLB_PAGESZ(PAGESZ_4K))
-
-	li	r0,0			/* TLB slot 0 */
-	tlbwe	r4,r0,TLB_DATA
-	tlbwe	r3,r0,TLB_TAG
-#endif /* CONFIG_SERIAL_DEBUG_TEXT && SERIAL_DEBUG_IO_BASE */
-
 	isync
 
 	/* Establish the exception vector base
@@ -990,6 +972,7 @@ sdata:
 	.globl	empty_zero_page
 empty_zero_page:
 	.space	4096
+EXPORT_SYMBOL(empty_zero_page)
 	.globl	swapper_pg_dir
 swapper_pg_dir:
 	.space	PGD_TABLE_SIZE

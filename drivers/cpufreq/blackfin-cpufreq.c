@@ -112,7 +112,7 @@ static unsigned int bfin_getfreq_khz(unsigned int cpu)
 }
 
 #ifdef CONFIG_BF60x
-unsigned long cpu_set_cclk(int cpu, unsigned long new)
+static int cpu_set_cclk(int cpu, unsigned long new)
 {
 	struct clk *clk;
 	int ret;
@@ -195,7 +195,6 @@ static struct cpufreq_driver bfin_driver = {
 	.target_index = bfin_target,
 	.get = bfin_getfreq_khz,
 	.init = __bfin_cpu_init,
-	.exit = cpufreq_generic_exit,
 	.name = "bfin cpufreq",
 	.attr = cpufreq_generic_attr,
 };

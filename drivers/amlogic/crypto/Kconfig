@@ -1,7 +1,7 @@
 
 menu "Amlogic Crypto Support"
 
-config CRYPTO_AML
+config AMLOGIC_CRYPTO
   bool "amlogic HW CRYPTO module"
 	select CRYPTO_ALGAPI
 	select CRYPTO_BLKCIPHER

@@ -26,7 +26,6 @@
 #include <net/ip.h>
 #include <net/pkt_sched.h>
 #include <net/inet_ecn.h>
-#include <net/flow_keys.h>
 
 /*
  * SFB uses two B[l][n] : L x N arrays of bins (L levels, N bins per level)
@@ -55,7 +54,7 @@ struct sfb_bins {
 
 struct sfb_sched_data {
 	struct Qdisc	*qdisc;
-	struct tcf_proto *filter_list;
+	struct tcf_proto __rcu *filter_list;
 	unsigned long	rehash_interval;
 	unsigned long	warmup_time;	/* double buffering warmup time in jiffies */
 	u32		max;
@@ -253,13 +252,13 @@ static bool sfb_rate_limit(struct sk_buff *skb, struct sfb_sched_data *q)
 	return false;
 }
 
-static bool sfb_classify(struct sk_buff *skb, struct sfb_sched_data *q,
+static bool sfb_classify(struct sk_buff *skb, struct tcf_proto *fl,
 			 int *qerr, u32 *salt)
 {
 	struct tcf_result res;
 	int result;
 
-	result = tc_classify(skb, q->filter_list, &res);
+	result = tc_classify(skb, fl, &res, false);
 	if (result >= 0) {
 #ifdef CONFIG_NET_CLS_ACT
 		switch (result) {
@@ -276,20 +275,22 @@ static bool sfb_classify(struct sk_buff *skb, struct sfb_sched_data *q,
 	return false;
 }
 
-static int sfb_enqueue(struct sk_buff *skb, struct Qdisc *sch)
+static int sfb_enqueue(struct sk_buff *skb, struct Qdisc *sch,
+		       struct sk_buff **to_free)
 {
 
 	struct sfb_sched_data *q = qdisc_priv(sch);
 	struct Qdisc *child = q->qdisc;
+	struct tcf_proto *fl;
 	int i;
 	u32 p_min = ~0;
 	u32 minqlen = ~0;
-	u32 r, slot, salt, sfbhash;
+	u32 r, sfbhash;
+	u32 slot = q->slot;
 	int ret = NET_XMIT_SUCCESS | __NET_XMIT_BYPASS;
-	struct flow_keys keys;
 
 	if (unlikely(sch->q.qlen >= q->limit)) {
-		sch->qstats.overlimits++;
+		qdisc_qstats_overlimit(sch);
 		q->stats.queuedrop++;
 		goto drop;
 	}
@@ -306,23 +307,19 @@ static int sfb_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 		}
 	}
 
-	if (q->filter_list) {
+	fl = rcu_dereference_bh(q->filter_list);
+	if (fl) {
+		u32 salt;
+
 		/* If using external classifiers, get result and record it. */
-		if (!sfb_classify(skb, q, &ret, &salt))
+		if (!sfb_classify(skb, fl, &ret, &salt))
 			goto other_drop;
-		keys.src = salt;
-		keys.dst = 0;
-		keys.ports = 0;
+		sfbhash = jhash_1word(salt, q->bins[slot].perturbation);
 	} else {
-		skb_flow_dissect(skb, &keys);
+		sfbhash = skb_get_hash_perturb(skb, q->bins[slot].perturbation);
 	}
 
-	slot = q->slot;
 
-	sfbhash = jhash_3words((__force u32)keys.dst,
-			       (__force u32)keys.src,
-			       (__force u32)keys.ports,
-			       q->bins[slot].perturbation);
 	if (!sfbhash)
 		sfbhash = 1;
 	sfb_skb_cb(skb)->hashes[slot] = sfbhash;
@@ -346,7 +343,7 @@ static int sfb_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	sfb_skb_cb(skb)->hashes[slot] = 0;
 
 	if (unlikely(minqlen >= q->max)) {
-		sch->qstats.overlimits++;
+		qdisc_qstats_overlimit(sch);
 		q->stats.bucketdrop++;
 		goto drop;
 	}
@@ -354,10 +351,8 @@ static int sfb_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	if (unlikely(p_min >= SFB_MAX_PROB)) {
 		/* Inelastic flow */
 		if (q->double_buffering) {
-			sfbhash = jhash_3words((__force u32)keys.dst,
-					       (__force u32)keys.src,
-					       (__force u32)keys.ports,
-					       q->bins[slot].perturbation);
+			sfbhash = skb_get_hash_perturb(skb,
+			    q->bins[slot].perturbation);
 			if (!sfbhash)
 				sfbhash = 1;
 			sfb_skb_cb(skb)->hashes[slot] = sfbhash;
@@ -374,7 +369,7 @@ static int sfb_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 			}
 		}
 		if (sfb_rate_limit(skb, q)) {
-			sch->qstats.overlimits++;
+			qdisc_qstats_overlimit(sch);
 			q->stats.penaltydrop++;
 			goto drop;
 		}
@@ -403,22 +398,23 @@ static int sfb_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 	}
 
 enqueue:
-	ret = qdisc_enqueue(skb, child);
+	ret = qdisc_enqueue(skb, child, to_free);
 	if (likely(ret == NET_XMIT_SUCCESS)) {
+		qdisc_qstats_backlog_inc(sch, skb);
 		sch->q.qlen++;
 		increment_qlen(skb, q);
 	} else if (net_xmit_drop_count(ret)) {
 		q->stats.childdrop++;
-		sch->qstats.drops++;
+		qdisc_qstats_drop(sch);
 	}
 	return ret;
 
 drop:
-	qdisc_drop(skb, sch);
+	qdisc_drop(skb, sch, to_free);
 	return NET_XMIT_CN;
 other_drop:
 	if (ret & __NET_XMIT_BYPASS)
-		sch->qstats.drops++;
+		qdisc_qstats_drop(sch);
 	kfree_skb(skb);
 	return ret;
 }
@@ -433,6 +429,7 @@ static struct sk_buff *sfb_dequeue(struct Qdisc *sch)
 
 	if (skb) {
 		qdisc_bstats_update(sch, skb);
+		qdisc_qstats_backlog_dec(sch, skb);
 		sch->q.qlen--;
 		decrement_qlen(skb, q);
 	}
@@ -455,6 +452,7 @@ static void sfb_reset(struct Qdisc *sch)
 	struct sfb_sched_data *q = qdisc_priv(sch);
 
 	qdisc_reset(q->qdisc);
+	sch->qstats.backlog = 0;
 	sch->q.qlen = 0;
 	q->slot = 0;
 	q->double_buffering = false;
@@ -508,7 +506,7 @@ static int sfb_change(struct Qdisc *sch, struct nlattr *opt)
 
 	limit = ctl->limit;
 	if (limit == 0)
-		limit = max_t(u32, qdisc_dev(sch)->tx_queue_len, 1);
+		limit = qdisc_dev(sch)->tx_queue_len;
 
 	child = fifo_create_dflt(sch, &pfifo_qdisc_ops, limit);
 	if (IS_ERR(child))
@@ -516,7 +514,8 @@ static int sfb_change(struct Qdisc *sch, struct nlattr *opt)
 
 	sch_tree_lock(sch);
 
-	qdisc_tree_decrease_qlen(q->qdisc, q->qdisc->q.qlen);
+	qdisc_tree_reduce_backlog(q->qdisc, q->qdisc->q.qlen,
+				  q->qdisc->qstats.backlog);
 	qdisc_destroy(q->qdisc);
 	q->qdisc = child;
 
@@ -612,12 +611,7 @@ static int sfb_graft(struct Qdisc *sch, unsigned long arg, struct Qdisc *new,
 	if (new == NULL)
 		new = &noop_qdisc;
 
-	sch_tree_lock(sch);
-	*old = q->qdisc;
-	q->qdisc = new;
-	qdisc_tree_decrease_qlen(*old, (*old)->q.qlen);
-	qdisc_reset(*old);
-	sch_tree_unlock(sch);
+	*old = qdisc_replace(sch, new, &q->qdisc);
 	return 0;
 }
 
@@ -660,7 +654,8 @@ static void sfb_walk(struct Qdisc *sch, struct qdisc_walker *walker)
 	}
 }
 
-static struct tcf_proto **sfb_find_tcf(struct Qdisc *sch, unsigned long cl)
+static struct tcf_proto __rcu **sfb_find_tcf(struct Qdisc *sch,
+					     unsigned long cl)
 {
 	struct sfb_sched_data *q = qdisc_priv(sch);
 

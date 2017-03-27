@@ -1,7 +1,7 @@
 /*
- * drivers/amlogic/clocksource/meson_timer.c
+ * drivers/amlogic/clocksource/meson_bc_timer.c
  *
- * Copyright (C) 2015 Amlogic, Inc. All rights reserved.
+ * Copyright (C) 2017 Amlogic, Inc. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
-*/
+ */
 
 #include <linux/kernel.h>
 #include <linux/device.h>
@@ -69,8 +69,6 @@
 #define TIMER_RESOLUTION_100us          2
 #define TIMER_RESOLUTION_1ms            3
 
-
-static struct clock_event_device bc_clock_event;
 void __iomem *timer_ctrl_base;
 
 static inline void aml_set_reg32_mask(void __iomem *_reg, const uint32_t _mask)
@@ -79,7 +77,7 @@ static inline void aml_set_reg32_mask(void __iomem *_reg, const uint32_t _mask)
 
 	_val = readl_relaxed(_reg) | _mask;
 
-	writel_relaxed(_val , _reg);
+	writel_relaxed(_val, _reg);
 }
 
 static inline void aml_write_reg32(void __iomem *_reg, const uint32_t _value)
@@ -102,8 +100,6 @@ aml_set_reg32_bits(void __iomem *_reg, const uint32_t _value,
 				_reg);
 }
 
-
-
 /********** Clock Event Device, Timer-ABCD/FGHI *********/
 
 struct meson_clock {
@@ -120,49 +116,9 @@ static struct meson_clock bc_clock;
 static irqreturn_t meson_timer_interrupt(int irq, void *dev_id);
 static int meson_set_next_event(unsigned long evt,
 				struct clock_event_device *dev);
-static void meson_clkevt_set_mode(enum clock_event_mode mode,
-				  struct clock_event_device *dev);
-
 
 static DEFINE_SPINLOCK(time_lock);
 
-static void meson_clkevt_set_mode(enum clock_event_mode mode,
-				  struct clock_event_device *dev)
-{
-	struct meson_clock *clk = &bc_clock;
-
-	spin_lock(&time_lock);
-	switch (mode) {
-	case CLOCK_EVT_MODE_RESUME:
-		/* printk(KERN_INFO"Resume timer%s\n", dev->name); */
-		aml_set_reg32_bits(clk->mux_reg, 1,
-				clk->bit_enable, 1);
-	break;
-
-	case CLOCK_EVT_MODE_PERIODIC:
-		aml_set_reg32_bits(clk->mux_reg, 1, clk->bit_mode, 1);
-		aml_set_reg32_bits(clk->mux_reg, 1,
-				clk->bit_enable, 1);
-		/* printk("Periodic timer %s!,mux_reg=%x\n", \
-		 dev->name,readl_relaxed(clk->mux_reg)); */
-	break;
-
-	case CLOCK_EVT_MODE_ONESHOT:
-		aml_set_reg32_bits(clk->mux_reg, 0, clk->bit_mode, 1);
-		aml_set_reg32_bits(clk->mux_reg, 1,
-				clk->bit_enable, 1);
-		/* pr_info("One shot timer %s!mux_reg=%x\n", \
-		  dev->name,readl_relaxed(clk->mux_reg)); */
-	break;
-	case CLOCK_EVT_MODE_SHUTDOWN:
-	case CLOCK_EVT_MODE_UNUSED:
-		/* pr_info("Disable timer %p %s\n",dev,dev->name); */
-		aml_set_reg32_bits(clk->mux_reg, 0,
-				clk->bit_enable, 1);
-	break;
-	}
-	spin_unlock(&time_lock);
-}
 static int meson_set_next_event(unsigned long evt,
 				struct clock_event_device *dev)
 {
@@ -174,11 +130,59 @@ static int meson_set_next_event(unsigned long evt,
 	return 0;
 }
 
+static int meson_clkevt_shutdown(struct clock_event_device *dev)
+{
+	struct meson_clock *clk = &bc_clock;
+
+	spin_lock(&time_lock);
+	/* pr_info("Disable timer %p %s\n",dev,dev->name); */
+	aml_set_reg32_bits(clk->mux_reg, 0, clk->bit_enable, 1);
+	spin_unlock(&time_lock);
+	return 0;
+}
+
+static int meson_clkevt_set_periodic(struct clock_event_device *dev)
+{
+	struct meson_clock *clk = &bc_clock;
+
+	spin_lock(&time_lock);
+	aml_set_reg32_bits(clk->mux_reg, 1, clk->bit_mode, 1);
+	aml_set_reg32_bits(clk->mux_reg, 1, clk->bit_enable, 1);
+	/* pr_info("Periodic timer %s!,mux_reg=%x\n",*/
+	/* dev->name,readl_relaxed(clk->mux_reg)); */
+	spin_unlock(&time_lock);
+	return 0;
+}
+
+static int meson_clkevt_set_oneshot(struct clock_event_device *dev)
+{
+	struct meson_clock *clk = &bc_clock;
+
+	spin_lock(&time_lock);
+	aml_set_reg32_bits(clk->mux_reg, 0, clk->bit_mode, 1);
+	aml_set_reg32_bits(clk->mux_reg, 1, clk->bit_enable, 1);
+	/* pr_info("One shot timer %s!mux_reg=%x\n",*/
+	/* dev->name,readl_relaxed(clk->mux_reg)); */
+	spin_unlock(&time_lock);
+	return 0;
+}
+
+static int meson_clkevt_resume(struct clock_event_device *dev)
+{
+	struct meson_clock *clk = &bc_clock;
+
+	spin_lock(&time_lock);
+	/* pr_info("Resume timer%s\n", dev->name); */
+	aml_set_reg32_bits(clk->mux_reg, 1, clk->bit_enable, 1);
+	spin_unlock(&time_lock);
+	return 0;
+}
 
 /* Clock event timer interrupt handler */
 static irqreturn_t meson_timer_interrupt(int irq, void *dev_id)
 {
 	struct clock_event_device *evt = dev_id;
+
 	if (evt == NULL || evt->event_handler == NULL) {
 		WARN_ONCE(evt == NULL || evt->event_handler == NULL,
 			"%p %s %p %d",
@@ -190,55 +194,55 @@ static irqreturn_t meson_timer_interrupt(int irq, void *dev_id)
 	return IRQ_HANDLED;
 
 }
-static void  meson_timer_init_device(struct clock_event_device *evt)
-{
-	evt->mult = div_sc(1000000, NSEC_PER_SEC, 20);
-	evt->max_delta_ns =
-		clockevent_delta2ns(0xfffe, evt);
-	evt->min_delta_ns = clockevent_delta2ns(1, evt);
-	evt->cpumask = cpu_all_mask;
-}
+
+static struct clock_event_device meson_clockevent = {
+	.cpumask = cpu_all_mask,
+	.set_next_event = meson_set_next_event,
+	.set_state_shutdown = meson_clkevt_shutdown,
+	.set_state_periodic = meson_clkevt_set_periodic,
+	.set_state_oneshot = meson_clkevt_set_oneshot,
+	.tick_resume = meson_clkevt_resume,
+};
 
 /*
  * This sets up the system timers, clock source and clock event.
  */
-void  clockevent_init_and_register(struct device_node *np)
+int clockevent_init_and_register(struct device_node *np)
 {
 	struct device_node *timer;
 	struct meson_clock *mclk = &bc_clock;
-	struct clock_event_device *clock_evt = &bc_clock_event;
 
 	timer = np;
 	if (!timer) {
 		pr_info(" * %s missing timer phandle\n",
 				     timer->full_name);
-		return;
+		return -1;
 	}
-	if (of_property_read_string(timer, "timer_name", &clock_evt->name))
-		return;
+	if (of_property_read_string(timer, "timer_name",
+				&meson_clockevent.name))
+		return -1;
 
 	if (of_property_read_u32(timer, "clockevent-rating",
-				&clock_evt->rating))
-		return;
+				&meson_clockevent.rating))
+		return -1;
 
 	if (of_property_read_u32(timer, "clockevent-shift",
-				&clock_evt->shift))
-		return;
+				&meson_clockevent.shift))
+		return -1;
 
 	if (of_property_read_u32(timer, "clockevent-features",
-				&clock_evt->features))
-		return;
+				&meson_clockevent.features))
+		return -1;
 
 	if (of_property_read_u32(timer, "bit_enable", &mclk->bit_enable))
-		return;
+		return -1;
 
 	if (of_property_read_u32(timer, "bit_mode", &mclk->bit_mode))
-		return;
+		return -1;
 
 	if (of_property_read_u32(timer, "bit_resolution",
 				&mclk->bit_resolution))
-		return;
-
+		return -1;
 
 	mclk->mux_reg = timer_ctrl_base;
 	mclk->reg = of_iomap(timer, 1);
@@ -249,25 +253,30 @@ void  clockevent_init_and_register(struct device_node *np)
 		((1 << mclk->bit_mode)
 		|(TIMER_RESOLUTION_1us << mclk->bit_resolution)));
 
-	meson_timer_init_device(clock_evt);
-
-	clock_evt->set_next_event = meson_set_next_event;
-	clock_evt->set_mode = meson_clkevt_set_mode;
-
-	mclk->irq.dev_id = clock_evt;
+	meson_clockevent.mult = div_sc(1000000, NSEC_PER_SEC, 20);
+	meson_clockevent.max_delta_ns =
+		clockevent_delta2ns(0xfffe, &meson_clockevent);
+	meson_clockevent.min_delta_ns =
+		clockevent_delta2ns(1, &meson_clockevent);
+	mclk->irq.dev_id = &meson_clockevent;
 	mclk->irq.handler = meson_timer_interrupt;
-	mclk->irq.name = clock_evt->name;
+	mclk->irq.name = meson_clockevent.name;
 	mclk->irq.flags =
-		IRQF_DISABLED | IRQF_TIMER | IRQF_IRQPOLL|IRQF_TRIGGER_RISING;
+		IRQF_TIMER | IRQF_IRQPOLL|IRQF_TRIGGER_RISING;
 	/* Set up the IRQ handler */
-	clock_evt->irq = mclk->irq.irq;
-	clockevents_register_device(clock_evt);
+	meson_clockevent.irq = mclk->irq.irq;
+	clockevents_register_device(&meson_clockevent);
 	setup_irq(mclk->irq.irq, &mclk->irq);
-	return;
+	return 0;
 }
-void __init meson_timer_init(struct device_node *np)
+
+/*meson broadcast timer*/
+int __init meson_timer_init(struct device_node *np)
 {
 	timer_ctrl_base = of_iomap(np, 0);
-	clockevent_init_and_register(np);
+	if (clockevent_init_and_register(np) < 0)
+		pr_err("%s err\n", __func__);
+
+	return 0;
 }
 CLOCKSOURCE_OF_DECLARE(meson_timer, "arm, meson-bc-timer", meson_timer_init);

@@ -1,7 +1,7 @@
 #
 # Input core configuration
 #
-config AM_SARADC
+config AMLOGIC_SARADC
 	bool "Meson SAR ADC support"
 	default n
 	help

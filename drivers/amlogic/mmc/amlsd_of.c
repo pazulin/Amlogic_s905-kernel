@@ -1,7 +1,7 @@
 /*
  * drivers/amlogic/mmc/amlsd_of.c
  *
- * Copyright (C) 2015 Amlogic, Inc. All rights reserved.
+ * Copyright (C) 2017 Amlogic, Inc. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
-*/
+ */
 
 #include <linux/debugfs.h>
 #include <linux/kernel.h>
@@ -25,12 +25,12 @@
 #include <linux/mtd/partitions.h>
 #include <linux/slab.h>
 #include <linux/amlogic/sd.h>
-/* #include <mach/pinmux.h> */
-#include <linux/of_address.h>
-/* #include <mach/am_regs.h> */
-#include <linux/amlogic/aml_gpio_consumer.h>
-#include "amlsd.h"
+/*#include <linux/of_address.h>*/
+/*#include <linux/amlogic/aml_gpio_consumer.h>*/
+#include <linux/gpio/consumer.h>
+#include <linux/amlogic/amlsd.h>
 #include <linux/amlogic/cpu_version.h>
+unsigned int sd_emmc_debug;
 
 static const struct sd_caps host_caps[] = {
 	SD_CAPS(MMC_CAP_4_BIT_DATA, "MMC_CAP_4_BIT_DATA"),
@@ -57,7 +57,6 @@ static const struct sd_caps host_caps[] = {
 	SD_CAPS(MMC_CAP_DRIVER_TYPE_D, "MMC_CAP_DRIVER_TYPE_D"),
 	SD_CAPS(MMC_CAP_CMD23, "MMC_CAP_CMD23"),
 	SD_CAPS(MMC_CAP_HW_RESET, "MMC_CAP_HW_RESET"),
-	SD_CAPS(MMC_CAP_RUNTIME_RESUME, "MMC_CAP_RUNTIME_RESUME"),
 	SD_CAPS(MMC_CAP_AGGRESSIVE_PM, "MMC_CAP_AGGRESSIVE_PM"),
 	SD_CAPS(MMC_PM_KEEP_POWER, "MMC_PM_KEEP_POWER"),
 };
@@ -120,118 +119,62 @@ static int amlsd_get_host_caps2(struct device_node *of_node,
 	return 0;
 }
 
-int amlsd_get_reg_base(struct platform_device *pdev,
-				struct amlsd_host *host)
-{
-	struct device_node *of_node = pdev->dev.of_node;
-
-	host->base = of_iomap(of_node, 0);
-	if (!host->base) {
-		dev_err(&pdev->dev, "of_iomap fail\n");
-		return -EINVAL;
-	}
-	pr_info("host->base %p\n", host->base);
-	return 0;
-}
-#if 0
-
-static void aml_set_gpio_input(const char *pin_name)
-{
-	int ret = 0, gpio_pin;
-
-	gpio_pin = amlogic_gpio_name_map_num(pin_name);
-	ret = amlogic_gpio_request_one(gpio_pin, GPIOF_IN, MODULE_NAME);
-	CHECK_RET(ret);
-	ret = amlogic_gpio_direction_input(gpio_pin, MODULE_NAME);
-	CHECK_RET(ret);
-	/* print_tmp("\033[0;40;32m %s set input \033[0m\n", pin_name); */
-	ret = amlogic_gpio_free(gpio_pin, MODULE_NAME);
-	CHECK_RET(ret);
-}
-
-static int amlsd_init_pins_input(struct device_node *of_node,
-		struct amlsd_platform *pdata)
-{
-	const char *pin_name;
-	struct property *prop;
-
-	/* print_tmp("\033[0;40;32m Enter \033[0m\n", pin_name); */
-	of_property_for_each_string(of_node,
-		"all_pins_name", prop, pin_name) {
-
-		aml_set_gpio_input(pin_name);
-	};
-	return 0;
-}
-#endif
-
-int amlsd_get_platform_data(struct platform_device *pdev,
-		struct amlsd_platform *pdata,
+int amlsd_get_platform_data(struct amlsd_platform *pdata,
 		struct mmc_host *mmc, u32 index)
 {
-	struct device_node *of_node = pdev->dev.of_node;
+	struct device_node *of_node;
 	struct device_node *child;
 	u32 i, prop;
 	const char *str = "none";
 
+	if (!mmc->parent || !mmc->parent->of_node)
+		return 0;
+
+	of_node = mmc->parent->of_node;
 	if (of_node) {
 		child = of_node->child;
-		BUG_ON(!child);
-		BUG_ON(index >= MMC_MAX_DEVICE);
+		WARN_ON(!child);
+		WARN_ON(index >= MMC_MAX_DEVICE);
 		for (i = 0; i < index; i++)
 			child = child->sibling;
 		if (!child)
 			return -EINVAL;
 
-/*	amlsd_init_pins_input(child, pdata);*/
+		/*	amlsd_init_pins_input(child, pdata);*/
 
 		SD_PARSE_U32_PROP_HEX(child, "port",
-						prop, pdata->port);
+				prop, pdata->port);
 		SD_PARSE_U32_PROP_HEX(child, "ocr_avail",
-						prop, pdata->ocr_avail);
-		BUG_ON(!pdata->ocr_avail);
+				prop, pdata->ocr_avail);
+		WARN_ON(!pdata->ocr_avail);
 		SD_PARSE_U32_PROP_DEC(child, "f_min",
-						prop, pdata->f_min);
+				prop, pdata->f_min);
 		SD_PARSE_U32_PROP_DEC(child, "f_max",
-						prop, pdata->f_max);
-		SD_PARSE_U32_PROP_DEC(child, "f_max_w",
-						prop, pdata->f_max_w);
+				prop, pdata->f_max);
 		SD_PARSE_U32_PROP_HEX(child, "max_req_size", prop,
-						pdata->max_req_size);
-		SD_PARSE_U32_PROP_DEC(child, "irq_in", prop,
-						pdata->irq_in);
-		SD_PARSE_U32_PROP_DEC(child, "irq_in_edge",
-						prop, pdata->irq_in_edge);
-		SD_PARSE_U32_PROP_DEC(child, "irq_out",
-						prop, pdata->irq_out);
-		SD_PARSE_U32_PROP_DEC(child, "irq_out_edge",
-						prop, pdata->irq_out_edge);
-		SD_PARSE_U32_PROP_HEX(child, "power_level",
-						prop, pdata->power_level);
-
+				pdata->max_req_size);
 		SD_PARSE_GPIO_NUM_PROP(child, "gpio_cd",
-						str, pdata->gpio_cd);
-		SD_PARSE_U32_PROP_DEC(child, "gpio_cd_level",
-						prop, pdata->gpio_cd_level);
+				str, pdata->gpio_cd);
 		SD_PARSE_GPIO_NUM_PROP(child, "gpio_ro",
-						str, pdata->gpio_ro);
-		SD_PARSE_GPIO_NUM_PROP(child, "gpio_power",
-						str, pdata->gpio_power);
-
-		SD_PARSE_STRING_PROP(child, "pinname",
-						str, pdata->pinname);
-		SD_PARSE_GPIO_NUM_PROP(child, "jtag_pin",
-						str, pdata->jtag_pin);
-		SD_PARSE_U32_PROP_DEC(child, "auto_clk_close",
-						prop, pdata->auto_clk_close);
+				str, pdata->gpio_ro);
 		SD_PARSE_GPIO_NUM_PROP(child, "vol_switch",
-						str, pdata->vol_switch);
+				str, pdata->vol_switch);
+
+		SD_PARSE_U32_PROP_HEX(child, "power_level",
+				prop, pdata->power_level);
+
+		SD_PARSE_U32_PROP_DEC(child, "gpio_cd_level",
+				prop, pdata->gpio_cd_level);
+		SD_PARSE_STRING_PROP(child, "pinname",
+				str, pdata->pinname);
+		SD_PARSE_U32_PROP_DEC(child, "auto_clk_close",
+				prop, pdata->auto_clk_close);
 		SD_PARSE_U32_PROP_DEC(child, "vol_switch_18",
-						prop, pdata->vol_switch_18);
+				prop, pdata->vol_switch_18);
 		SD_PARSE_U32_PROP_DEC(child, "vol_switch_delay",
-						prop, pdata->vol_switch_delay);
+				prop, pdata->vol_switch_delay);
 		SD_PARSE_U32_PROP_DEC(child, "card_type",
-						prop, pdata->card_type);
+				prop, pdata->card_type);
 		if (aml_card_type_mmc(pdata)) {
 			/*tx_phase set default value first*/
 			if (get_cpu_type() == MESON_CPU_MAJOR_ID_GXTVBB)
@@ -239,30 +182,29 @@ int amlsd_get_platform_data(struct platform_device *pdev,
 			if (get_cpu_type() == MESON_CPU_MAJOR_ID_TXL)
 				pdata->tx_delay = 3;
 			SD_PARSE_U32_PROP_DEC(child, "tx_phase",
-						prop, pdata->tx_phase);
+					prop, pdata->tx_phase);
 		}
 		if (aml_card_type_non_sdio(pdata)) {
 			/*card in default value*/
 			pdata->card_in_delay = 0;
 			SD_PARSE_U32_PROP_DEC(child, "card_in_delay",
-						prop, pdata->card_in_delay);
+					prop, pdata->card_in_delay);
 		}
-		SD_PARSE_GPIO_NUM_PROP(child, "gpio_dat3",
-						str, pdata->gpio_dat3);
 		SD_PARSE_GPIO_NUM_PROP(child, "hw_reset",
-						str, pdata->hw_reset);
+				str, pdata->hw_reset);
+		SD_PARSE_GPIO_NUM_PROP(child, "gpio_dat3",
+				str, pdata->gpio_dat3);
+
+		pdata->xfer_pre = of_amlsd_xfer_pre;
+		pdata->xfer_post = of_amlsd_xfer_post;
+
 		amlsd_get_host_caps(child, pdata);
 		amlsd_get_host_caps2(child, pdata);
 		pdata->port_init = of_amlsd_init;
-		pdata->pwr_pre = of_amlsd_pwr_prepare;
-		pdata->pwr_on = of_amlsd_pwr_on;
-		pdata->pwr_off = of_amlsd_pwr_off;
-		pdata->xfer_pre = of_amlsd_xfer_pre;
-		pdata->xfer_post = of_amlsd_xfer_post;
-		/* pdata->cd = of_amlsd_detect; */
 		pdata->irq_init = of_amlsd_irq_init;
-	pdata->ro = of_amlsd_ro;
+		pdata->ro = of_amlsd_ro;
 	}
 	return 0;
 }
+
 

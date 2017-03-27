@@ -1,7 +1,7 @@
 /*
  * drivers/amlogic/i2c/aml_slave.c
  *
- * Copyright (C) 2015 Amlogic, Inc. All rights reserved.
+ * Copyright (C) 2017 Amlogic, Inc. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,8 +13,9 @@
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
-*/
+ */
 
+#include <linux/module.h>
 #include "aml_slave.h"
 #include <linux/slab.h>
 #include <linux/of_irq.h>
@@ -25,6 +26,7 @@ void i2c_slave_dts_parse(struct platform_device *pdev,
 struct aml_i2c_slave *slave)
 {
 	struct pinctrl *p;
+
 	p = devm_pinctrl_get_select_default(&pdev->dev);
 	if (IS_ERR(p))
 		pr_info("pinmux init fail, %ld\n", PTR_ERR(p));
@@ -51,6 +53,7 @@ static ssize_t show_i2c_slave(struct class *class,
 struct class_attribute *attr, char *buf)
 {
 	int ret;
+
 	struct aml_i2c_slave *i2c;
 
 	i2c = container_of(class, struct aml_i2c_slave, cls);
@@ -100,17 +103,16 @@ struct class_attribute *attr, const char *buf, size_t count)
 }
 
 static struct class_attribute slave_class_attrs[] = {
-	__ATTR(addr, S_IRUGO|S_IWUSR,  show_i2c_slave, store_i2c_slave),
-	__ATTR(control_reg, S_IRUGO|S_IWUSR,  show_i2c_slave,
+	__ATTR(addr, 0644,  show_i2c_slave, store_i2c_slave),
+	__ATTR(control_reg, 0644,  show_i2c_slave,
 						store_i2c_slave),
-	__ATTR(data, S_IRUGO|S_IWUSR,  show_i2c_slave, store_i2c_slave),
+	__ATTR(data, 0644,  show_i2c_slave, store_i2c_slave),
 	__ATTR_NULL
 };
 int  i2c_slave_read_data(struct aml_i2c_slave *slave,
 struct aml_i2c_slave_reg_ctrl *slave_ctrl)
 {
 	unsigned int rev_data;
-
 
 	rev_data = (slave->slave_regs->s_rev_reg);
 
@@ -140,7 +142,6 @@ static void i2c_slave_check_status(unsigned long lparam)
 #endif
 static irqreturn_t i2c_slave_xfer_isr(int irq, void *dev_id)
 {
-
 	struct aml_i2c_slave *slave;
 
 	struct aml_i2c_slave_reg_ctrl *slave_ctrl;
@@ -218,6 +219,7 @@ static int i2c_slave_probe(struct platform_device *pdev)
 static int i2c_slave_remove(struct platform_device *pdev)
 {
 	struct aml_i2c_slave *slave;
+
 	slave = platform_get_drvdata(pdev);
 	class_destroy(&slave->cls);
 	mutex_destroy(slave->lock);
@@ -229,6 +231,7 @@ static int i2c_slave_suspend(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct aml_i2c_slave *slave;
+
 	slave = platform_get_drvdata(pdev);
 	mutex_lock(slave->lock);
 	disable_irq(slave->irq);
@@ -241,6 +244,7 @@ static int i2c_slave_resume(struct device *dev)
 {
 	struct platform_device *pdev = to_platform_device(dev);
 	struct aml_i2c_slave *slave;
+
 	slave = platform_get_drvdata(pdev);
 	pr_info("%s\n", __func__);
 	mutex_lock(slave->lock);

@@ -2,11 +2,11 @@
 
 
 config AMLOGIC_SEC
-    bool "Amlogic secure monitor driver support"
-    help
-      This is the Amlogic secure monitor driver
-
-config AML_SERR
-	bool "workaround EL0 SErr exception handler"
+	bool "Amlogic secure monitor driver support"
+	default n
 	help
-		This is the Amlogic EL0 SErr exception handler
+		This is the Amlogic secure monitor driver
+		this config only ctrl in makefile
+		prepare share memory
+		etc
+

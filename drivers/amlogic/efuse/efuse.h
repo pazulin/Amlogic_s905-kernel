@@ -1,7 +1,7 @@
 /*
  * drivers/amlogic/efuse/efuse.h
  *
- * Copyright (C) 2015 Amlogic, Inc. All rights reserved.
+ * Copyright (C) 2017 Amlogic, Inc. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
-*/
+ */
 
 #ifndef __EFUSE_H
 #define __EFUSE_H
@@ -51,16 +51,16 @@ extern int efuseinfo_num;
 
 extern void __iomem *sharemem_input_base;
 extern void __iomem *sharemem_output_base;
-extern unsigned efuse_read_cmd;
-extern unsigned efuse_write_cmd;
-extern unsigned efuse_get_max_cmd;
+extern unsigned int efuse_read_cmd;
+extern unsigned int efuse_write_cmd;
+extern unsigned int efuse_get_max_cmd;
 
 struct efuseinfo_item_t {
 	char title[40];
-	unsigned id;
+	unsigned int id;
 	loff_t offset;    /* write offset */
-	unsigned enc_len;
-	unsigned data_len;
+	unsigned int enc_len;
+	unsigned int data_len;
 	int bch_en;
 	int bch_reverse;
 };
@@ -88,7 +88,7 @@ struct efuse_hal_api_arg {
 
 extern struct efuseinfo_t efuseinfo[];
 #ifndef CONFIG_ARM64
-int efuse_getinfo_byID(unsigned id, struct efuseinfo_item_t *info);
+int efuse_getinfo_byID(unsigned int id, struct efuseinfo_item_t *info);
 int check_if_efused(loff_t pos, size_t count);
 int efuse_read_item(char *buf, size_t count, loff_t *ppos);
 int efuse_write_item(char *buf, size_t count, loff_t *ppos);

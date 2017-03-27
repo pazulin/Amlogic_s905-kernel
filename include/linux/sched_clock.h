@@ -10,12 +10,17 @@
 
 #ifdef CONFIG_GENERIC_SCHED_CLOCK
 extern void sched_clock_postinit(void);
-#else
-static inline void sched_clock_postinit(void) { }
-#endif
 
-extern void setup_sched_clock(u32 (*read)(void), int bits, unsigned long rate);
 extern void sched_clock_register(u64 (*read)(void), int bits,
 				 unsigned long rate);
+#else
+static inline void sched_clock_postinit(void) { }
+
+static inline void sched_clock_register(u64 (*read)(void), int bits,
+					unsigned long rate)
+{
+	;
+}
+#endif
 
 #endif

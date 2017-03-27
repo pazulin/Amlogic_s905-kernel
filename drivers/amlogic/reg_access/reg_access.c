@@ -1,7 +1,7 @@
 /*
  * drivers/amlogic/reg_access/reg_access.c
  *
- * Copyright (C) 2015 Amlogic, Inc. All rights reserved.
+ * Copyright (C) 2017 Amlogic, Inc. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,9 +13,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
-*/
-
-
+ */
 
 /* Standard Linux headers */
 #include <linux/types.h>
@@ -26,25 +24,26 @@
 #include <linux/string.h>
 #include <linux/slab.h>
 #include <linux/sched.h>
-#include <linux/wakelock.h>
 #include <linux/debugfs.h>
 #include <linux/io.h>
 #include <linux/uaccess.h>
 static struct dentry *debugfs_root;
 /* amlogic debug device*/
 struct aml_ddev {
-	unsigned			cached_reg_addr;
-	unsigned			size;
+	unsigned int cached_reg_addr;
+	unsigned int size;
 	int (*debugfs_reg_access)(struct aml_ddev *indio_dev,
-				 unsigned reg, unsigned writeval,
-				 unsigned *readval);
+				 unsigned int reg, unsigned int writeval,
+				 unsigned int *readval);
 };
 int aml_reg_access(struct aml_ddev *indio_dev,
-				 unsigned reg, unsigned writeval,
-				 unsigned *readval)
+				 unsigned int reg, unsigned int writeval,
+				 unsigned int *readval)
 {
 	void __iomem *vaddr;
+
 	reg = round_down(reg, 0x3);
+
 	vaddr = ioremap(reg, 0x4);
 
 	if (readval)
@@ -60,7 +59,7 @@ static ssize_t paddr_read_file(struct file *file, char __user *userbuf,
 {
 	struct aml_ddev *indio_dev = file->private_data;
 	char buf[80];
-	unsigned val = 0;
+	unsigned int val = 0;
 	ssize_t len;
 	int ret;
 
@@ -81,7 +80,7 @@ static ssize_t paddr_write_file(struct file *file, const char __user *userbuf,
 				   size_t count, loff_t *ppos)
 {
 	struct aml_ddev *indio_dev = file->private_data;
-	unsigned reg, val;
+	unsigned int reg, val;
 	char buf[80];
 	int ret;
 
@@ -125,9 +124,10 @@ static ssize_t dump_write_file(struct file *file, const char __user *userbuf,
 {
 	struct seq_file *s = file->private_data;
 	struct aml_ddev *indio_dev = s->private;
-	unsigned reg, val;
+	unsigned int reg, val;
 	char buf[80];
 	int ret;
+
 	count = min_t(size_t, count, (sizeof(buf)-1));
 	if (copy_from_user(buf, userbuf, count))
 		return -EFAULT;
@@ -149,7 +149,7 @@ static ssize_t dump_write_file(struct file *file, const char __user *userbuf,
 
 static int dump_show(struct seq_file *s, void *what)
 {
-	unsigned int  i = 0 , val;
+	unsigned int  i = 0, val;
 	int ret;
 	struct aml_ddev *indio_dev = s->private;
 
@@ -189,9 +189,9 @@ static int __init aml_debug_init(void)
 	}
 	aml_dev.debugfs_reg_access = aml_reg_access;
 
-	debugfs_create_file("paddr", S_IFREG | S_IRUGO,
+	debugfs_create_file("paddr", S_IFREG | 0444,
 			    debugfs_root, &aml_dev, &paddr_file_ops);
-	debugfs_create_file("dump", S_IFREG | S_IRUGO,
+	debugfs_create_file("dump", S_IFREG | 0444,
 			    debugfs_root, &aml_dev, &dump_file_ops);
 	return 0;
 }

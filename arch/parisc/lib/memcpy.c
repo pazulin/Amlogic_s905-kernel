@@ -470,7 +470,7 @@ static unsigned long pa_memcpy(void *dstp, const void *srcp, unsigned long len)
 		return 0;
 
 	/* if a load or store fault occured we can get the faulty addr */
-	d = &__get_cpu_var(exception_data);
+	d = this_cpu_ptr(&exception_data);
 	fault_addr = d->fault_addr;
 
 	/* error in load or store? */
@@ -489,20 +489,23 @@ static unsigned long pa_memcpy(void *dstp, const void *srcp, unsigned long len)
 }
 
 #ifdef __KERNEL__
-unsigned long copy_to_user(void __user *dst, const void *src, unsigned long len)
+unsigned long __copy_to_user(void __user *dst, const void *src,
+			     unsigned long len)
 {
 	mtsp(get_kernel_space(), 1);
 	mtsp(get_user_space(), 2);
 	return pa_memcpy((void __force *)dst, src, len);
 }
+EXPORT_SYMBOL(__copy_to_user);
 
-EXPORT_SYMBOL(__copy_from_user);
-unsigned long __copy_from_user(void *dst, const void __user *src, unsigned long len)
+unsigned long __copy_from_user(void *dst, const void __user *src,
+			       unsigned long len)
 {
 	mtsp(get_user_space(), 1);
 	mtsp(get_kernel_space(), 2);
 	return pa_memcpy(dst, (void __force *)src, len);
 }
+EXPORT_SYMBOL(__copy_from_user);
 
 unsigned long copy_in_user(void __user *dst, const void __user *src, unsigned long len)
 {
@@ -520,8 +523,6 @@ void * memcpy(void * dst,const void *src, size_t count)
 	return dst;
 }
 
-EXPORT_SYMBOL(copy_to_user);
-EXPORT_SYMBOL(copy_from_user);
 EXPORT_SYMBOL(copy_in_user);
 EXPORT_SYMBOL(memcpy);
 

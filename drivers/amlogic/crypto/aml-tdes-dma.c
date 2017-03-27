@@ -1,17 +1,19 @@
 /*
- * Cryptographic API.
+ * drivers/amlogic/crypto/aml-tdes-dma.c
  *
- * Support for Amlogic TDES HW acceleration.
- *
- * Copyright (c) 2014 Amlogic Inc
+ * Copyright (C) 2017 Amlogic, Inc. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as published
- * by the Free Software Foundation.
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
- * Some ideas are borrowed from atmel-tdes.c driver.
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
  */
-
 
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -55,7 +57,7 @@
 
 #define DMA_THREAD_REG (DMA_T0 + TDES_THREAD_INDEX)
 #define DMA_STATUS_REG (DMA_STS0 + TDES_THREAD_INDEX)
-u8 map_in_tdes_dma = 0;
+u8 map_in_tdes_dma;
 
 struct aml_tdes_dev;
 
@@ -201,6 +203,7 @@ static size_t aml_tdes_sg_dma(struct aml_tdes_dev *dd, struct dma_dsc *dsc,
 	struct scatterlist *in_sg = dd->in_sg;
 	struct scatterlist *out_sg = dd->out_sg;
 	dma_addr_t addr_in, addr_out;
+
 	while (total && in_sg && out_sg && (in_sg->length == out_sg->length)
 			&& *nents < MAX_NUM_TABLES) {
 		count += min_t(unsigned int, total, in_sg->length);
@@ -273,6 +276,7 @@ static int aml_tdes_hw_init(struct aml_tdes_dev *dd)
 static void aml_tdes_finish_req(struct aml_tdes_dev *dd, int err)
 {
 	struct ablkcipher_request *req = dd->req;
+
 	dd->flags &= ~TDES_FLAGS_BUSY;
 	req->base.complete(&req->base, err);
 }
@@ -361,6 +365,7 @@ static int aml_tdes_crypt_dma_start(struct aml_tdes_dev *dd)
 static int aml_tdes_write_ctrl(struct aml_tdes_dev *dd)
 {
 	int err = 0;
+
 	err = aml_tdes_hw_init(dd);
 
 	if (err)
@@ -729,6 +734,7 @@ static struct crypto_alg tdes_algs[] = {
 static void aml_tdes_queue_task(unsigned long data)
 {
 	struct aml_tdes_dev *dd = (struct aml_tdes_dev *)data;
+
 	aml_tdes_handle_queue(dd, NULL);
 }
 
@@ -746,6 +752,7 @@ static void aml_tdes_done_task(unsigned long data)
 	if (dd->total && !err) {
 		if (dd->flags & TDES_FLAGS_FAST) {
 			uint32_t i = 0;
+
 			for (i = 0; i < dd->fast_nents; i++) {
 				if (!dd->in_sg || !dd->out_sg)
 					err = -EINVAL;
@@ -821,7 +828,6 @@ static int aml_tdes_probe(struct platform_device *pdev)
 
 	tdes_dd = kzalloc(sizeof(struct aml_tdes_dev), GFP_KERNEL);
 	if (tdes_dd == NULL) {
-		dev_err(dev, "unable to alloc data struct.\n");
 		err = -ENOMEM;
 		goto tdes_dd_err;
 	}

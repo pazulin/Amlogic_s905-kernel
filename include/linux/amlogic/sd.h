@@ -1,7 +1,7 @@
 /*
  * include/linux/amlogic/sd.h
  *
- * Copyright (C) 2015 Amlogic, Inc. All rights reserved.
+ * Copyright (C) 2016 Amlogic, Inc. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,14 +13,15 @@
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
-*/
+ */
 
-
-#ifndef __AML_SDHC_H__
-#define __AML_SDHC_H__
+#ifndef __AML_SD_H__
+#define __AML_SD_H__
 
 #include <linux/types.h>
 #include <linux/device.h>
+#include <linux/clk.h>
+#include <linux/clk-provider.h>
 #include <linux/mmc/host.h>
 /* #include <linux/earlysuspend.h> */
 
@@ -31,7 +32,56 @@
 #define AML_SDIO_MAGIC			 "amlsdio"
 #define AML_SD_EMMC_MAGIC			 "amlsd_emmc"
 #define SD_EMMC_MANUAL_CMD23
+#define MAX_TUNING_RETRY 4
+#define TUNING_NUM_PER_POINT 10
+#define CALI_PATTERN_OFFSET ((SZ_1M * (36 + 3)) / 512)
 /* #define AML_RESP_WR_EXT */
+#ifdef AML_CALIBRATION
+#define MAX_CALI_RETRY	3
+#define MAX_DELAY_CNT	16
+#define CALI_BLK_CNT	10
+#endif
+
+#define SD_EMMC_CLOCK 0x0
+#define SD_EMMC_DELAY 0x4
+#define SD_EMMC_ADJUST 0x8
+#define SD_EMMC_CALOUT 0x10
+#define SD_EMMC_START 0x40
+#define SD_EMMC_CFG 0x44
+#define SD_EMMC_STATUS 0x48
+#define SD_EMMC_IRQ_EN 0x4c
+#define SD_EMMC_CMD_RSP 0x5c
+#define SD_EMMC_CMD_RSP1 0x60
+#define SD_EMMC_CMD_RSP2 0x64
+#define SD_EMMC_CMD_RSP3 0x68
+
+#define   CLK_DIV_SHIFT 0
+#define   CLK_DIV_WIDTH 6
+#define   CLK_DIV_MASK 0x3f
+#define   CLK_DIV_MAX 63
+#define   CLK_SRC_SHIFT 6
+#define   CLK_SRC_WIDTH 2
+#define   CLK_SRC_MASK 0x3
+#define   CLK_SRC_XTAL_RATE 24000000
+#define   CLK_SRC_PLL_RATE 1000000000
+
+#define   CFG_BLK_LEN_SHIFT 4
+#define   CFG_BLK_LEN_MASK 0xf
+
+#define CMD_CFG_LENGTH_SHIFT 0
+#define CMD_CFG_LENGTH_MASK 0x1ff
+#define CMD_CFG_BLOCK_MODE BIT(9)
+#define CMD_CFG_DATA_IO BIT(18)
+#define CMD_CFG_DATA_WR BIT(19)
+#define CMD_CFG_DATA_NUM BIT(23)
+
+#define CMD_DATA_MASK (~0x3)
+
+struct aml_tuning_data {
+	const u8 *blk_pattern;
+	unsigned int blksz;
+};
+
 enum aml_mmc_waitfor {
 	XFER_INIT,			  /* 0 */
 	XFER_START,				/* 1 */
@@ -81,6 +131,20 @@ enum aml_host_tuning_mode {
 	RX_PHASE_DELAY_TUNING_MODE,
 };
 
+struct cali_data {
+	u8 ln_delay[8];
+	u32 base_index[10];
+	u32 base_index_max;
+	u32 base_index_min;
+};
+
+struct cali_ctrl {
+	u8 line_x;
+	u8 cal_time;
+	u8 dly_tmp;
+	u8 max_index;
+};
+
 struct amlsd_host;
 struct amlsd_platform {
 	struct amlsd_host *host;
@@ -95,7 +159,6 @@ struct amlsd_platform {
 #define	 PORT_SDHC_B	 4
 #define	 PORT_SDHC_C	 5
 
-	unsigned int width;
 	unsigned int caps;
 	unsigned int caps2;
 	unsigned int card_capacity;
@@ -103,23 +166,17 @@ struct amlsd_platform {
 	unsigned int tx_delay;
 	unsigned int f_min;
 	unsigned int f_max;
-	unsigned int f_max_w;
 	unsigned int clkc;
 	unsigned int clk2;
 	unsigned int clkc_w;
 	unsigned int ctrl;
 	unsigned int clock;
-	/* store tuning result */
-	unsigned int tune_phase;
 	/* signalling voltage (1.8V or 3.3V) */
 	unsigned char signal_voltage;
 
 	unsigned int low_burst;
-	unsigned int irq_in;
-	unsigned int irq_in_edge;
-	unsigned int irq_out;
-	unsigned int irq_out_edge;
 	struct mutex in_out_lock;
+	unsigned int irq_cd;
 	unsigned int gpio_cd;
 	unsigned int gpio_cd_level;
 	unsigned int gpio_power;
@@ -141,7 +198,8 @@ struct amlsd_platform {
 	bool rmpb_cmd_flag;
 	bool rpmb_valid_command;
 	/* we used this flag to filter
-	some unnecessary cmd before initialized flow */
+	 * some unnecessary cmd before initialized flow
+	 */
 	/* has been initialized for the first time */
 	bool is_fir_init;
 	struct delayed_work	retuning;
@@ -150,9 +208,11 @@ struct amlsd_platform {
 	unsigned char calout[20][20];
 #endif
 	/* 0:unknown, 1:mmc card(include eMMC), 2:sd card(include tSD),
-	3:sdio device(ie:sdio-wifi), 4:SD combo (IO+mem) card,
-	5:NON sdio device(means sd/mmc card), other:reserved */
+	 * 3:sdio device(ie:sdio-wifi), 4:SD combo (IO+mem) card,
+	 * 5:NON sdio device(means sd/mmc card), other:reserved
+	 */
 	unsigned int card_type;
+	struct cali_ctrl c_ctrl;
 	/* unknown */
 #define CARD_TYPE_UNKNOWN		0
 	/* MMC card */
@@ -185,8 +245,8 @@ struct amlsd_platform {
 	unsigned int nr_parts;
 
 	struct resource *resource;
-	void (*xfer_pre)(struct amlsd_platform *pdata);
-	void (*xfer_post)(struct amlsd_platform *pdata);
+	void (*xfer_pre)(struct mmc_host *mmc);
+	void (*xfer_post)(struct mmc_host *mmc);
 
 	int (*port_init)(struct amlsd_platform *pdata);
 	int (*cd)(struct amlsd_platform *pdata);
@@ -212,6 +272,7 @@ struct aml_emmc_rxclk {
 	int rxclk_point;
 };
 
+#define MUX_CLK_NUM_PARENTS 2
 struct amlsd_host {
 	/* back-link to device */
 	struct device *dev;
@@ -220,9 +281,21 @@ struct amlsd_host {
 	struct amlsd_platform *pdata;
 	struct mmc_host		*mmc;
 	struct mmc_request	*request;
+
+	struct mmc_command	*cmd;
+	u32 ocr_mask;
+	struct clk *core_clk;
+	struct clk_mux mux;
+	struct clk *mux_clk;
+	struct clk *mux_parent[MUX_CLK_NUM_PARENTS];
+	unsigned long mux_parent_rate[MUX_CLK_NUM_PARENTS];
+	struct clk_divider cfg_div;
+	struct clk *cfg_div_clk;
+
 	struct resource		*mem;
 	struct sd_emmc_regs *sd_emmc_regs;
 	void __iomem		*base;
+	void __iomem		*pinmux_base;
 	int			dma;
 	char *bn_buf;
 	dma_addr_t		bn_dma_buf;
@@ -241,25 +314,14 @@ struct amlsd_host {
 	unsigned int f_max;
 	unsigned int f_max_w;
 	unsigned int f_min;
-	int			sdio_irqen;
+	int	sdio_irqen;
 	unsigned int error_bak;
-	/* struct tasklet_struct cmd_tlet; */
-	/* struct tasklet_struct data_tlet; */
-	/* struct tasklet_struct busy_tlet; */
-	/* struct tasklet_struct to_tlet; */
-	/* struct timer_list timeout_tlist; */
 	struct delayed_work	timeout;
-	/* struct early_suspend amlsd_early_suspend; */
-
-	struct class			debug;
+	struct class debug;
 
 	unsigned int send;
 	unsigned int ctrl;
 	unsigned int clkc;
-	/* unsigned int clkc_w; */
-	/* unsigned int pdma; */
-	/* unsigned int pdma_s; */
-	/* unsigned int pdma_low; */
 	unsigned int misc;
 	unsigned int ictl;
 	unsigned int ista;
@@ -288,7 +350,6 @@ struct amlsd_host {
 	int	 locked;
 	bool	is_gated;
 	unsigned char sd_sdio_switch_volat_done;
-	/* unsigned int		ccnt, dcnt; */
 
 	int	 status; /* host status: xx_error/ok */
 	int init_flag;
@@ -347,124 +408,220 @@ struct amlsd_host {
 
 struct cmd_send {
 	u32 cmd_command:8; /*[7:0] Command Index*/
-	u32 cmd_response_bits:8; /*[15:8]
-	* 00 means no response
-	* others: Response bit number(cmd bits+response bits+crc bits-1)*/
-	u32 response_do_not_have_crc7:1; /*[16]
-	* 0:Response need check CRC7, 1: dont need check*/
-	u32 response_have_data:1; /*[17]
-	* 0:Receiving Response without data, 1:Receiving response with data*/
-	u32 response_crc7_from_8:1; /*[18]
-	* 0:Normal CRC7, Calculating CRC7 will
-	be from bit0 of all response bits,
-	* 1:Calculating CRC7 will be from
-	bit8 of all response bits*/
-	u32 check_busy_on_dat0:1; /*[19]
-	* used for R1b response 0: dont check busy on dat0, 1:need check*/
-	u32 cmd_send_data:1; /*[20]
-	* 0:This command is not for transmitting data,
-	* 1:This command is for transmitting data*/
-	u32 use_int_window:1; /*[21]
-	* 0:SDIO DAT1 interrupt window disabled, 1:Enabled*/
+	u32 cmd_response_bits:8;
+	/*[15:8]
+	 * 00 means no response
+	 * others: Response bit number
+	 * (cmd bits+response bits+crc bits-1)
+	 */
+	u32 response_do_not_have_crc7:1;
+	/*[16]
+	 * 0:Response need check CRC7,
+	 * 1: dont need check
+	 */
+	u32 response_have_data:1;
+	/*[17]
+	 * 0:Receiving Response without data,
+	 * 1:Receiving response with data
+	 */
+	u32 response_crc7_from_8:1;
+	/*[18]
+	 * 0:Normal CRC7, Calculating CRC7 will
+	 * be from bit0 of all response bits,
+	 * 1:Calculating CRC7 will be from
+	 * bit8 of all response bits
+	 */
+	u32 check_busy_on_dat0:1;
+	/*[19]
+	 * used for R1b response
+	 * 0: dont check busy on dat0,
+	 * 1:need check
+	 */
+	u32 cmd_send_data:1;
+	/*[20]
+	 * 0:This command is not for transmitting data,
+	 * 1:This command is for transmitting data
+	 */
+	u32 use_int_window:1;
+	/*[21]
+	 * 0:SDIO DAT1 interrupt window disabled, 1:Enabled
+	 */
 	u32 reserved:2;/*[23:22]*/
-	u32 repeat_package_times:8; /*[31:24] Total packages to be sent*/
+	u32 repeat_package_times:8;
+	/*[31:24] Total packages to be sent*/
 };
 
 struct sdio_config {
-	u32 cmd_clk_divide:10; /*[9:0] Clock rate setting,
-	* Frequency of SD equals to Fsystem/((cmd_clk_divide+1)*2)*/
-	u32 cmd_disable_crc:1; /*[10]
-	* 0:CRC employed, 1:dont send CRC during command being sent*/
-	u32 cmd_out_at_posedge:1; /*[11]
-	* Command out at negedge normally, 1:at posedge*/
-	u32 cmd_argument_bits:6; /*[17:12] before CRC added, normally 39*/
-	u32 do_not_delay_data:1; /*[18]
-	*0:Delay one clock normally, 1:dont delay*/
-	u32 data_latch_at_negedge:1; /*[19]
-	* 0:Data caught at posedge normally, 1:negedge*/
-	u32 bus_width:1; /*[20] 0:1bit, 1:4bit*/
-	u32 m_endian:2; /*[22:21]
-	* Change ENDIAN(bytes order) from DMA data (e.g. dma_din[31:0]).
-	* (00: ENDIAN no change, data output equals to original dma_din[31:0];
-	* 01: data output equals to {dma_din[23:16],dma_din[31:24],
-	* dma_din[7:0],dma_din[15:8]};10: data output equals to
-	* {dma_din[15:0],dma_din[31:16]};11: data output equals to
-	* {dma_din[7:0],dma_din[15:8],dma_din[23:16],dma_din[31:24]})*/
-	u32 sdio_write_nwr:6; /*[28:23]
-	* Number of clock cycles waiting before writing data*/
-	u32 sdio_write_crc_ok_status:3; /*[31:29] if CRC status
-	* equals this register, sdio write can be consider as correct*/
+	u32 cmd_clk_divide:10;
+	/*[9:0] Clock rate setting,
+	 * Frequency of SD equals to Fsystem/((cmd_clk_divide+1)*2)
+	 */
+	u32 cmd_disable_crc:1;
+	/*[10]
+	 * 0:CRC employed, 1:dont send CRC during command being sent
+	 */
+	u32 cmd_out_at_posedge:1;
+	/*[11]
+	 * Command out at negedge normally, 1:at posedge
+	 */
+	u32 cmd_argument_bits:6;
+	/*[17:12] before CRC added, normally 39*/
+	u32 do_not_delay_data:1;
+	/*[18]
+	 *0:Delay one clock normally, 1:dont delay
+	 */
+	u32 data_latch_at_negedge:1;
+	/*[19]
+	 * 0:Data caught at posedge normally, 1:negedge
+	 */
+	u32 bus_width:1;
+	/*[20] 0:1bit, 1:4bit*/
+	u32 m_endian:2;
+	/*[22:21]
+	 * Change ENDIAN(bytes order) from DMA data (e.g. dma_din[31:0]).
+	 * (00: ENDIAN no change, data output equals to original dma_din[31:0];
+	 * 01: data output equals to {dma_din[23:16],dma_din[31:24],
+	 * dma_din[7:0],dma_din[15:8]};10: data output equals to
+	 * {dma_din[15:0],dma_din[31:16]};11: data output equals to
+	 * {dma_din[7:0],dma_din[15:8],dma_din[23:16],dma_din[31:24]})
+	 */
+	u32 sdio_write_nwr:6;
+	/*[28:23]
+	 * Number of clock cycles waiting before writing data
+	 */
+	u32 sdio_write_crc_ok_status:3;
+	/*[31:29] if CRC status
+	 * equals this register, sdio write can be consider as correct
+	 */
 };
 
 struct sdio_status_irq {
-	u32 sdio_status:4; /*[3:0] Read Only
-	* SDIO State Machine Current State, just for debug*/
-	u32 sdio_cmd_busy:1; /*[4] Read Only
-	* SDIO Command Busy, 1:Busy State*/
-	u32 sdio_response_crc7_ok:1; /*[5] Read Only
-	* SDIO Response CRC7 status, 1:OK*/
-	u32 sdio_data_read_crc16_ok:1; /*[6] Read Only
-	* SDIO Data Read CRC16 status, 1:OK*/
-	u32 sdio_data_write_crc16_ok:1; /*[7] Read Only
-	* SDIO Data Write CRC16 status, 1:OK*/
-	u32 sdio_if_int:1; /*[8] write 1 clear this int bit
-	* SDIO DAT1 Interrupt Status*/
-	u32 sdio_cmd_int:1; /*[9] write 1 clear this int bit
-	* Command Done Interrupt Status*/
-	u32 sdio_soft_int:1; /*[10] write 1 clear this int bit
-	* Soft Interrupt Status*/
-	u32 sdio_set_soft_int:1; /*[11] write 1 to this bit
-	* will set Soft Interrupt, read out is m_req_sdio, just for debug*/
-	u32 sdio_status_info:4; /*[15:12]
-	* used for change information between ARC and Amrisc */
-	u32 sdio_timing_out_int:1; /*[16] write 1 clear this int bit
-	* Timeout Counter Interrupt Status*/
-	u32 amrisc_timing_out_int_en:1; /*[17]
-	* Timeout Counter Interrupt Enable for AMRISC*/
-	u32 arc_timing_out_int_en:1; /*[18]
-	* Timeout Counter Interrupt Enable for ARC/ARM*/
-	u32 sdio_timing_out_count:13; /*[31:19]
-	* Timeout Counter Preload Setting and Present Status*/
+	u32 sdio_status:4;
+	/*[3:0] Read Only
+	 * SDIO State Machine Current State, just for debug
+	 */
+	u32 sdio_cmd_busy:1;
+	/*[4] Read Only
+	 * SDIO Command Busy, 1:Busy State
+	 */
+	u32 sdio_response_crc7_ok:1;
+	/*[5] Read Only
+	 * SDIO Response CRC7 status, 1:OK
+	 */
+	u32 sdio_data_read_crc16_ok:1;
+	/*[6] Read Only
+	 * SDIO Data Read CRC16 status, 1:OK
+	 */
+	u32 sdio_data_write_crc16_ok:1;
+	/*[7] Read Only
+	 * SDIO Data Write CRC16 status, 1:OK
+	 */
+	u32 sdio_if_int:1;
+	/*[8] write 1 clear this int bit
+	 * SDIO DAT1 Interrupt Status
+	 */
+	u32 sdio_cmd_int:1;
+	/*[9] write 1 clear this int bit
+	 * Command Done Interrupt Status
+	 */
+	u32 sdio_soft_int:1;
+	/*[10] write 1 clear this int bit
+	 * Soft Interrupt Status
+	 */
+	u32 sdio_set_soft_int:1;
+	/*[11] write 1 to this bit
+	 * will set Soft Interrupt, read out is m_req_sdio, just for debug
+	 */
+	u32 sdio_status_info:4;
+	/*[15:12]
+	 * used for change information between ARC and Amrisc
+	 */
+	u32 sdio_timing_out_int:1;
+	/*[16] write 1 clear this int bit
+	 * Timeout Counter Interrupt Status
+	 */
+	u32 amrisc_timing_out_int_en:1;
+	/*[17]
+	 * Timeout Counter Interrupt Enable for AMRISC
+	 */
+	u32 arc_timing_out_int_en:1;
+	/*[18]
+	 * Timeout Counter Interrupt Enable for ARC/ARM
+	 */
+	u32 sdio_timing_out_count:13;
+	/*[31:19]
+	 * Timeout Counter Preload Setting and Present Status
+	 */
 };
 
 struct sdio_irq_config {
-	u32 amrisc_if_int_en:1; /*[0]
-	* 1:SDIO DAT1 Interrupt Enable for AMRISC*/
-	u32 amrisc_cmd_int_en:1; /*[1]
-	* 1:Command Done Interrupt Enable for AMRISC*/
-	u32 amrisc_soft_int_en:1; /*[2]
-	* 1:Soft Interrupt Enable for AMRISC*/
-	u32 arc_if_int_en:1; /*[3]
-	* 1:SDIO DAT1 Interrupt Enable for ARM/ARC*/
-	u32 arc_cmd_int_en:1; /*[4]
-	* 1:Command Done Interrupt Enable for ARM/ARC*/
-	u32 arc_soft_int_en:1; /*[5]
-	* 1:Soft Interrupt Enable for ARM/ARC*/
-	u32 sdio_if_int_config:2; /*[7:6]
-	* 00:sdio_if_interrupt window will reset after data Tx/Rx or command
-	* done, others: only after command done*/
-	u32 sdio_force_data:6; /*[13:8]
-	* Write operation: Data forced by software
-	* Read operation: {CLK,CMD,DAT[3:0]}*/
-	u32 sdio_force_enable:1; /*[14] Software Force Enable
-	* This is the software force mode, Software can directly
-	* write to sdio 6 ports (cmd, clk, dat0..3) if force_output_en
-	* is enabled. and hardware outputs will be bypassed.*/
-	u32 soft_reset:1; /*[15]
-	* Write 1 Soft Reset, Don't need to clear it*/
-	u32 sdio_force_output_en:6; /*[21:16]
-	* Force Data Output Enable,{CLK,CMD,DAT[3:0]}*/
-	u32 disable_mem_halt:2; /*[23:22] write and read
-	* 23:Disable write memory halt, 22:Disable read memory halt*/
-	u32 sdio_force_data_read:6; /*[29:24] Read Only
-	* Data read out which have been forced by software*/
-	u32 force_halt:1; /*[30] 1:Force halt SDIO by software
-	* Halt in this sdio host controller means stop to transmit or
-	* receive data from sd card. and then sd card clock will be shutdown.
-	* Software can force to halt anytime, and hardware will automatically
-	* halt the sdio when reading fifo is full or writing fifo is empty*/
-	u32 halt_hole:1; /*[31]
-	* 0: SDIO halt for 8bit mode, 1:SDIO halt for 16bit mode*/
+	u32 amrisc_if_int_en:1;
+	/*[0]
+	 * 1:SDIO DAT1 Interrupt Enable for AMRISC
+	 */
+	u32 amrisc_cmd_int_en:1;
+	/*[1]
+	 * 1:Command Done Interrupt Enable for AMRISC
+	 */
+	u32 amrisc_soft_int_en:1;
+	/*[2]
+	 * 1:Soft Interrupt Enable for AMRISC
+	 */
+	u32 arc_if_int_en:1;
+	/*[3]
+	 * 1:SDIO DAT1 Interrupt Enable for ARM/ARC
+	 */
+	u32 arc_cmd_int_en:1;
+	/*[4]
+	 * 1:Command Done Interrupt Enable for ARM/ARC
+	 */
+	u32 arc_soft_int_en:1;
+	/*[5]
+	 * 1:Soft Interrupt Enable for ARM/ARC
+	 */
+	u32 sdio_if_int_config:2;
+	/*[7:6]
+	 * 00:sdio_if_interrupt window will reset after data Tx/Rx or command
+	 * done, others: only after command done
+	 */
+	u32 sdio_force_data:6;
+	/*[13:8]
+	 * Write operation: Data forced by software
+	 * Read operation: {CLK,CMD,DAT[3:0]}
+	 */
+	u32 sdio_force_enable:1;
+	/*[14] Software Force Enable
+	 * This is the software force mode, Software can directly
+	 * write to sdio 6 ports (cmd, clk, dat0..3) if force_output_en
+	 * is enabled. and hardware outputs will be bypassed.
+	 */
+	u32 soft_reset:1;
+	/*[15]
+	 * Write 1 Soft Reset, Don't need to clear it
+	 */
+	u32 sdio_force_output_en:6;
+	/*[21:16]
+	 * Force Data Output Enable,{CLK,CMD,DAT[3:0]}
+	 */
+	u32 disable_mem_halt:2;
+	/*[23:22] write and read
+	 * 23:Disable write memory halt, 22:Disable read memory halt
+	 */
+	u32 sdio_force_data_read:6;
+	/*[29:24] Read Only
+	 * Data read out which have been forced by software
+	 */
+	u32 force_halt:1;
+	/*[30] 1:Force halt SDIO by software
+	 * Halt in this sdio host controller means stop to transmit or
+	 * receive data from sd card. and then sd card clock will be shutdown.
+	 * Software can force to halt anytime, and hardware will automatically
+	 * halt the sdio when reading fifo is full or writing fifo is empty
+	 */
+	u32 halt_hole:1;
+	/*[31]
+	 * 0: SDIO halt for 8bit mode, 1:SDIO halt for 16bit mode
+	 */
 };
 
 struct sdio_mult_config {
@@ -474,28 +631,38 @@ struct sdio_mult_config {
 	u32 stream_enable:1; /*[4] 1:Stream Enable*/
 	u32 stream_8_bits_mode:1; /*[5] Stream 8bits mode*/
 	u32 data_catch_level:2; /*[7:6] Level of data catch*/
-	u32 write_read_out_index:1; /*[8] Write response index Enable
-	* [31:16], [11:10], [7:0] is set only when
-	bit8 of this register is not set.
-	* And other bits are set only when bit8
-	of this register is also set.*/
+	u32 write_read_out_index:1;
+	/*[8] Write response index Enable
+	 * [31:16], [11:10], [7:0] is set only when
+	 * bit8 of this register is not set.
+	 * And other bits are set only when bit8
+	 * of this register is also set.
+	 */
 	u32 data_catch_readout_en:1; /*[9] Data catch readout Enable*/
 	u32 sdio_0_data_on_1:1; /*[10] 1:dat0 is on dat1*/
 	u32 sdio_1_data_swap01:1; /*[11] 1:dat1 and dat0 swapped*/
 	u32 response_read_index:4; /*[15:12] Index of internal read response*/
-	u32 data_catch_finish_point:12; /*[27:16] If internal data
-	* catch counter equals this register,
-		it indicates data catching is finished*/
+	u32 data_catch_finish_point:12;
+	/*[27:16] If internal data
+	 * catch counter equals this register,
+	 *	it indicates data catching is finished
+	 */
 	u32 reserved:4; /*[31:28]*/
 };
 
 struct sdio_extension {
-	u32 cmd_argument_ext:16; /*[15:0] for future use*/
-	u32 data_rw_number:14; /*[29:16]
-	* Data Read/Write Number in one packet, include CRC16 if has CRC16*/
-	u32 data_rw_do_not_have_crc16:1; /*[30]
-	* 0:data Read/Write has crc16, 1:without crc16*/
-	u32 crc_status_4line:1; /*[31] 1:4Lines check CRC Status*/
+	u32 cmd_argument_ext:16;
+	/*[15:0] for future use*/
+	u32 data_rw_number:14;
+	/*[29:16]
+	 * Data Read/Write Number in one packet, include CRC16 if has CRC16
+	 */
+	u32 data_rw_do_not_have_crc16:1;
+	/*[30]
+	 * 0:data Read/Write has crc16, 1:without crc16
+	 */
+	u32 crc_status_4line:1;
+	/*[31] 1:4Lines check CRC Status*/
 };
 
 struct sdio_reg {
@@ -626,10 +793,12 @@ struct sdhc_ctrl {
 	/*[26:24] Rx Endian Control*/
 	u32 rx_endian:3;
 	/*[27]0:Normal mode, 1: support data block gap
-	(need turn off clock gating)*/
+	 *(need turn off clock gating)
+	 */
 	u32 sdio_irq_mode:1;
 	/*[28] Dat0 Interrupt selection,0:busy check after response,
-	1:any rising edge of dat0*/
+	 *1:any rising edge of dat0
+	 */
 	u32 dat0_irq_sel:1;
 	/*[31:29] Tx Endian Control*/
 	u32 tx_endian:3;
@@ -653,11 +822,11 @@ struct sdhc_stat {
 };
 
 /*
-* to avoid glitch issue,
-* 1. clk_switch_on better be set after cfg_en be set to 1'b1
-* 2. clk_switch_off shall be set before cfg_en be set to 1'b0
-* 3. rx_clk/sd_clk phase diff please see SD_REGE_CLK2.
-*/
+ * to avoid glitch issue,
+ * 1. clk_switch_on better be set after cfg_en be set to 1'b1
+ * 2. clk_switch_off shall be set before cfg_en be set to 1'b0
+ * 3. rx_clk/sd_clk phase diff please see SD_REGE_CLK2.
+ */
 struct sdhc_clkc {
 	/*[11:0] clk_div for TX_CLK 0: don't set it,1:div2, 2:div3, 3:div4 ...*/
 	u32 clk_div:12;
@@ -668,14 +837,16 @@ struct sdhc_clkc {
 	/*[14] SD_CLK 0:switch off, 1:switch on*/
 	u32 sd_clk_on:1;
 	/*[15] Clock Module Enable, Should set before bit[14:12] switch on,
-		and after bit[14:12] switch off*/
+	 *	and after bit[14:12] switch off
+	 */
 	u32 mod_clk_on:1;
 	/*[17:16] 0:osc, 1:fclk_div4, 2:fclk_div3, 3:fclk_div5*/
 	u32 clk_src_sel:2;
 	/*[23:18] Reserved*/
 	u32 reserved:6;
 	/*[24] Clock JIC for clock gating control
-			1: will turn off clock gating*/
+	 *1: will turn off clock gating
+	 */
 	u32 clk_jic:1;
 	/*[26:25] 00:Memory Power Up, 11:Memory Power Off*/
 	u32 mem_pwr_off:2;
@@ -684,12 +855,12 @@ struct sdhc_clkc {
 };
 
 /*
-* Note1: dma_urgent is just set when bandwidth is very tight
-* Note2: pio_rdresp need to be combined with REG0_ARGU;
-* For R0, when 0, reading REG0 will get the normal 32bit response;
-* For R2, when 1, reading REG0 will get CID[31:0], when 2, get CID[63:32],
-* and so on; 6 or 7, will get original command argument.
-*/
+ * Note1: dma_urgent is just set when bandwidth is very tight
+ * Note2: pio_rdresp need to be combined with REG0_ARGU;
+ * For R0, when 0, reading REG0 will get the normal 32bit response;
+ * For R2, when 1, reading REG0 will get CID[31:0], when 2, get CID[63:32],
+ * and so on; 6 or 7, will get original command argument.
+ */
 struct sdhc_pdma {
 	/*[0] 0:PIO mode, 1:DMA mode*/
 	u32 dma_mode:1;
@@ -727,7 +898,8 @@ struct sdhc_misc {
 	/*[28] 0:auto stop mode, 1:manual stop mode*/
 	u32 manual_stop:1;
 	/*[31:29] txstart_thres(if (txfifo_cnt/4)>
-		(threshold*2), Tx will start)*/
+	 *	(threshold*2), Tx will start)
+	 */
 	u32 txstart_thres:3;
 };
 
@@ -765,7 +937,8 @@ struct sdhc_ictl {
 	/*[15] reserved*/
 	u32 reserved:1;
 	/*[17:16] sdio dat1 interrupt mask windows
-		clear delay control,0:2cycle 1:1cycles*/
+	 *	clear delay control,0:2cycle 1:1cycles
+	 */
 	u32 dat1_irq_delay:2;
 	/*[31:18] reserved*/
 	u32 reserved1:14;
@@ -808,8 +981,9 @@ struct sdhc_ista {
 };
 
 /*
-* Note1: Soft reset for DPHY TX/RX needs programmer to set it
-* and then clear it manually.*/
+ * Note1: Soft reset for DPHY TX/RX needs programmer to set it
+ * and then clear it manually.
+ */
 struct sdhc_srst {
 	/*[0] Soft reset for MAIN CTRL(self clear)*/
 	u32 main_ctrl:1;
@@ -850,8 +1024,9 @@ struct  sdhc_enhc {
 		struct  {
 			/*[7:0] Data Rx Timeout Setting*/
 			u32 rx_timeout:8;
-			 /*[15:8] SDIO IRQ Period Setting
-			 (IRQ checking window length)*/
+			/*[15:8] SDIO IRQ Period Setting
+			 *(IRQ checking window length)
+			 */
 			u32 sdio_irq_period:8;
 			/*[16] No Read DMA Response Check*/
 			u32 dma_rd_resp:1;
@@ -867,10 +1042,12 @@ struct  sdhc_enhc {
 
 struct sdhc_clk2 {
 	/*[11:0] rx_clk phase diff(default 0:no diff,
-	1:one input clock cycle ...)*/
+	 *1:one input clock cycle ...)
+	 */
 	u32 rx_clk_phase:12;
 	/*[23:12] sd_clk phase diff(default 0:half(180 degree),
-	1:half+one input clock cycle, 2:half+2 input clock cycles, ...)*/
+	 *1:half+one input clock cycle, 2:half+2 input clock cycles, ...)
+	 */
 	u32 sd_clk_phase:12;
 	/*[31:24] reserved*/
 	u32 reserved:8;
@@ -920,28 +1097,35 @@ struct sd_emmc_regs {
 };
 struct sd_emmc_clock {
 	/*[5:0]	 Clock divider.
-	Frequency = clock source/cfg_div, Maximum divider 63. */
+	 *Frequency = clock source/cfg_div, Maximum divider 63.
+	 */
 	u32 div:6;
 	/*[7:6]	 Clock source, 0: Crystal 24MHz, 1: Fix PLL, 850MHz*/
 	u32 src:2;
 	/*[9:8]	 Core clock phase. 0: 0 phase,
-	1: 90 phase, 2: 180 phase, 3: 270 phase.*/
+	 *1: 90 phase, 2: 180 phase, 3: 270 phase.
+	 */
 	u32 core_phase:2;
 	/*[11:10]   TX clock phase. 0: 0 phase,
-	1: 90 phase, 2: 180 phase, 3: 270 phase.*/
+	 *1: 90 phase, 2: 180 phase, 3: 270 phase.
+	 */
 	u32 tx_phase:2;
 	/*[13:12]   RX clock phase. 0: 0 phase,
-	1: 90 phase, 2: 180 phase, 3: 270 phase.*/
+	 *1: 90 phase, 2: 180 phase, 3: 270 phase.
+	 */
 	u32 rx_phase:2;
 	u32 reserved14:2;
 	/*[19:16]   TX clock delay line. 0: no delay,
-	n: delay n*200ps. Maximum delay 3ns.*/
+	 *n: delay n*200ps. Maximum delay 3ns.
+	 */
 	u32 tx_delay:4;
 	/*[23:20]   RX clock delay line. 0: no delay,
-	n: delay n*200ps. Maximum delay 3ns.*/
+	 *n: delay n*200ps. Maximum delay 3ns.
+	 */
 	u32 rx_delay:4;
 	/*[24]	  1: Keep clock always on.
-	0: Clock on/off controlled by activities. */
+	 *0: Clock on/off controlled by activities.
+	 */
 	u32 always_on:1;
 	/*[25]	1: enable IRQ sdio when in sleep mode. */
 	u32 irq_sdio_sleep:1;
@@ -969,73 +1153,90 @@ struct sd_emmc_adjust {
 	/*[12]		Enable calibration. */
 	u32 cali_enable:1;
 	/*[13]	   Adjust interface timing
-	by resampling the input signals. */
+	 *by resampling the input signals.
+	 */
 	u32 adj_enable:1;
 	/*[14]	   1: test the rising edge.
-	0: test the falling edge. */
+	 *0: test the falling edge.
+	 */
 	u32 cali_rise:1;
 	/*[15]	   1: Sampling the DAT based on DS in HS400 mode.
-	0: Sampling the DAT based on RXCLK. */
+	 *0: Sampling the DAT based on RXCLK.
+	 */
 	u32 ds_enable:1;
-	 /*[21:16]	   Resample the input signals
-	when clock index==adj_delay. */
+	/*[21:16]	   Resample the input signals
+	 *when clock index==adj_delay.
+	 */
 	u32 adj_delay:6;
 	/*[22]	   1: Use cali_dut first falling edge to adjust
-		the timing, set cali_enable to 1 to use this function.
-	0: no use adj auto. */
+	 *	the timing, set cali_enable to 1 to use this function.
+	 *0: no use adj auto.
+	 */
 	u32 adj_auto:1;
 	u32 reserved22:9;
 };
 struct sd_emmc_calout {
 	/*[5:0]	   Calibration reading.
-	The event happens at this index. */
+	 *The event happens at this index.
+	 */
 	u32 cali_idx:6;
 	u32 reserved6:1;
 	/*[7]		 The reading is valid. */
 	u32 cali_vld:1;
-	 /*[15:8]	  Copied from BASE+0x8
-	 [15:8] include cali_sel, cali_enable, adj_enable, cali_rise. */
+	/*[15:8]	  Copied from BASE+0x8
+	 *[15:8] include cali_sel, cali_enable, adj_enable, cali_rise.
+	 */
 	u32 cali_setup:8;
 	u32 reserved16:16;
 };
 struct sd_emmc_start {
 	/*[0]   1: Read descriptor from internal SRAM,
-	limited to 32 descriptors. */
+	 *limited to 32 descriptors.
+	 */
 	u32 init:1;
 	/*[1]   1: Start command chain execution process. 0: Stop */
 	u32 busy:1;
 	/*[31:2] Descriptor address, the last 2 bits are 0,
-	4 bytes aligned. */
+	 *4 bytes aligned.
+	 */
 	u32 addr:30;
 };
 struct sd_emmc_config {
 	/*[1:0]	 0: 1 bit, 1: 4 bits,
-	2: 8 bits, 3: 2 bits (not supported)*/
+	 *2: 8 bits, 3: 2 bits (not supported)
+	 */
 	u32 bus_width:2;
 	/*[2]	   1: DDR mode, 0: SDR mode */
 	u32 ddr:1;
 	/*[3]	   1: DDR access urgent, 0: DDR access normal. */
 	u32 dc_ugt:1;
 	/*[7:4]	 Block length 2^cfg_bl_len,
-	because internal buffer size is limited to 512 bytes,
-	the cfg_bl_len <=9. */
+	 *because internal buffer size is limited to 512 bytes,
+	 *the cfg_bl_len <=9.
+	 */
 	u32 bl_len:4;
 	/*[11:8]	Wait response till 2^cfg_resp_timeout core clock cycles.
-	Maximum 32768 core cycles. */
+	 *Maximum 32768 core cycles.
+	 */
 	u32 resp_timeout:4;
 	/*[15:12]   Wait response-command,
-	command-command gap before next command,
-	2^cfg_rc_cc core clock cycles. */
+	 *command-command gap before next command,
+	 *2^cfg_rc_cc core clock cycles.
+	 */
 	u32 rc_cc:4;
 	/*[16]	  DDR mode only. The command and TXD start from rising edge.
-	Set 1 to start from falling edge. */
+	 *Set 1 to start from falling edge.
+	 */
 	u32 out_fall:1;
 	/*[17]	  1: Enable SDIO data block gap interrupt period.
-	0: Disabled.*/
+	 *0: Disabled.
+	 */
 	u32 blk_gap_ip:1;
 	/*[18]	  Spare,  ??? need check*/
 	u32 spare:1;
-	/*[19]	  Use this descriptor even if its owner bit is ???0???¡ì?¨¨.*/
+	/*[19]	  Use this descriptor
+	 *even if its owner bit is ???0???Ð±ÑŒ?Ð¸Ð¸.
+	 */
 	u32 ignore_owner:1;
 	/*[20]	  Check data strobe in HS400.*/
 	u32 chk_ds:1;
@@ -1044,40 +1245,48 @@ struct sd_emmc_config {
 	/*[22]	  1: stop clock. 0: normal clock.*/
 	u32 stop_clk:1;
 	/*[23]	  1: when BUS is idle and no descriptor is available,
-	turn off clock, to save power.*/
+	 *turn off clock, to save power.
+	 */
 	u32 auto_clk:1;
 	/*[24]	TXD add error test*/
 	u32 txd_add_err:1;
 	/*[25]	When TXD CRC error, host sends the block again.*/
 	u32 txd_retry:1;
 	/*[26]	1: Use DS pin as SDIO IRQ input,
-	0: Use DAT1 pin as SDIO IRQ input..*/
+	 *0: Use DAT1 pin as SDIO IRQ input..
+	 */
 	u32 irq_ds:1;
 	u32 err_abort:1;
 	u32 revd:4;			/*[31:27]   reved*/
 };
 struct sd_emmc_status {
 	/*[7:0]	 RX data CRC error per wire, for multiple block read,
-	the CRC errors are ORed together.*/
+	 *the CRC errors are ORed together.
+	 */
 	u32 rxd_err:8;
 	/*[8]	   TX data CRC error, for multiple block write,
-	any one of blocks CRC error. */
+	 *any one of blocks CRC error.
+	 */
 	u32 txd_err:1;
-	/*[9]	   SD/eMMC controller doesn???¨º?¨¨t own descriptor.
-	The owner bit is set cfg_ignore_owner to ignore this error.*/
+	/*[9]	   SD/eMMC controller doesn???Ð¸â•‘?Ð¸Ð¸t own descriptor.
+	 *The owner bit is set cfg_ignore_owner to ignore this error.
+	 */
 	u32 desc_err:1;
 	/*[10]	  Response CRC error.*/
 	u32 resp_err:1;
 	/*[11]	  No response received before time limit.
-	The timeout limit is set by cfg_resp_timeout.*/
+	 *The timeout limit is set by cfg_resp_timeout.
+	 */
 	u32 resp_timeout:1;
 	/*[12]	  Descriptor execution time over time limit.
-	The timeout limit is set by descriptor itself.*/
+	 *The timeout limit is set by descriptor itself.
+	 */
 	u32 desc_timeout:1;
 	/*[13]	  End of Chain IRQ, Normal IRQ. */
 	u32 end_of_chain:1;
 	/*[14]	  This descriptor requests an IRQ, Normal IRQ,
-	the descriptor chain execution keeps going on.*/
+	 *the descriptor chain execution keeps going on.
+	 */
 	u32 desc_irq:1;
 	/*[15]	  SDIO device uses DAT[1] to request IRQ. */
 	u32 irq_sdio:1;
@@ -1087,13 +1296,15 @@ struct sd_emmc_status {
 	u32 cmd_i:1;
 	/*[25]	  Input data strobe. */
 	u32 ds:1;
-	 /*[29:26]   BUS fsm */
+	/*[29:26]   BUS fsm */
 	u32 bus_fsm:4;
 	/*[30]	  Descriptor write back process is done
-	and it is ready for CPU to read.*/
+	 *and it is ready for CPU to read.
+	 */
 	u32 desc_wr_rdy:1;
 	/*[31]	  Core is busy,desc_busy or sd_emmc_irq
-	 *  or bus_fsm is not idle.*/
+	 *  or bus_fsm is not idle.
+	 */
 	u32 core_wr_rdy:1;
 };
 struct sd_emmc_irq_en {
@@ -1101,7 +1312,7 @@ struct sd_emmc_irq_en {
 	u32 rxd_err:8;
 	/*[8]	   TX data CRC error. */
 	u32 txd_err:1;
-	/*[9]	   SD/eMMC controller doesn???¨º?¨¨t own descriptor. */
+	/*[9]	   SD/eMMC controller doesn???Ð¸â•‘?Ð¸Ð¸t own descriptor. */
 	u32 desc_err:1;
 	/*[10]	  Response CRC error.*/
 	u32 resp_err:1;
@@ -1113,7 +1324,7 @@ struct sd_emmc_irq_en {
 	u32 end_of_chain:1;
 	/*[14]	  This descriptor requests an IRQ. */
 	u32 desc_irq:1;
-	 /*[15]	  Enable sdio interrupt. */
+	/*[15]	  Enable sdio interrupt. */
 	u32 irq_sdio:1;
 	/*[31:16]   reved*/
 	u32 revd:16;
@@ -1122,7 +1333,8 @@ struct sd_emmc_data_info {
 	/*[9:0]	 Rxd words received from BUS. Txd words received from DDR.*/
 	u32 cnt:10;
 	/*[24:16]   Rxd Blocks received from BUS.
-	Txd blocks received from DDR.*/
+	 *Txd blocks received from DDR.
+	 */
 	u32 blk:9;
 	/*[31:17]   Reved. */
 	u32 revd:30;
@@ -1174,6 +1386,7 @@ struct sd_emmc_desc_info {
 #define SD_EMMC_DESC_RESP_STAT				0xfff80000
 #define SD_EMMC_IRQ_EN_ALL_INIT
 #define SD_EMMC_REQ_DMA_SGMAP
+/* #define SD_EMMC_CLK_CTRL*/
 /* #define SD_EMMC_DATA_TASKLET */
 #define STAT_POLL_TIMEOUT				0xfffff
 #define STAT_POLL_TIMEOUT				0xfffff
@@ -1184,7 +1397,9 @@ struct sd_emmc_desc_info {
 
 /* #define pr_info(a...) */
 #define DBG_LINE_INFO() \
-	pr_info(KERN_WARNING "[%s] : %s\n", __func__, __FILE__);
+{ \
+	pr_info("[%s] : %s\n", __func__, __FILE__); \
+}
 /* #define DBG_LINE_INFO() */
 /* #define dev_err(a,s) pr_info(KERN_INFO s); */
 #define BOOT_POLL_UP_DOWN (0x3C << 2)
@@ -1223,58 +1438,64 @@ extern struct mmc_host *sdio_host;
 
 
 #define POR_BOOT_VALUE ((((R_BOOT_DEVICE_FLAG>>9)&1)<<2)|\
-	((R_BOOT_DEVICE_FLAG>>6)&3)) /* {poc[9],poc[7:6]} */
+		((R_BOOT_DEVICE_FLAG>>6)&3)) /* {poc[9],poc[7:6]} */
 
 #define POR_NAND_BOOT() ((POR_BOOT_VALUE == 7) \
-	|| (POR_BOOT_VALUE == 6))
-#define POR_SPI_BOOT()	\
-	((get_cpu_type() == MESON_CPU_MAJOR_ID_M8M2) ? \
-	(POR_BOOT_VALUE == 5) : \
-	((POR_BOOT_VALUE == 5) || (POR_BOOT_VALUE == 4)))
+		|| (POR_BOOT_VALUE == 6))
+#define POR_SPI_BOOT() ((POR_BOOT_VALUE == 5) || (POR_BOOT_VALUE == 4))
 /* #define POR_EMMC_BOOT() (POR_BOOT_VALUE == 3) */
-#define POR_EMMC_BOOT()	((get_cpu_type() == MESON_CPU_MAJOR_ID_M8M2) ? \
-	((POR_BOOT_VALUE == 3) || (POR_BOOT_VALUE == 1)) \
-		: (POR_BOOT_VALUE == 3))
+#define POR_EMMC_BOOT()	(POR_BOOT_VALUE == 3)
 
 #define POR_CARD_BOOT() (POR_BOOT_VALUE == 0)
 
 #define print_tmp(fmt, args...) \
-		pr_info("[%s] " fmt, __func__, ##args);
+{ \
+	pr_info("[%s] " fmt, __func__, ##args); \
+}
 
 #define print_dbg(fmt, args...) \
-	pr_info("[%s] " fmt , __func__, ##args);
+{ \
+	pr_info("[%s] " fmt, __func__, ##args); \
+}
 
 /* for external codec status, if using external codec,
-	jtag should not be set. */
+ *	jtag should not be set.
+ */
 extern int ext_codec;
 
 #ifndef CONFIG_MESON_TRUSTZONE
 /* P_AO_SECURE_REG1 is "Secure Register 1" in <M8-Secure-AHB-Registers.doc> */
-#define aml_jtag_gpioao() /*do{\
-	aml_clr_reg32_mask(P_AO_SECURE_REG1, ((1<<5) | (1<<9))); \
-	if(!ext_codec)\
-	aml_set_reg32_mask(P_AO_SECURE_REG1, ((1<<8) | (1<<1))); \
-}while(0)*/
+#define aml_jtag_gpioao()
+/*do{\
+ *	aml_clr_reg32_mask(P_AO_SECURE_REG1, ((1<<5) | (1<<9))); \
+ *	if(!ext_codec)\
+ *	aml_set_reg32_mask(P_AO_SECURE_REG1, ((1<<8) | (1<<1))); \
+ *}while(0)
+ */
 
-#define aml_jtag_sd() /*do{\
-	aml_clr_reg32_mask(P_AO_SECURE_REG1, ((1<<8) | (1<<1))); \
-	aml_set_reg32_mask(P_AO_SECURE_REG1, ((1<<5) | (1<<9))); \
-}while(0)*/
+#define aml_jtag_sd()
+/*do{\
+ *	aml_clr_reg32_mask(P_AO_SECURE_REG1, ((1<<8) | (1<<1))); \
+ *	aml_set_reg32_mask(P_AO_SECURE_REG1, ((1<<5) | (1<<9))); \
+ *}while(0)
+ */
 #else
 /* Secure REG can only be accessed in Secure World if TrustZone enabled.*/
 #include <mach/meson-secure.h>
 #define aml_jtag_gpioao() \
-	meson_secure_reg_write(P_AO_SECURE_REG1,\
-		meson_secure_reg_read(P_AO_SECURE_REG1) \
-		& (~((1<<5) | (1<<9))));
+{ \
+	meson_secure_reg_write(P_AO_SECURE_REG1, \
+			meson_secure_reg_read(P_AO_SECURE_REG1) \
+			& (~((1<<5) | (1<<9)))); \
+}
 
 #define aml_jtag_sd() do {\
 	meson_secure_reg_write(P_AO_SECURE_REG1,\
-		meson_secure_reg_read(P_AO_SECURE_REG1)\
+			meson_secure_reg_read(P_AO_SECURE_REG1)\
 			& (~(1<<8) | (1<<1))); \
 	meson_secure_reg_write(P_AO_SECURE_REG1,\
-		meson_secure_reg_read(P_AO_SECURE_REG1)\
-		| ((1<<5) | (1<<9))); \
+			meson_secure_reg_read(P_AO_SECURE_REG1)\
+			| ((1<<5) | (1<<9))); \
 } while (0)
 #endif /* CONFIG_MESON_TRUSTZONE */
 
@@ -1283,3 +1504,4 @@ extern int ext_codec;
 } while (0)
 
 #endif
+

@@ -892,13 +892,6 @@ static __init int gsmi_init(void)
 		goto out_remove_sysfs_files;
 	}
 
-	ret = efivars_sysfs_init();
-	if (ret) {
-		printk(KERN_INFO "gsmi: Failed to create efivars files\n");
-		efivars_unregister(&efivars);
-		goto out_remove_sysfs_files;
-	}
-
 	register_reboot_notifier(&gsmi_reboot_notifier);
 	register_die_notifier(&gsmi_die_notifier);
 	atomic_notifier_chain_register(&panic_notifier_list,
@@ -917,8 +910,7 @@ out_err:
 	gsmi_buf_free(gsmi_dev.param_buf);
 	gsmi_buf_free(gsmi_dev.data_buf);
 	gsmi_buf_free(gsmi_dev.name_buf);
-	if (gsmi_dev.dma_pool)
-		dma_pool_destroy(gsmi_dev.dma_pool);
+	dma_pool_destroy(gsmi_dev.dma_pool);
 	platform_device_unregister(gsmi_dev.pdev);
 	pr_info("gsmi: failed to load: %d\n", ret);
 	return ret;

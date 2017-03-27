@@ -1,7 +1,7 @@
 /*
- * drivers/amlogic/cpu_version/cpu.c
+ * drivers/amlogic/cpu_version/meson64_cpu.c
  *
- * Copyright (C) 2015 Amlogic, Inc. All rights reserved.
+ * Copyright (C) 2017 Amlogic, Inc. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
-*/
+ */
 
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -41,7 +41,8 @@ int arch_big_cpu(int cpu)
 {
 	int type;
 	struct device_node *cpu_version;
-	cpu_version = of_find_node_by_path("/cpu_version");
+
+	cpu_version = of_find_node_by_name(NULL, "cpu_version");
 	if (cpu_version)
 		assist_hw_rev = of_iomap(cpu_version, 0);
 	else
@@ -64,7 +65,8 @@ int __init meson_cpu_version_init(void)
 {
 	unsigned int ver;
 	struct device_node *cpu_version;
-	cpu_version = of_find_node_by_path("/cpu_version");
+
+	cpu_version = of_find_node_by_name(NULL, "cpu_version");
 	if (cpu_version)
 		assist_hw_rev = of_iomap(cpu_version, 0);
 	else

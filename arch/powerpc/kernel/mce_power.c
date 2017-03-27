@@ -26,8 +26,61 @@
 #include <linux/ptrace.h>
 #include <asm/mmu.h>
 #include <asm/mce.h>
+#include <asm/machdep.h>
+
+static void flush_tlb_206(unsigned int num_sets, unsigned int action)
+{
+	unsigned long rb;
+	unsigned int i;
+
+	switch (action) {
+	case TLB_INVAL_SCOPE_GLOBAL:
+		rb = TLBIEL_INVAL_SET;
+		break;
+	case TLB_INVAL_SCOPE_LPID:
+		rb = TLBIEL_INVAL_SET_LPID;
+		break;
+	default:
+		BUG();
+		break;
+	}
+
+	asm volatile("ptesync" : : : "memory");
+	for (i = 0; i < num_sets; i++) {
+		asm volatile("tlbiel %0" : : "r" (rb));
+		rb += 1 << TLBIEL_INVAL_SET_SHIFT;
+	}
+	asm volatile("ptesync" : : : "memory");
+}
+
+/*
+ * Generic routines to flush TLB on POWER processors. These routines
+ * are used as flush_tlb hook in the cpu_spec.
+ *
+ * action => TLB_INVAL_SCOPE_GLOBAL:  Invalidate all TLBs.
+ *	     TLB_INVAL_SCOPE_LPID: Invalidate TLB for current LPID.
+ */
+void __flush_tlb_power7(unsigned int action)
+{
+	flush_tlb_206(POWER7_TLB_SETS, action);
+}
+
+void __flush_tlb_power8(unsigned int action)
+{
+	flush_tlb_206(POWER8_TLB_SETS, action);
+}
+
+void __flush_tlb_power9(unsigned int action)
+{
+	if (radix_enabled())
+		flush_tlb_206(POWER9_TLB_SETS_RADIX, action);
+
+	flush_tlb_206(POWER9_TLB_SETS_HASH, action);
+}
+
 
 /* flush SLBs and reload */
+#ifdef CONFIG_PPC_STD_MMU_64
 static void flush_and_reload_slb(void)
 {
 	struct slb_shadow *slb;
@@ -61,6 +114,7 @@ static void flush_and_reload_slb(void)
 		asm volatile("slbmte %0,%1" : : "r" (rs), "r" (rb));
 	}
 }
+#endif
 
 static long mce_handle_derror(uint64_t dsisr, uint64_t slb_error_bits)
 {
@@ -71,6 +125,7 @@ static long mce_handle_derror(uint64_t dsisr, uint64_t slb_error_bits)
 	 * reset the error bits whenever we handle them so that at the end
 	 * we can check whether we handled all of them or not.
 	 * */
+#ifdef CONFIG_PPC_STD_MMU_64
 	if (dsisr & slb_error_bits) {
 		flush_and_reload_slb();
 		/* reset error bits */
@@ -78,10 +133,11 @@ static long mce_handle_derror(uint64_t dsisr, uint64_t slb_error_bits)
 	}
 	if (dsisr & P7_DSISR_MC_TLB_MULTIHIT_MFTLB) {
 		if (cur_cpu_spec && cur_cpu_spec->flush_tlb)
-			cur_cpu_spec->flush_tlb(TLBIEL_INVAL_SET);
+			cur_cpu_spec->flush_tlb(TLB_INVAL_SCOPE_GLOBAL);
 		/* reset error bits */
 		dsisr &= ~P7_DSISR_MC_TLB_MULTIHIT_MFTLB;
 	}
+#endif
 	/* Any other errors we don't understand? */
 	if (dsisr & 0xffffffffUL)
 		handled = 0;
@@ -101,6 +157,7 @@ static long mce_handle_common_ierror(uint64_t srr1)
 	switch (P7_SRR1_MC_IFETCH(srr1)) {
 	case 0:
 		break;
+#ifdef CONFIG_PPC_STD_MMU_64
 	case P7_SRR1_MC_IFETCH_SLB_PARITY:
 	case P7_SRR1_MC_IFETCH_SLB_MULTIHIT:
 		/* flush and reload SLBs for SLB errors. */
@@ -109,10 +166,11 @@ static long mce_handle_common_ierror(uint64_t srr1)
 		break;
 	case P7_SRR1_MC_IFETCH_TLB_MULTIHIT:
 		if (cur_cpu_spec && cur_cpu_spec->flush_tlb) {
-			cur_cpu_spec->flush_tlb(TLBIEL_INVAL_SET);
+			cur_cpu_spec->flush_tlb(TLB_INVAL_SCOPE_GLOBAL);
 			handled = 1;
 		}
 		break;
+#endif
 	default:
 		break;
 	}
@@ -126,10 +184,12 @@ static long mce_handle_ierror_p7(uint64_t srr1)
 
 	handled = mce_handle_common_ierror(srr1);
 
+#ifdef CONFIG_PPC_STD_MMU_64
 	if (P7_SRR1_MC_IFETCH(srr1) == P7_SRR1_MC_IFETCH_SLB_BOTH) {
 		flush_and_reload_slb();
 		handled = 1;
 	}
+#endif
 	return handled;
 }
 
@@ -197,13 +257,32 @@ static void mce_get_derror_p7(struct mce_error_info *mce_err, uint64_t dsisr)
 	}
 }
 
+static long mce_handle_ue_error(struct pt_regs *regs)
+{
+	long handled = 0;
+
+	/*
+	 * On specific SCOM read via MMIO we may get a machine check
+	 * exception with SRR0 pointing inside opal. If that is the
+	 * case OPAL may have recovery address to re-read SCOM data in
+	 * different way and hence we can recover from this MC.
+	 */
+
+	if (ppc_md.mce_check_early_recovery) {
+		if (ppc_md.mce_check_early_recovery(regs))
+			handled = 1;
+	}
+	return handled;
+}
+
 long __machine_check_early_realmode_p7(struct pt_regs *regs)
 {
-	uint64_t srr1, addr;
+	uint64_t srr1, nip, addr;
 	long handled = 1;
 	struct mce_error_info mce_error_info = { 0 };
 
 	srr1 = regs->msr;
+	nip = regs->nip;
 
 	/*
 	 * Handle memory errors depending whether this was a load/store or
@@ -221,7 +300,11 @@ long __machine_check_early_realmode_p7(struct pt_regs *regs)
 		addr = regs->nip;
 	}
 
-	save_mce_event(regs, handled, &mce_error_info, addr);
+	/* Handle UE error. */
+	if (mce_error_info.error_type == MCE_ERROR_TYPE_UE)
+		handled = mce_handle_ue_error(regs);
+
+	save_mce_event(regs, handled, &mce_error_info, nip, addr);
 	return handled;
 }
 
@@ -249,10 +332,12 @@ static long mce_handle_ierror_p8(uint64_t srr1)
 
 	handled = mce_handle_common_ierror(srr1);
 
+#ifdef CONFIG_PPC_STD_MMU_64
 	if (P7_SRR1_MC_IFETCH(srr1) == P8_SRR1_MC_IFETCH_ERAT_MULTIHIT) {
 		flush_and_reload_slb();
 		handled = 1;
 	}
+#endif
 	return handled;
 }
 
@@ -263,11 +348,12 @@ static long mce_handle_derror_p8(uint64_t dsisr)
 
 long __machine_check_early_realmode_p8(struct pt_regs *regs)
 {
-	uint64_t srr1, addr;
+	uint64_t srr1, nip, addr;
 	long handled = 1;
 	struct mce_error_info mce_error_info = { 0 };
 
 	srr1 = regs->msr;
+	nip = regs->nip;
 
 	if (P7_SRR1_MC_LOADSTORE(srr1)) {
 		handled = mce_handle_derror_p8(regs->dsisr);
@@ -279,6 +365,10 @@ long __machine_check_early_realmode_p8(struct pt_regs *regs)
 		addr = regs->nip;
 	}
 
-	save_mce_event(regs, handled, &mce_error_info, addr);
+	/* Handle UE error. */
+	if (mce_error_info.error_type == MCE_ERROR_TYPE_UE)
+		handled = mce_handle_ue_error(regs);
+
+	save_mce_event(regs, handled, &mce_error_info, nip, addr);
 	return handled;
 }

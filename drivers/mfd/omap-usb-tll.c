@@ -30,6 +30,8 @@
 #include <linux/platform_data/usb-omap.h>
 #include <linux/of.h>
 
+#include "omap-usb.h"
+
 #define USBTLL_DRIVER_NAME	"usbhs_tll"
 
 /* TLL Register Set */
@@ -252,7 +254,7 @@ static int usbtll_omap_probe(struct platform_device *pdev)
 		break;
 	}
 
-	tll->ch_clk = devm_kzalloc(dev, sizeof(struct clk * [tll->nch]),
+	tll->ch_clk = devm_kzalloc(dev, sizeof(struct clk *) * tll->nch,
 						GFP_KERNEL);
 	if (!tll->ch_clk) {
 		ret = -ENOMEM;
@@ -269,6 +271,8 @@ static int usbtll_omap_probe(struct platform_device *pdev)
 
 		if (IS_ERR(tll->ch_clk[i]))
 			dev_dbg(dev, "can't get clock : %s\n", clkname);
+		else
+			clk_prepare(tll->ch_clk[i]);
 	}
 
 	pm_runtime_put_sync(dev);
@@ -301,9 +305,12 @@ static int usbtll_omap_remove(struct platform_device *pdev)
 	tll_dev = NULL;
 	spin_unlock(&tll_lock);
 
-	for (i = 0; i < tll->nch; i++)
-		if (!IS_ERR(tll->ch_clk[i]))
+	for (i = 0; i < tll->nch; i++) {
+		if (!IS_ERR(tll->ch_clk[i])) {
+			clk_unprepare(tll->ch_clk[i]);
 			clk_put(tll->ch_clk[i]);
+		}
+	}
 
 	pm_runtime_disable(&pdev->dev);
 	return 0;
@@ -319,7 +326,6 @@ MODULE_DEVICE_TABLE(of, usbtll_omap_dt_ids);
 static struct platform_driver usbtll_omap_driver = {
 	.driver = {
 		.name		= (char *)usbtll_driver_name,
-		.owner		= THIS_MODULE,
 		.of_match_table = usbtll_omap_dt_ids,
 	},
 	.probe		= usbtll_omap_probe,
@@ -421,7 +427,7 @@ int omap_tll_enable(struct usbhs_omap_platform_data *pdata)
 			if (IS_ERR(tll->ch_clk[i]))
 				continue;
 
-			r = clk_prepare_enable(tll->ch_clk[i]);
+			r = clk_enable(tll->ch_clk[i]);
 			if (r) {
 				dev_err(tll_dev,
 				 "Error enabling ch %d clock: %d\n", i, r);
@@ -449,7 +455,7 @@ int omap_tll_disable(struct usbhs_omap_platform_data *pdata)
 	for (i = 0; i < tll->nch; i++) {
 		if (omap_usb_mode_needs_tll(pdata->port_mode[i])) {
 			if (!IS_ERR(tll->ch_clk[i]))
-				clk_disable_unprepare(tll->ch_clk[i]);
+				clk_disable(tll->ch_clk[i]);
 		}
 	}
 

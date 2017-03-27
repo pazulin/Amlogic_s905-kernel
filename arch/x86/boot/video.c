@@ -13,9 +13,13 @@
  * Select video mode
  */
 
+#include <uapi/asm/boot.h>
+
 #include "boot.h"
 #include "video.h"
 #include "vesa.h"
+
+static u16 video_segment;
 
 static void store_cursor_position(void)
 {
@@ -201,7 +205,7 @@ static unsigned int mode_menu(void)
 	unsigned int sel;
 
 	puts("Press <ENTER> to see video modes available, "
-	     "<SPACE> to continue, or wait 3 sec\n");
+	     "<SPACE> to continue, or wait 30 sec\n");
 
 	kbd_flush();
 	while (1) {

@@ -208,11 +208,7 @@ static struct davinci_mmc_config dm355leopard_mmc_config = {
  * you have proper Mini-B or Mini-A cables (or Mini-A adapters)
  * the ID pin won't need any help.
  */
-#ifdef CONFIG_USB_MUSB_PERIPHERAL
-#define USB_ID_VALUE	0	/* ID pulled high; *should* float */
-#else
 #define USB_ID_VALUE	1	/* ID pulled low */
-#endif
 
 static struct spi_eeprom at25640a = {
 	.byte_len	= SZ_64K / 8,
@@ -246,9 +242,7 @@ static __init void dm355_leopard_init(void)
 	dm355leopard_dm9000_rsrc[2].start = gpio_to_irq(9);
 
 	aemif = clk_get(&dm355leopard_dm9000.dev, "aemif");
-	if (IS_ERR(aemif))
-		WARN("%s: unable to get AEMIF clock\n", __func__);
-	else
+	if (!WARN(IS_ERR(aemif), "unable to get AEMIF clock\n"))
 		clk_prepare_enable(aemif);
 
 	platform_add_devices(davinci_leopard_devices,

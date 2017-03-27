@@ -1,7 +1,7 @@
 /*
  * drivers/amlogic/pinctrl/pinctrl_gxl.c
  *
- * Copyright (C) 2015 Amlogic, Inc. All rights reserved.
+ * Copyright (C) 2017 Amlogic, Inc. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,615 +13,979 @@
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
-*/
+ */
 
-#include <linux/init.h>
-#include <linux/module.h>
-#include <linux/platform_device.h>
-#include <linux/io.h>
-#include <linux/slab.h>
-#include <linux/err.h>
-#include <linux/of.h>
-#include <linux/of_device.h>
-#include <linux/pinctrl/machine.h>
-#include <linux/pinctrl/pinctrl.h>
-#include <linux/pinctrl/pinmux.h>
-#include <linux/pinctrl/pinconf.h>
-#include <linux/amlogic/pinctrl_amlogic.h>
-#include <linux/amlogic/aml_gpio_consumer.h>
-#include <linux/of_address.h>
-#include <linux/amlogic/gpio-amlogic.h>
-#include "pinconf-amlogic.h"
+#include "pinctrl-meson.h"
 #include <dt-bindings/gpio/gxl.h>
-#include <linux/amlogic/cpu_version.h>
-#include <linux/amlogic/iomap.h>
-#include <linux/uaccess.h>
 
+#define EE_OFF	10
 
-#define EE_OFFSET 10
-#define MESON_PIN(x, n) PINCTRL_PIN((x+EE_OFFSET), n)
-/* Pad names for the pinmux subsystem */
-#define	PIN_GPIOZ_0    (EE_OFFSET + GPIOZ_0)
-#define	PIN_GPIOZ_1    (EE_OFFSET + GPIOZ_1)
-#define	PIN_GPIOZ_2    (EE_OFFSET + GPIOZ_2)
-#define	PIN_GPIOZ_3    (EE_OFFSET + GPIOZ_3)
-#define	PIN_GPIOZ_4    (EE_OFFSET + GPIOZ_4)
-#define	PIN_GPIOZ_5    (EE_OFFSET + GPIOZ_5)
-#define	PIN_GPIOZ_6    (EE_OFFSET + GPIOZ_6)
-#define	PIN_GPIOZ_7    (EE_OFFSET + GPIOZ_7)
-#define	PIN_GPIOZ_8    (EE_OFFSET + GPIOZ_8)
-#define	PIN_GPIOZ_9    (EE_OFFSET + GPIOZ_9)
-#define	PIN_GPIOZ_10    (EE_OFFSET + GPIOZ_10)
-#define	PIN_GPIOZ_11    (EE_OFFSET + GPIOZ_11)
-#define	PIN_GPIOZ_12    (EE_OFFSET + GPIOZ_12)
-#define	PIN_GPIOZ_13    (EE_OFFSET + GPIOZ_13)
-#define	PIN_GPIOZ_14    (EE_OFFSET + GPIOZ_14)
-#define	PIN_GPIOZ_15    (EE_OFFSET + GPIOZ_15)
-#define	PIN_GPIOH_0    (EE_OFFSET + GPIOH_0)
-#define	PIN_GPIOH_1    (EE_OFFSET + GPIOH_1)
-#define	PIN_GPIOH_2    (EE_OFFSET + GPIOH_2)
-#define	PIN_GPIOH_3    (EE_OFFSET + GPIOH_3)
-#define	PIN_GPIOH_4    (EE_OFFSET + GPIOH_4)
-#define	PIN_GPIOH_5    (EE_OFFSET + GPIOH_5)
-#define	PIN_GPIOH_6    (EE_OFFSET + GPIOH_6)
-#define	PIN_GPIOH_7    (EE_OFFSET + GPIOH_7)
-#define	PIN_GPIOH_8    (EE_OFFSET + GPIOH_8)
-#define	PIN_GPIOH_9    (EE_OFFSET + GPIOH_9)
-#define	PIN_BOOT_0    (EE_OFFSET + BOOT_0)
-#define	PIN_BOOT_1    (EE_OFFSET + BOOT_1)
-#define	PIN_BOOT_2    (EE_OFFSET + BOOT_2)
-#define	PIN_BOOT_3    (EE_OFFSET + BOOT_3)
-#define	PIN_BOOT_4    (EE_OFFSET + BOOT_4)
-#define	PIN_BOOT_5    (EE_OFFSET + BOOT_5)
-#define	PIN_BOOT_6    (EE_OFFSET + BOOT_6)
-#define	PIN_BOOT_7    (EE_OFFSET + BOOT_7)
-#define	PIN_BOOT_8    (EE_OFFSET + BOOT_8)
-#define	PIN_BOOT_9    (EE_OFFSET + BOOT_9)
-#define	PIN_BOOT_10    (EE_OFFSET + BOOT_10)
-#define	PIN_BOOT_11    (EE_OFFSET + BOOT_11)
-#define	PIN_BOOT_12    (EE_OFFSET + BOOT_12)
-#define	PIN_BOOT_13    (EE_OFFSET + BOOT_13)
-#define	PIN_BOOT_14    (EE_OFFSET + BOOT_14)
-#define	PIN_BOOT_15    (EE_OFFSET + BOOT_15)
-#define	PIN_CARD_0    (EE_OFFSET + CARD_0)
-#define	PIN_CARD_1    (EE_OFFSET + CARD_1)
-#define	PIN_CARD_2    (EE_OFFSET + CARD_2)
-#define	PIN_CARD_3    (EE_OFFSET + CARD_3)
-#define	PIN_CARD_4    (EE_OFFSET + CARD_4)
-#define	PIN_CARD_5    (EE_OFFSET + CARD_5)
-#define	PIN_CARD_6    (EE_OFFSET + CARD_6)
-#define	PIN_GPIODV_0    (EE_OFFSET + GPIODV_0)
-#define	PIN_GPIODV_1    (EE_OFFSET + GPIODV_1)
-#define	PIN_GPIODV_2    (EE_OFFSET + GPIODV_2)
-#define	PIN_GPIODV_3    (EE_OFFSET + GPIODV_3)
-#define	PIN_GPIODV_4    (EE_OFFSET + GPIODV_4)
-#define	PIN_GPIODV_5    (EE_OFFSET + GPIODV_5)
-#define	PIN_GPIODV_6    (EE_OFFSET + GPIODV_6)
-#define	PIN_GPIODV_7    (EE_OFFSET + GPIODV_7)
-#define	PIN_GPIODV_8    (EE_OFFSET + GPIODV_8)
-#define	PIN_GPIODV_9    (EE_OFFSET + GPIODV_9)
-#define	PIN_GPIODV_10    (EE_OFFSET + GPIODV_10)
-#define	PIN_GPIODV_11    (EE_OFFSET + GPIODV_11)
-#define	PIN_GPIODV_12    (EE_OFFSET + GPIODV_12)
-#define	PIN_GPIODV_13    (EE_OFFSET + GPIODV_13)
-#define	PIN_GPIODV_14    (EE_OFFSET + GPIODV_14)
-#define	PIN_GPIODV_15    (EE_OFFSET + GPIODV_15)
-#define	PIN_GPIODV_16    (EE_OFFSET + GPIODV_16)
-#define	PIN_GPIODV_17    (EE_OFFSET + GPIODV_17)
-#define	PIN_GPIODV_18    (EE_OFFSET + GPIODV_18)
-#define	PIN_GPIODV_19    (EE_OFFSET + GPIODV_19)
-#define	PIN_GPIODV_20    (EE_OFFSET + GPIODV_20)
-#define	PIN_GPIODV_21    (EE_OFFSET + GPIODV_21)
-#define	PIN_GPIODV_22    (EE_OFFSET + GPIODV_22)
-#define	PIN_GPIODV_23    (EE_OFFSET + GPIODV_23)
-#define	PIN_GPIODV_24    (EE_OFFSET + GPIODV_24)
-#define	PIN_GPIODV_25    (EE_OFFSET + GPIODV_25)
-#define	PIN_GPIODV_26    (EE_OFFSET + GPIODV_26)
-#define	PIN_GPIODV_27    (EE_OFFSET + GPIODV_27)
-#define	PIN_GPIODV_28    (EE_OFFSET + GPIODV_28)
-#define	PIN_GPIODV_29    (EE_OFFSET + GPIODV_29)
-#define	PIN_GPIOX_0    (EE_OFFSET + GPIOX_0)
-#define	PIN_GPIOX_1    (EE_OFFSET + GPIOX_1)
-#define	PIN_GPIOX_2    (EE_OFFSET + GPIOX_2)
-#define	PIN_GPIOX_3    (EE_OFFSET + GPIOX_3)
-#define	PIN_GPIOX_4    (EE_OFFSET + GPIOX_4)
-#define	PIN_GPIOX_5    (EE_OFFSET + GPIOX_5)
-#define	PIN_GPIOX_6    (EE_OFFSET + GPIOX_6)
-#define	PIN_GPIOX_7    (EE_OFFSET + GPIOX_7)
-#define	PIN_GPIOX_8    (EE_OFFSET + GPIOX_8)
-#define	PIN_GPIOX_9    (EE_OFFSET + GPIOX_9)
-#define	PIN_GPIOX_10    (EE_OFFSET + GPIOX_10)
-#define	PIN_GPIOX_11    (EE_OFFSET + GPIOX_11)
-#define	PIN_GPIOX_12    (EE_OFFSET + GPIOX_12)
-#define	PIN_GPIOX_13    (EE_OFFSET + GPIOX_13)
-#define	PIN_GPIOX_14    (EE_OFFSET + GPIOX_14)
-#define	PIN_GPIOX_15    (EE_OFFSET + GPIOX_15)
-#define	PIN_GPIOX_16    (EE_OFFSET + GPIOX_16)
-#define	PIN_GPIOX_17    (EE_OFFSET + GPIOX_17)
-#define	PIN_GPIOX_18    (EE_OFFSET + GPIOX_18)
-#define	PIN_GPIOCLK_0    (EE_OFFSET + GPIOCLK_0)
-#define	PIN_GPIOCLK_1    (EE_OFFSET + GPIOCLK_1)
+static const struct pinctrl_pin_desc meson_gxl_periphs_pins[] = {
+	MESON_PIN(GPIOZ_0, EE_OFF),
+	MESON_PIN(GPIOZ_1, EE_OFF),
+	MESON_PIN(GPIOZ_2, EE_OFF),
+	MESON_PIN(GPIOZ_3, EE_OFF),
+	MESON_PIN(GPIOZ_4, EE_OFF),
+	MESON_PIN(GPIOZ_5, EE_OFF),
+	MESON_PIN(GPIOZ_6, EE_OFF),
+	MESON_PIN(GPIOZ_7, EE_OFF),
+	MESON_PIN(GPIOZ_8, EE_OFF),
+	MESON_PIN(GPIOZ_9, EE_OFF),
+	MESON_PIN(GPIOZ_10, EE_OFF),
+	MESON_PIN(GPIOZ_11, EE_OFF),
+	MESON_PIN(GPIOZ_12, EE_OFF),
+	MESON_PIN(GPIOZ_13, EE_OFF),
+	MESON_PIN(GPIOZ_14, EE_OFF),
+	MESON_PIN(GPIOZ_15, EE_OFF),
+	MESON_PIN(GPIOH_0, EE_OFF),
+	MESON_PIN(GPIOH_1, EE_OFF),
+	MESON_PIN(GPIOH_2, EE_OFF),
+	MESON_PIN(GPIOH_3, EE_OFF),
+	MESON_PIN(GPIOH_4, EE_OFF),
+	MESON_PIN(GPIOH_5, EE_OFF),
+	MESON_PIN(GPIOH_6, EE_OFF),
+	MESON_PIN(GPIOH_7, EE_OFF),
+	MESON_PIN(GPIOH_8, EE_OFF),
+	MESON_PIN(GPIOH_9, EE_OFF),
+	MESON_PIN(BOOT_0, EE_OFF),
+	MESON_PIN(BOOT_1, EE_OFF),
+	MESON_PIN(BOOT_2, EE_OFF),
+	MESON_PIN(BOOT_3, EE_OFF),
+	MESON_PIN(BOOT_4, EE_OFF),
+	MESON_PIN(BOOT_5, EE_OFF),
+	MESON_PIN(BOOT_6, EE_OFF),
+	MESON_PIN(BOOT_7, EE_OFF),
+	MESON_PIN(BOOT_8, EE_OFF),
+	MESON_PIN(BOOT_9, EE_OFF),
+	MESON_PIN(BOOT_10, EE_OFF),
+	MESON_PIN(BOOT_11, EE_OFF),
+	MESON_PIN(BOOT_12, EE_OFF),
+	MESON_PIN(BOOT_13, EE_OFF),
+	MESON_PIN(BOOT_14, EE_OFF),
+	MESON_PIN(BOOT_15, EE_OFF),
+	MESON_PIN(CARD_0, EE_OFF),
+	MESON_PIN(CARD_1, EE_OFF),
+	MESON_PIN(CARD_2, EE_OFF),
+	MESON_PIN(CARD_3, EE_OFF),
+	MESON_PIN(CARD_4, EE_OFF),
+	MESON_PIN(CARD_5, EE_OFF),
+	MESON_PIN(CARD_6, EE_OFF),
+	MESON_PIN(GPIODV_0, EE_OFF),
+	MESON_PIN(GPIODV_1, EE_OFF),
+	MESON_PIN(GPIODV_2, EE_OFF),
+	MESON_PIN(GPIODV_3, EE_OFF),
+	MESON_PIN(GPIODV_4, EE_OFF),
+	MESON_PIN(GPIODV_5, EE_OFF),
+	MESON_PIN(GPIODV_6, EE_OFF),
+	MESON_PIN(GPIODV_7, EE_OFF),
+	MESON_PIN(GPIODV_8, EE_OFF),
+	MESON_PIN(GPIODV_9, EE_OFF),
+	MESON_PIN(GPIODV_10, EE_OFF),
+	MESON_PIN(GPIODV_11, EE_OFF),
+	MESON_PIN(GPIODV_12, EE_OFF),
+	MESON_PIN(GPIODV_13, EE_OFF),
+	MESON_PIN(GPIODV_14, EE_OFF),
+	MESON_PIN(GPIODV_15, EE_OFF),
+	MESON_PIN(GPIODV_16, EE_OFF),
+	MESON_PIN(GPIODV_17, EE_OFF),
+	MESON_PIN(GPIODV_18, EE_OFF),
+	MESON_PIN(GPIODV_19, EE_OFF),
+	MESON_PIN(GPIODV_20, EE_OFF),
+	MESON_PIN(GPIODV_21, EE_OFF),
+	MESON_PIN(GPIODV_22, EE_OFF),
+	MESON_PIN(GPIODV_23, EE_OFF),
+	MESON_PIN(GPIODV_24, EE_OFF),
+	MESON_PIN(GPIODV_25, EE_OFF),
+	MESON_PIN(GPIODV_26, EE_OFF),
+	MESON_PIN(GPIODV_27, EE_OFF),
+	MESON_PIN(GPIODV_28, EE_OFF),
+	MESON_PIN(GPIODV_29, EE_OFF),
+	MESON_PIN(GPIOX_0, EE_OFF),
+	MESON_PIN(GPIOX_1, EE_OFF),
+	MESON_PIN(GPIOX_2, EE_OFF),
+	MESON_PIN(GPIOX_3, EE_OFF),
+	MESON_PIN(GPIOX_4, EE_OFF),
+	MESON_PIN(GPIOX_5, EE_OFF),
+	MESON_PIN(GPIOX_6, EE_OFF),
+	MESON_PIN(GPIOX_7, EE_OFF),
+	MESON_PIN(GPIOX_8, EE_OFF),
+	MESON_PIN(GPIOX_9, EE_OFF),
+	MESON_PIN(GPIOX_10, EE_OFF),
+	MESON_PIN(GPIOX_11, EE_OFF),
+	MESON_PIN(GPIOX_12, EE_OFF),
+	MESON_PIN(GPIOX_13, EE_OFF),
+	MESON_PIN(GPIOX_14, EE_OFF),
+	MESON_PIN(GPIOX_15, EE_OFF),
+	MESON_PIN(GPIOX_16, EE_OFF),
+	MESON_PIN(GPIOX_17, EE_OFF),
+	MESON_PIN(GPIOX_18, EE_OFF),
+	MESON_PIN(GPIOCLK_0, EE_OFF),
+	MESON_PIN(GPIOCLK_1, EE_OFF),
 
-#define	PIN_GPIO_TEST_N    (EE_OFFSET + GPIO_TEST_N)
-
-
-
-struct pinctrl_pin_desc gxl_pads[] = {
-	PINCTRL_PIN(GPIOAO_0, "GPIOAO_0"),
-	PINCTRL_PIN(GPIOAO_1, "GPIOAO_1"),
-	PINCTRL_PIN(GPIOAO_2, "GPIOAO_2"),
-	PINCTRL_PIN(GPIOAO_3, "GPIOAO_3"),
-	PINCTRL_PIN(GPIOAO_4, "GPIOAO_4"),
-	PINCTRL_PIN(GPIOAO_5, "GPIOAO_5"),
-	PINCTRL_PIN(GPIOAO_6, "GPIOAO_6"),
-	PINCTRL_PIN(GPIOAO_7, "GPIOAO_7"),
-	PINCTRL_PIN(GPIOAO_8, "GPIOAO_8"),
-	PINCTRL_PIN(GPIOAO_9, "GPIOAO_9"),
-
-	MESON_PIN(GPIOZ_0, "GPIOZ_0"),
-	MESON_PIN(GPIOZ_1, "GPIOZ_1"),
-	MESON_PIN(GPIOZ_2, "GPIOZ_2"),
-	MESON_PIN(GPIOZ_3, "GPIOZ_3"),
-	MESON_PIN(GPIOZ_4, "GPIOZ_4"),
-	MESON_PIN(GPIOZ_5, "GPIOZ_5"),
-	MESON_PIN(GPIOZ_6, "GPIOZ_6"),
-	MESON_PIN(GPIOZ_7, "GPIOZ_7"),
-	MESON_PIN(GPIOZ_8, "GPIOZ_8"),
-	MESON_PIN(GPIOZ_9, "GPIOZ_9"),
-	MESON_PIN(GPIOZ_10, "GPIOZ_10"),
-	MESON_PIN(GPIOZ_11, "GPIOZ_11"),
-	MESON_PIN(GPIOZ_12, "GPIOZ_12"),
-	MESON_PIN(GPIOZ_13, "GPIOZ_13"),
-	MESON_PIN(GPIOZ_14, "GPIOZ_14"),
-	MESON_PIN(GPIOZ_15, "GPIOZ_15"),
-	MESON_PIN(GPIOH_0, "GPIOH_0"),
-	MESON_PIN(GPIOH_1, "GPIOH_1"),
-	MESON_PIN(GPIOH_2, "GPIOH_2"),
-	MESON_PIN(GPIOH_3, "GPIOH_3"),
-	MESON_PIN(GPIOH_4, "GPIOH_4"),
-	MESON_PIN(GPIOH_5, "GPIOH_5"),
-	MESON_PIN(GPIOH_6, "GPIOH_6"),
-	MESON_PIN(GPIOH_7, "GPIOH_7"),
-	MESON_PIN(GPIOH_8, "GPIOH_8"),
-	MESON_PIN(GPIOH_9, "GPIOH_9"),
-	MESON_PIN(BOOT_0, "BOOT_0"),
-	MESON_PIN(BOOT_1, "BOOT_1"),
-	MESON_PIN(BOOT_2, "BOOT_2"),
-	MESON_PIN(BOOT_3, "BOOT_3"),
-	MESON_PIN(BOOT_4, "BOOT_4"),
-	MESON_PIN(BOOT_5, "BOOT_5"),
-	MESON_PIN(BOOT_6, "BOOT_6"),
-	MESON_PIN(BOOT_7, "BOOT_7"),
-	MESON_PIN(BOOT_8, "BOOT_8"),
-	MESON_PIN(BOOT_9, "BOOT_9"),
-	MESON_PIN(BOOT_10, "BOOT_10"),
-	MESON_PIN(BOOT_11, "BOOT_11"),
-	MESON_PIN(BOOT_12, "BOOT_12"),
-	MESON_PIN(BOOT_13, "BOOT_13"),
-	MESON_PIN(BOOT_14, "BOOT_14"),
-	MESON_PIN(BOOT_15, "BOOT_15"),
-	MESON_PIN(CARD_0, "CARD_0"),
-	MESON_PIN(CARD_1, "CARD_1"),
-	MESON_PIN(CARD_2, "CARD_2"),
-	MESON_PIN(CARD_3, "CARD_3"),
-	MESON_PIN(CARD_4, "CARD_4"),
-	MESON_PIN(CARD_5, "CARD_5"),
-	MESON_PIN(CARD_6, "CARD_6"),
-	MESON_PIN(GPIODV_0, "GPIODV_0"),
-	MESON_PIN(GPIODV_1, "GPIODV_1"),
-	MESON_PIN(GPIODV_2, "GPIODV_2"),
-	MESON_PIN(GPIODV_3, "GPIODV_3"),
-	MESON_PIN(GPIODV_4, "GPIODV_4"),
-	MESON_PIN(GPIODV_5, "GPIODV_5"),
-	MESON_PIN(GPIODV_6, "GPIODV_6"),
-	MESON_PIN(GPIODV_7, "GPIODV_7"),
-	MESON_PIN(GPIODV_8, "GPIODV_8"),
-	MESON_PIN(GPIODV_9, "GPIODV_9"),
-	MESON_PIN(GPIODV_10, "GPIODV_10"),
-	MESON_PIN(GPIODV_11, "GPIODV_11"),
-	MESON_PIN(GPIODV_12, "GPIODV_12"),
-	MESON_PIN(GPIODV_13, "GPIODV_13"),
-	MESON_PIN(GPIODV_14, "GPIODV_14"),
-	MESON_PIN(GPIODV_15, "GPIODV_15"),
-	MESON_PIN(GPIODV_16, "GPIODV_16"),
-	MESON_PIN(GPIODV_17, "GPIODV_17"),
-	MESON_PIN(GPIODV_18, "GPIODV_18"),
-	MESON_PIN(GPIODV_19, "GPIODV_19"),
-	MESON_PIN(GPIODV_20, "GPIODV_20"),
-	MESON_PIN(GPIODV_21, "GPIODV_21"),
-	MESON_PIN(GPIODV_22, "GPIODV_22"),
-	MESON_PIN(GPIODV_23, "GPIODV_23"),
-	MESON_PIN(GPIODV_24, "GPIODV_24"),
-	MESON_PIN(GPIODV_25, "GPIODV_25"),
-	MESON_PIN(GPIODV_26, "GPIODV_26"),
-	MESON_PIN(GPIODV_27, "GPIODV_27"),
-	MESON_PIN(GPIODV_28, "GPIODV_28"),
-	MESON_PIN(GPIODV_29, "GPIODV_29"),
-	MESON_PIN(GPIOX_0, "GPIOX_0"),
-	MESON_PIN(GPIOX_1, "GPIOX_1"),
-	MESON_PIN(GPIOX_2, "GPIOX_2"),
-	MESON_PIN(GPIOX_3, "GPIOX_3"),
-	MESON_PIN(GPIOX_4, "GPIOX_4"),
-	MESON_PIN(GPIOX_5, "GPIOX_5"),
-	MESON_PIN(GPIOX_6, "GPIOX_6"),
-	MESON_PIN(GPIOX_7, "GPIOX_7"),
-	MESON_PIN(GPIOX_8, "GPIOX_8"),
-	MESON_PIN(GPIOX_9, "GPIOX_9"),
-	MESON_PIN(GPIOX_10, "GPIOX_10"),
-	MESON_PIN(GPIOX_11, "GPIOX_11"),
-	MESON_PIN(GPIOX_12, "GPIOX_12"),
-	MESON_PIN(GPIOX_13, "GPIOX_13"),
-	MESON_PIN(GPIOX_14, "GPIOX_14"),
-	MESON_PIN(GPIOX_15, "GPIOX_15"),
-	MESON_PIN(GPIOX_16, "GPIOX_16"),
-	MESON_PIN(GPIOX_17, "GPIOX_17"),
-	MESON_PIN(GPIOX_18, "GPIOX_18"),
-	MESON_PIN(GPIOCLK_0, "GPIOCLK_0"),
-	MESON_PIN(GPIOCLK_1, "GPIOCLK_1"),
-
-	MESON_PIN(GPIO_TEST_N, "GPIO_TEST_N"),
-
-};
-static struct meson_bank mesongxl_banks[] = {
-	/*   name    first         last
-	 *   pullen  pull     dir     out     in  */
-	BANK("X",    PIN_GPIOX_0,  PIN_GPIOX_18,
-	     4,  0,  4,  0,  12,  0,  13,  0,  14,  0),
-	BANK("DV",  PIN_GPIODV_0, PIN_GPIODV_29,
-	     0,  0,  0,  0,  0,  0,  1,  0,  2,  0),
-	BANK("H",    PIN_GPIOH_0,  PIN_GPIOH_9,
-	     1, 20,  1, 20,  3, 20, 4, 20, 5, 20),
-	BANK("Z",    PIN_GPIOZ_0,  PIN_GPIOZ_15,
-	     3,  0,  3,  0,  9, 0,  10, 0,  11, 0),
-	BANK("CARD", PIN_CARD_0,   PIN_CARD_6,
-	     2, 20,  2, 20,  6, 20,  7, 20,  8, 20),
-	BANK("BOOT", PIN_BOOT_0,   PIN_BOOT_15,
-	     2,  0,  2,  0,  6,  0, 7,  0, 8,  0),
-	BANK("CLK", PIN_GPIOCLK_0,   PIN_GPIOCLK_1,
-	     3,  28,  3,  28,  9,  28, 10,  28, 11,  28),
+	MESON_PIN(GPIO_TEST_N, EE_OFF),
 };
 
-static struct meson_bank mesongxl_ao_banks[] = {
-	/*   name    first         last
-	 *   pullen  pull     dir     out     in  */
-	BANK("AO",   GPIOAO_0, GPIOAO_9,
-	     0,  0,  0, 16,  0,  0,  0, 16,  1,  0),
+static const unsigned int emmc_nand_d07_pins[] = {
+	PIN(BOOT_0, EE_OFF), PIN(BOOT_1, EE_OFF), PIN(BOOT_2, EE_OFF),
+	PIN(BOOT_3, EE_OFF), PIN(BOOT_4, EE_OFF), PIN(BOOT_5, EE_OFF),
+	PIN(BOOT_6, EE_OFF), PIN(BOOT_7, EE_OFF),
 };
 
-static struct meson_domain_data mesongxl_domain_data[] = {
-	{
-		.name		= "banks",
-		.banks		= mesongxl_banks,
-		.num_banks	= ARRAY_SIZE(mesongxl_banks),
-		.pin_base	= 10,
-		.num_pins	= 101,
-	},
-	{
-		.name		= "ao-bank",
-		.banks		= mesongxl_ao_banks,
-		.num_banks	= ARRAY_SIZE(mesongxl_ao_banks),
-		.pin_base	= 0,
-		.num_pins	= 10,
-	},
+static const unsigned int nand_ce0_pins[] = { PIN(BOOT_8, EE_OFF) };
+static const unsigned int nand_ce1_pins[] = { PIN(BOOT_9, EE_OFF) };
+static const unsigned int nand_rb0_pins[] = { PIN(BOOT_10, EE_OFF) };
+static const unsigned int nand_ale_pins[] = { PIN(BOOT_11, EE_OFF) };
+static const unsigned int nand_cle_pins[] = { PIN(BOOT_12, EE_OFF) };
+static const unsigned int nand_wen_clk_pins[] = { PIN(BOOT_13, EE_OFF) };
+static const unsigned int nand_ren_wr_pins[] = { PIN(BOOT_14, EE_OFF) };
+static const unsigned int nand_dqs_pins[] = { PIN(BOOT_15, EE_OFF) };
+
+static const unsigned int tst_clk_0_pins[] = { PIN(BOOT_3, EE_OFF) };
+
+static const unsigned int tst_clk_6_pins[] = { PIN(BOOT_9, EE_OFF) };
+
+
+static const unsigned int emmc_clk_pins[] = { PIN(BOOT_8, EE_OFF) };
+static const unsigned int emmc_cmd_pins[] = { PIN(BOOT_10, EE_OFF) };
+static const unsigned int emmc_ds_pins[] = { PIN(BOOT_15, EE_OFF) };
+
+/*card0*/
+static const unsigned int sdcard_d1_pins[] = { PIN(CARD_0, EE_OFF) };
+/*card1*/
+static const unsigned int sdcard_d0_pins[] = { PIN(CARD_1, EE_OFF) };
+/*card2*/
+static const unsigned int sdcard_clk_pins[] = { PIN(CARD_2, EE_OFF) };
+/*card3*/
+static const unsigned int sdcard_cmd_pins[] = { PIN(CARD_3, EE_OFF) };
+
+static const unsigned int sdcard_d2_pins[] = { PIN(CARD_5, EE_OFF) };
+static const unsigned int sdcard_d3_pins[] = { PIN(CARD_4, EE_OFF) };
+
+static const unsigned int tst_clk_9_pins[] = { PIN(CARD_4, EE_OFF) };
+
+static const unsigned int sdio_d0_pins[]	= { PIN(GPIOX_0, EE_OFF) };
+static const unsigned int sdio_d1_pins[]	= { PIN(GPIOX_1, EE_OFF) };
+static const unsigned int sdio_d2_pins[]	= { PIN(GPIOX_2, EE_OFF) };
+static const unsigned int sdio_d3_pins[]	= { PIN(GPIOX_3, EE_OFF) };
+static const unsigned int sdio_clk_pins[]	= { PIN(GPIOX_4, EE_OFF) };
+static const unsigned int sdio_cmd_pins[]	= { PIN(GPIOX_5, EE_OFF) };
+
+
+static const unsigned int pwm_a_pins[]	= { PIN(GPIOX_6, EE_OFF) };
+
+static const unsigned int sdio_irq_pins[]	= { PIN(GPIOX_7, EE_OFF) };
+static const unsigned int pwm_f_pins[]	= { PIN(GPIOX_7, EE_OFF) };
+
+static const unsigned int uart_tx_a_pins[]	= { PIN(GPIOX_12, EE_OFF) };
+static const unsigned int uart_rx_a_pins[]	= { PIN(GPIOX_13, EE_OFF) };
+static const unsigned int uart_cts_a_pins[] = { PIN(GPIOX_14, EE_OFF) };
+static const unsigned int uart_rts_a_pins[] = { PIN(GPIOX_15, EE_OFF) };
+
+static const unsigned int pwm_e_pins[]	= { PIN(GPIOX_16, EE_OFF) };
+
+
+ /*bank H*/
+static const unsigned int hdmi_hpd_pins[]	= { PIN(GPIOH_0, EE_OFF) };
+static const unsigned int hdmi_sda_pins[]	= { PIN(GPIOH_1, EE_OFF) };
+static const unsigned int hdmi_scl_pins[]	= { PIN(GPIOH_2, EE_OFF) };
+
+/*H4*/
+static const unsigned int spdif_out_pins[] = { PIN(GPIOH_4, EE_OFF),
+	/*PIN(GPIOAO_6, 0) */ };
+
+
+/*H6*/
+static const unsigned int jtag_clk_0_pins[] = { PIN(GPIOH_6, EE_OFF) };
+static const unsigned int jtag_clk_1_pins[] = { PIN(CARD_2, EE_OFF) };
+
+static const unsigned int i2s_am_clk_pins[] = { PIN(GPIOH_6, EE_OFF) };
+static const unsigned int tsin_clk_b_h6_pins[] = { PIN(GPIOH_6, EE_OFF) };
+
+/*H7*/
+static const unsigned int jtag_tms_0_pins[] = { PIN(GPIOH_7, EE_OFF) };
+static const unsigned int jtag_tms_1_pins[] = { PIN(CARD_3, EE_OFF) };
+
+static const unsigned int i2s_ao_clk_out_pins[] = { PIN(GPIOH_7, EE_OFF) };
+static const unsigned int i2s_ao_clk_in_h7_pins[] = { PIN(GPIOH_7, EE_OFF) };
+static const unsigned int tsin_d0_b_h7_pins[] = { PIN(GPIOH_7, EE_OFF) };
+
+/*H8*/
+static const unsigned int jtag_tdi_0_pins[] = { PIN(GPIOH_8, EE_OFF) };
+static const unsigned int jtag_tdi_1_pins[] = { PIN(CARD_0, EE_OFF) };
+
+
+static const unsigned int i2s_lr_clk_out_pins[] = { PIN(GPIOH_8, EE_OFF) };
+static const unsigned int i2s_lr_clk_in_h8_pins[] = { PIN(GPIOH_8, EE_OFF) };
+static const unsigned int tsin_sop_b_h8_pins[] = { PIN(GPIOH_8, EE_OFF) };
+
+
+/*H8*/
+static const unsigned int jtag_tdo_0_pins[] = { PIN(GPIOH_9, EE_OFF) };
+static const unsigned int jtag_tdo_1_pins[] = { PIN(CARD_1, EE_OFF) };
+
+static const unsigned int i2sout_ch01_pins[] = { PIN(GPIOH_9, EE_OFF) };
+static const unsigned int tsin_d_valid_b_h9_pins[] = { PIN(GPIOH_9, EE_OFF) };
+
+
+
+static const unsigned int lcd_vs_pins[]	= { PIN(GPIODV_24, EE_OFF) };
+static const unsigned int dmic_in_pins[]	= { PIN(GPIODV_24, EE_OFF) };
+static const unsigned int tcon_stv1_pins[]	= { PIN(GPIODV_24, EE_OFF) };
+
+static const unsigned int uart_tx_b_pins[]	= { PIN(GPIODV_24, EE_OFF) };
+static const unsigned int uart_rx_b_pins[]	= { PIN(GPIODV_25, EE_OFF) };
+static const unsigned int uart_cts_b_pins[]	= { PIN(GPIODV_26, EE_OFF) };
+static const unsigned int uart_rts_b_pins[]	= { PIN(GPIODV_27, EE_OFF) };
+
+static const unsigned int i2c_sda_a_pins[]	= { PIN(GPIODV_24, EE_OFF) };
+static const unsigned int i2c_scl_a_pins[]	= { PIN(GPIODV_25, EE_OFF) };
+
+static const unsigned int i2c_sda_b_pins[]	= { PIN(GPIODV_26, EE_OFF) };
+static const unsigned int i2c_scl_b_pins[]	= { PIN(GPIODV_27, EE_OFF) };
+
+
+static const unsigned int i2c_sda_c_pins[]	= { PIN(GPIODV_28, EE_OFF) };
+static const unsigned int i2c_scl_c_pins[]	= { PIN(GPIODV_29, EE_OFF) };
+
+static const unsigned int i2c_sda_c_1_pins[]	= { PIN(GPIODV_18, EE_OFF) };
+static const unsigned int i2c_scl_c_1_pins[]	= { PIN(GPIODV_19, EE_OFF) };
+
+
+static const unsigned int uart_tx_c_pins[]	= { PIN(GPIOX_8, EE_OFF) };
+static const unsigned int uart_rx_c_pins[]	= { PIN(GPIOX_9, EE_OFF) };
+static const unsigned int uart_cts_c_pins[] = { PIN(GPIOX_10, EE_OFF) };
+static const unsigned int uart_rts_c_pins[] = { PIN(GPIOX_11, EE_OFF) };
+
+static const unsigned int pcm_out_a_pins[]	= { PIN(GPIOX_8, EE_OFF) };
+static const unsigned int pcm_in_a_pins[]	= { PIN(GPIOX_9, EE_OFF) };
+static const unsigned int pcm_fs_a_pins[] = { PIN(GPIOX_10, EE_OFF) };
+static const unsigned int pcm_clk_a_pins[] = { PIN(GPIOX_11, EE_OFF) };
+
+static const unsigned int i2c_sda_d_pins[] = { PIN(GPIOX_10, EE_OFF) };
+static const unsigned int i2c_scl_d_pins[] = { PIN(GPIOX_11, EE_OFF) };
+
+/*z0*/
+static const unsigned int eth_mdio_pins[]	= { PIN(GPIOZ_0, EE_OFF) };
+static const unsigned int i2s_ao_clk_in_pins[]	= { PIN(GPIOZ_0, EE_OFF) };
+static const unsigned int tsin_d_valid_b_pins[]	= { PIN(GPIOZ_0, EE_OFF) };
+static const unsigned int dvp_vs_pins[]	= { PIN(GPIOZ_0, EE_OFF) };
+
+/*z1*/
+static const unsigned int eth_mdc_pins[]	= { PIN(GPIOZ_1, EE_OFF) };
+static const unsigned int i2s_lr_clk_in_pins[]	= { PIN(GPIOZ_1, EE_OFF) };
+static const unsigned int tsin_sop_b_pins[]	= { PIN(GPIOZ_1, EE_OFF) };
+static const unsigned int dvp_hs_pins[]	= { PIN(GPIOZ_1, EE_OFF) };
+/*z2*/
+static const unsigned int eth_clk_rx_clk_pins[]	= { PIN(GPIOZ_2, EE_OFF) };
+static const unsigned int i2sin_ch23_pins[]	= { PIN(GPIOZ_2, EE_OFF) };
+static const unsigned int tsin_d0_b_pins[]	= { PIN(GPIOZ_2, EE_OFF) };
+/*z3*/
+static const unsigned int eth_rx_dv_pins[]	= { PIN(GPIOZ_3, EE_OFF) };
+static const unsigned int i2sin_ch45_pins[]	= { PIN(GPIOZ_3, EE_OFF) };
+static const unsigned int tsin_clk_b_pins[]	= { PIN(GPIOZ_3, EE_OFF) };
+static const unsigned int dvp_clk_pins[]	= { PIN(GPIOZ_3, EE_OFF) };
+/*z4*/
+static const unsigned int eth_rxd0_pins[] = { PIN(GPIOZ_4, EE_OFF) };
+static const unsigned int i2cin_ch67_pins[] = { PIN(GPIOZ_4, EE_OFF) };
+static const unsigned int tsin_fail_b_pins[] = { PIN(GPIOZ_4, EE_OFF) };
+static const unsigned int dvp_d2_pins[] = { PIN(GPIOZ_4, EE_OFF) };
+/*z5*/
+static const unsigned int eth_rxd1_pins[]	= { PIN(GPIOZ_5, EE_OFF) };
+static const unsigned int i2sout_ch23_z5_pins[]	= { PIN(GPIOZ_5, EE_OFF) };
+static const unsigned int dvp_d3_pins[]	= { PIN(GPIOZ_5, EE_OFF) };
+/*z6*/
+static const unsigned int eth_rxd2_pins[]	= { PIN(GPIOZ_6, EE_OFF) };
+static const unsigned int iso7816_clk_pins[]	= { PIN(GPIOZ_6, EE_OFF) };
+static const unsigned int i2sout_ch45_pins[]	= { PIN(GPIOZ_6, EE_OFF) };
+static const unsigned int dvp_d4_pins[]	= { PIN(GPIOZ_6, EE_OFF) };
+
+
+static const unsigned int eth_rxd3_pins[]	= { PIN(GPIOZ_7, EE_OFF) };
+static const unsigned int eth_rgmii_tx_clk_pins[] = { PIN(GPIOZ_8, EE_OFF) };
+static const unsigned int eth_tx_en_pins[]	= { PIN(GPIOZ_9, EE_OFF) };
+static const unsigned int eth_txd0_pins[]	= { PIN(GPIOZ_10, EE_OFF) };
+static const unsigned int eth_txd1_pins[]	= { PIN(GPIOZ_11, EE_OFF) };
+static const unsigned int eth_txd2_pins[]	= { PIN(GPIOZ_12, EE_OFF) };
+static const unsigned int eth_txd3_pins[]	= { PIN(GPIOZ_13, EE_OFF) };
+
+static const unsigned int spi_sclk_0_pins[]	= { PIN(GPIOZ_11, EE_OFF) };
+static const unsigned int spi_miso_0_pins[]	= { PIN(GPIOZ_12, EE_OFF) };
+static const unsigned int spi_mosi_0_pins[]	= { PIN(GPIOZ_13, EE_OFF) };
+
+static const unsigned int spi_sclk_1_pins[]	= { PIN(GPIOX_11, EE_OFF) };
+static const unsigned int spi_miso_1_pins[]	= { PIN(GPIOX_9, EE_OFF) };
+static const unsigned int spi_mosi_1_pins[]	= { PIN(GPIOX_8, EE_OFF) };
+
+
+static const unsigned int spdif_in_pins[]	= { PIN(GPIOZ_14, EE_OFF) };
+static const unsigned int eth_link_led_pins[]	= { PIN(GPIOZ_14, EE_OFF) };
+
+
+
+
+
+/*ao_0*/
+static const unsigned int uart_tx_ao_a_0_pins[]	= { PIN(GPIOAO_0, 0) };
+static const unsigned int uart_rx_ao_a_0_pins[]	= { PIN(GPIOAO_1, 0) };
+
+static const unsigned int uart_tx_ao_a_1_pins[]	= { PIN(CARD_4, 0) };
+static const unsigned int uart_rx_ao_a_1_pins[]	= { PIN(CARD_5, 0) };
+
+
+static struct meson_pmx_group meson_gxl_periphs_groups[] = {
+	GPIO_GROUP(GPIOZ_0, EE_OFF),
+	GPIO_GROUP(GPIOZ_1, EE_OFF),
+	GPIO_GROUP(GPIOZ_2, EE_OFF),
+	GPIO_GROUP(GPIOZ_3, EE_OFF),
+	GPIO_GROUP(GPIOZ_4, EE_OFF),
+	GPIO_GROUP(GPIOZ_5, EE_OFF),
+	GPIO_GROUP(GPIOZ_6, EE_OFF),
+	GPIO_GROUP(GPIOZ_7, EE_OFF),
+	GPIO_GROUP(GPIOZ_8, EE_OFF),
+	GPIO_GROUP(GPIOZ_9, EE_OFF),
+	GPIO_GROUP(GPIOZ_10, EE_OFF),
+	GPIO_GROUP(GPIOZ_11, EE_OFF),
+	GPIO_GROUP(GPIOZ_12, EE_OFF),
+	GPIO_GROUP(GPIOZ_13, EE_OFF),
+	GPIO_GROUP(GPIOZ_14, EE_OFF),
+	GPIO_GROUP(GPIOZ_15, EE_OFF),
+	GPIO_GROUP(GPIOH_0, EE_OFF),
+	GPIO_GROUP(GPIOH_1, EE_OFF),
+	GPIO_GROUP(GPIOH_2, EE_OFF),
+	GPIO_GROUP(GPIOH_3, EE_OFF),
+	GPIO_GROUP(GPIOH_4, EE_OFF),
+	GPIO_GROUP(GPIOH_5, EE_OFF),
+	GPIO_GROUP(GPIOH_6, EE_OFF),
+	GPIO_GROUP(GPIOH_7, EE_OFF),
+	GPIO_GROUP(GPIOH_8, EE_OFF),
+	GPIO_GROUP(GPIOH_9, EE_OFF),
+	GPIO_GROUP(BOOT_0, EE_OFF),
+	GPIO_GROUP(BOOT_1, EE_OFF),
+	GPIO_GROUP(BOOT_2, EE_OFF),
+	GPIO_GROUP(BOOT_3, EE_OFF),
+	GPIO_GROUP(BOOT_4, EE_OFF),
+	GPIO_GROUP(BOOT_5, EE_OFF),
+	GPIO_GROUP(BOOT_6, EE_OFF),
+	GPIO_GROUP(BOOT_7, EE_OFF),
+	GPIO_GROUP(BOOT_8, EE_OFF),
+	GPIO_GROUP(BOOT_9, EE_OFF),
+	GPIO_GROUP(BOOT_10, EE_OFF),
+	GPIO_GROUP(BOOT_11, EE_OFF),
+	GPIO_GROUP(BOOT_12, EE_OFF),
+	GPIO_GROUP(BOOT_13, EE_OFF),
+	GPIO_GROUP(BOOT_14, EE_OFF),
+	GPIO_GROUP(BOOT_15, EE_OFF),
+	GPIO_GROUP(CARD_0, EE_OFF),
+	GPIO_GROUP(CARD_1, EE_OFF),
+	GPIO_GROUP(CARD_2, EE_OFF),
+	GPIO_GROUP(CARD_3, EE_OFF),
+	GPIO_GROUP(CARD_4, EE_OFF),
+	GPIO_GROUP(CARD_5, EE_OFF),
+	GPIO_GROUP(CARD_6, EE_OFF),
+	GPIO_GROUP(GPIODV_0, EE_OFF),
+	GPIO_GROUP(GPIODV_1, EE_OFF),
+	GPIO_GROUP(GPIODV_2, EE_OFF),
+	GPIO_GROUP(GPIODV_3, EE_OFF),
+	GPIO_GROUP(GPIODV_4, EE_OFF),
+	GPIO_GROUP(GPIODV_5, EE_OFF),
+	GPIO_GROUP(GPIODV_6, EE_OFF),
+	GPIO_GROUP(GPIODV_7, EE_OFF),
+	GPIO_GROUP(GPIODV_8, EE_OFF),
+	GPIO_GROUP(GPIODV_9, EE_OFF),
+	GPIO_GROUP(GPIODV_10, EE_OFF),
+	GPIO_GROUP(GPIODV_11, EE_OFF),
+	GPIO_GROUP(GPIODV_12, EE_OFF),
+	GPIO_GROUP(GPIODV_13, EE_OFF),
+	GPIO_GROUP(GPIODV_14, EE_OFF),
+	GPIO_GROUP(GPIODV_15, EE_OFF),
+	GPIO_GROUP(GPIODV_16, EE_OFF),
+	GPIO_GROUP(GPIODV_17, EE_OFF),
+	GPIO_GROUP(GPIODV_18, EE_OFF),
+	GPIO_GROUP(GPIODV_19, EE_OFF),
+	GPIO_GROUP(GPIODV_20, EE_OFF),
+	GPIO_GROUP(GPIODV_21, EE_OFF),
+	GPIO_GROUP(GPIODV_22, EE_OFF),
+	GPIO_GROUP(GPIODV_23, EE_OFF),
+	GPIO_GROUP(GPIODV_24, EE_OFF),
+	GPIO_GROUP(GPIODV_25, EE_OFF),
+	GPIO_GROUP(GPIODV_26, EE_OFF),
+	GPIO_GROUP(GPIODV_27, EE_OFF),
+	GPIO_GROUP(GPIODV_28, EE_OFF),
+	GPIO_GROUP(GPIODV_29, EE_OFF),
+	GPIO_GROUP(GPIOX_0, EE_OFF),
+	GPIO_GROUP(GPIOX_1, EE_OFF),
+	GPIO_GROUP(GPIOX_2, EE_OFF),
+	GPIO_GROUP(GPIOX_3, EE_OFF),
+	GPIO_GROUP(GPIOX_4, EE_OFF),
+	GPIO_GROUP(GPIOX_5, EE_OFF),
+	GPIO_GROUP(GPIOX_6, EE_OFF),
+	GPIO_GROUP(GPIOX_7, EE_OFF),
+	GPIO_GROUP(GPIOX_8, EE_OFF),
+	GPIO_GROUP(GPIOX_9, EE_OFF),
+	GPIO_GROUP(GPIOX_10, EE_OFF),
+	GPIO_GROUP(GPIOX_11, EE_OFF),
+	GPIO_GROUP(GPIOX_12, EE_OFF),
+	GPIO_GROUP(GPIOX_13, EE_OFF),
+	GPIO_GROUP(GPIOX_14, EE_OFF),
+	GPIO_GROUP(GPIOX_15, EE_OFF),
+	GPIO_GROUP(GPIOX_16, EE_OFF),
+	GPIO_GROUP(GPIOX_17, EE_OFF),
+	GPIO_GROUP(GPIOX_18, EE_OFF),
+	GPIO_GROUP(GPIOCLK_0, EE_OFF),
+	GPIO_GROUP(GPIOCLK_1, EE_OFF),
+
+	GPIO_GROUP(GPIO_TEST_N, EE_OFF),
+
+	/* Bank X */
+	GROUP(uart_tx_a,	 5,	19),
+	GROUP(uart_rx_a,	 5,	18),
+	GROUP(uart_cts_a, 5,	17),
+	GROUP(uart_rts_a,	 5,	16),
+
+	GROUP(uart_tx_c,	 5,	13),
+	GROUP(uart_rx_c,	 5,	12),
+	GROUP(uart_cts_c, 5,	11),
+	GROUP(uart_rts_c,	 5,	10),
+
+
+	GROUP(pcm_out_a,  5,	23),
+	GROUP(pcm_in_a,  5,	22),
+	GROUP(pcm_fs_a,  5,	21),
+	GROUP(pcm_clk_a,  5,	20),
+
+
+	GROUP(pwm_e,	 5,	15),
+
+	GROUP(sdio_d0,		5,	31),	/*x0*/
+	GROUP(sdio_d1,		5,	30),	/*x1*/
+	GROUP(sdio_d2,		5,	29),	/*x2*/
+	GROUP(sdio_d3,		5,	28),	/*x3*/
+	GROUP(sdio_clk,		5,	27),	/*x4*/
+	GROUP(sdio_cmd,		5,	26),	/*x5*/
+
+
+	GROUP(pwm_a,		5,	25),	/*x6*/
+
+	GROUP(sdio_irq,		5,	24),	/*x7*/
+	GROUP(pwm_f,		5,	14),	/*x7*/
+
+	GROUP(i2c_sda_d,		5,	5),	/*x10*/
+	GROUP(i2c_sda_d,		5,	4),	/*x11*/
+
+	GROUP(spi_sclk_1,		5,	3),/*x8*/
+	GROUP(spi_miso_1,	5,	2),/*x9*/
+	GROUP(spi_mosi_1,	5,	0),/*x11*/
+
+
+
+	/* Bank H */
+	GROUP(hdmi_hpd,		6,	31),	/*H0*/
+	GROUP(hdmi_sda,		6,	30),	/*H1*/
+	GROUP(hdmi_scl,		6,	29),	/*H2*/
+
+	GROUP(spdif_out,		6,	28),	/*H4*/
+
+
+	GROUP(i2s_am_clk,		6,	26),	/*H6*/
+	GROUP(i2s_ao_clk_out,		6,	25),	/*H7*/
+	GROUP(i2s_lr_clk_out,		6,	24),	/*H8*/
+	GROUP(i2sout_ch01,		6,	23),	/*H9*/
+
+
+	GROUP(tsin_clk_b_h6,		6,	20),	/*H6*/
+
+	GROUP(i2s_ao_clk_in_h7,	6,	22),	/*H7*/
+	GROUP(tsin_d0_b_h7,		6,	19),	/*H7*/
+
+	GROUP(i2s_lr_clk_in_h8,	6,	21),	/*H8*/
+	GROUP(tsin_sop_b_h8,		6,	18),	/*H8*/
+
+	GROUP(tsin_d_valid_b_h9,	6,	17), /*H9*/
+
+
+	/* Bank Z */
+	GROUP(eth_mdio,		4,	23),	/*z0*/
+	GROUP(eth_mdc,		4,	22), /*z1*/
+	GROUP(eth_clk_rx_clk,	4,	21), /*z2*/
+	GROUP(eth_rx_dv,		4,	20), /*z3*/
+	GROUP(eth_rxd0,		4,	19), /*z4*/
+	GROUP(eth_rxd1,		4,	18),	/*z5*/
+	GROUP(eth_rxd2,		4,	17),	/*z6*/
+	GROUP(eth_rxd3,		4,	16),	/*z7*/
+	GROUP(eth_rgmii_tx_clk, 4,	15),	/*z8*/
+	GROUP(eth_tx_en,		4,	14),	/*z9*/
+	GROUP(eth_txd0,		4,	13),/*z10*/
+	GROUP(eth_txd1,		4,	12),/*z11*/
+	GROUP(eth_txd2,		4,	11),/*z12*/
+	GROUP(eth_txd3,		4,	10),/*z13*/
+
+	GROUP(i2s_ao_clk_in,	3,	31),	/*z0*/
+	GROUP(tsin_d_valid_b,	3,	19),	/*z0*/
+	GROUP(dvp_vs,		3,	14),	/*z0*/
+
+	GROUP(i2s_lr_clk_in,	3,	30), /*z1*/
+	GROUP(tsin_sop_b,	3,	18), /*z1*/
+	GROUP(dvp_hs,		3,	13), /*z1*/
+
+	GROUP(i2sin_ch23,	3,	29), /*z2*/
+	GROUP(tsin_d0_b,		3,	17), /*z2*/
+
+
+	GROUP(i2sin_ch45,	3,	28), /*z3*/
+	GROUP(tsin_clk_b,		3,	16), /*z3*/
+	GROUP(dvp_clk,		3,	12), /*z3*/
+
+	GROUP(i2cin_ch67,	3,	27), /*z4*/
+	GROUP(tsin_fail_b,		3,	15), /*z4*/
+	GROUP(dvp_d2,		3,	11), /*z4*/
+
+	GROUP(i2sout_ch23_z5, 3,	26),	/*z5*/
+	GROUP(dvp_d3,		3,	11),	/*z5*/
+
+	GROUP(iso7816_clk,	4,	9),	/*z6*/
+	GROUP(i2sout_ch45,	3,	25),	/*z6*/
+	GROUP(dvp_d4,		3,	11),	/*z6*/
+
+
+	GROUP(spi_sclk_0,		4,	4),/*z11*/
+	GROUP(spi_miso_0,	4,	3),/*z12*/
+	GROUP(spi_mosi_0,	4,	2),/*z13*/
+
+	GROUP(spdif_in,		3,	21),
+	GROUP(eth_link_led,	4,	25),
+
+
+
+
+
+	/* Bank DV */
+	GROUP(uart_tx_b,	 2,	16),
+	GROUP(uart_rx_b,	 2,	15),
+	GROUP(uart_cts_b, 2,	14),
+	GROUP(uart_rts_b, 2,	13),
+
+	GROUP(lcd_vs,	3,	4),	/* dv24 */
+	GROUP(dmic_in,	2,	7),
+	GROUP(tcon_stv1,	1,	22),
+	GROUP(i2c_sda_a,	1,	15),
+
+	GROUP(i2c_sda_a,	1,	15), /*dv24*/
+	GROUP(i2c_scl_a,	1,	14), /*dv25*/
+
+	GROUP(i2c_sda_b,	1,	13), /*dv26*/
+	GROUP(i2c_scl_b,	1,	12), /*dv27*/
+
+	GROUP(i2c_sda_c,	1,	11), /*dv28*/
+	GROUP(i2c_scl_c,	1,	10), /*dv29*/
+
+	GROUP(i2c_sda_c_1,	1,	17), /*dv18*/
+	GROUP(i2c_scl_c_1,	1,	16), /*dv19*/
+
+	/* Bank BOOT */
+	GROUP(emmc_nand_d07, 7,	31),
+	GROUP(emmc_clk,		7,	30),
+	GROUP(emmc_cmd,	7,	29),
+	GROUP(emmc_ds,		7,	28),
+
+	GROUP(tst_clk_0,		7,	23),	/*boot3*/
+
+	GROUP(tst_clk_6, 7,	17),	/*boot9*/
+
+	GROUP(nand_ce0,		7,	7),	/*boot8*/
+	GROUP(nand_ce1,		7,	6),	/*boot9*/
+	GROUP(nand_rb0,		7,	5),	/*boot10*/
+	GROUP(nand_ale,		7,	4),	/*boot11*/
+	GROUP(nand_cle,		7,	3),	/*boot12*/
+	GROUP(nand_wen_clk,	7,	2),	/*boot13*/
+	GROUP(nand_ren_wr,	7,	1),	/*boot14*/
+	GROUP(nand_dqs,		7,	0),	/*boot15*/
+
+	/* Bank CARD */
+	GROUP(sdcard_d1,	 6,	5), /*card0*/
+	GROUP(sdcard_d0, 6,	4), /*card1*/
+	GROUP(sdcard_clk, 6,	3), /*card2*/
+	GROUP(sdcard_cmd, 6,	2), /*card3*/
+	GROUP(sdcard_d3,	 6,	1), /*card4*/
+	GROUP(sdcard_d2, 6,	0), /*card5*/
+
+	GROUP(uart_tx_ao_a_1,	6,	9),	/*card4*/
+	GROUP(uart_rx_ao_a_1,	6,	8),	/*card5*/
+
+	GROUP(tst_clk_9,	6,	7),		/*card4*/
+
+#if 0
+	GROUP(jtag_tdi_0,		0,	0xff),
+	GROUP(jtag_tdo_0,	0,	0xff),
+	GROUP(jtag_clk_0,		0,	0xff),
+	GROUP(jtag_tms_0,	0,	0xff),
+	GROUP(jtag_tdi_1,		0,	0xff),
+	GROUP(jtag_tdo_1,	0,	0xff),
+	GROUP(jtag_clk_1,		0,	0xff),
+	GROUP(jtag_tms_1,	0,	0xff),
+#endif
+};
+
+
+static const struct pinctrl_pin_desc meson_gxl_aobus_pins[] = {
+	MESON_PIN(GPIOAO_0, 0),
+	MESON_PIN(GPIOAO_1, 0),
+	MESON_PIN(GPIOAO_2, 0),
+	MESON_PIN(GPIOAO_3, 0),
+	MESON_PIN(GPIOAO_4, 0),
+	MESON_PIN(GPIOAO_5, 0),
+	MESON_PIN(GPIOAO_6, 0),
+	MESON_PIN(GPIOAO_7, 0),
+	MESON_PIN(GPIOAO_8, 0),
+	MESON_PIN(GPIOAO_9, 0),
+};
+
+
+static const unsigned int uart_tx_ao_b_0_pins[]	= { PIN(GPIOAO_4, 0) };
+static const unsigned int uart_rx_ao_b_0_pins[]	= { PIN(GPIOAO_5, 0) };
+
+static const unsigned int uart_tx_ao_b_1_pins[]	= { PIN(GPIOAO_0, 0) };
+static const unsigned int uart_rx_ao_b_1_pins[]	= { PIN(GPIOAO_1, 0) };
+
+
+static const unsigned int uart_cts_ao_a_pins[]	= { PIN(GPIOAO_2, 0) };
+static const unsigned int uart_rts_ao_a_pins[]	= { PIN(GPIOAO_3, 0) };
+static const unsigned int uart_cts_ao_b_pins[]	= { PIN(GPIOAO_2, 0) };
+static const unsigned int uart_rts_ao_b_pins[]	= { PIN(GPIOAO_3, 0) };
+
+static const unsigned int pwm_ao_a_pins[]	= { PIN(GPIOAO_3, 0) };
+
+static const unsigned int i2c_sck_ao_pins[] = {PIN(GPIOAO_4, 0) };
+static const unsigned int i2c_sda_ao_pins[] = {PIN(GPIOAO_5, 0) };
+static const unsigned int i2c_slave_sck_ao_pins[] = {PIN(GPIOAO_4, 0) };
+static const unsigned int i2c_slave_sda_ao_pins[] = {PIN(GPIOAO_5, 0) };
+
+static const unsigned int pwm_ao_b_pins[] = { PIN(GPIOAO_6, 0) };
+
+static const unsigned int remote_input_pins[] = { PIN(GPIOAO_7, 0) };
+static const unsigned int remote_output_pins[] = { PIN(GPIOAO_7, 0),
+	/*PIN(GPIOAO_9, 0)*/ };
+
+static const unsigned int ao_cec_pins[] = { PIN(GPIOAO_8, 0) };
+static const unsigned int ee_cec_pins[] = { PIN(GPIOAO_8, 0) };
+static const unsigned int i2sout_ch23_ao8_pins[] = { PIN(GPIOAO_8, 0) };
+static const unsigned int pwm_ao_a_1_pins[] = { PIN(GPIOAO_8, 0) };
+
+static const unsigned int spdid_out_1_pins[] = { PIN(GPIOAO_9, 0) };
+static const unsigned int i2sout_ch45_ao9_pins[] = { PIN(GPIOAO_9, 0) };
+static const unsigned int pwm_ao_b_1_pins[] = { PIN(GPIOAO_9, 0) };
+
+static struct meson_pmx_group meson_gxl_aobus_groups[] = {
+	GPIO_GROUP(GPIOAO_0, 0),
+	GPIO_GROUP(GPIOAO_1, 0),
+	GPIO_GROUP(GPIOAO_2, 0),
+	GPIO_GROUP(GPIOAO_3, 0),
+	GPIO_GROUP(GPIOAO_4, 0),
+	GPIO_GROUP(GPIOAO_5, 0),
+	GPIO_GROUP(GPIOAO_6, 0),
+	GPIO_GROUP(GPIOAO_7, 0),
+	GPIO_GROUP(GPIOAO_8, 0),
+	GPIO_GROUP(GPIOAO_9, 0),
+
+	/* bank AO */
+	GROUP(uart_tx_ao_b_1, 0,	26),
+	GROUP(uart_rx_ao_b_1,	0,	25), /*ao_1*/
+	GROUP(uart_tx_ao_a_0,	0,	12), /*ao_0*/
+	GROUP(uart_rx_ao_a_0,	0,	11), /*ao_1*/
+	GROUP(uart_cts_ao_a,	0,	10),
+	GROUP(uart_rts_ao_a,	0,	9),
+	GROUP(uart_cts_ao_b,	0,	8),
+	GROUP(uart_rts_ao_b,	0,	7),
+	GROUP(i2c_sck_ao,	0,	6),
+	GROUP(i2c_sda_ao,	0,	5),
+	GROUP(i2c_slave_sck_ao, 0,	2),
+	GROUP(i2c_slave_sda_ao, 0,	1),
+
+	/* add  GPIOAO_3 */
+	GROUP(pwm_ao_a, 0,	22),
+
+	GROUP(uart_tx_ao_b_0, 0,	24),	/*ao4*/
+	GROUP(uart_rx_ao_b_0, 0,	23),	/*ao5*/
+
+	GROUP(spdif_out, 0,	16),
+	GROUP(pwm_ao_b, 0,	18),
+
+	GROUP(remote_input, 0,  0),	  /*ao7*/
+	GROUP(remote_output, 0, 21), /*ao7*/
+
+	GROUP(ao_cec, 0, 15),
+	GROUP(ee_cec, 0, 14),
+	GROUP(i2sout_ch23_ao8, 2, 0),
+	GROUP(pwm_ao_a_1, 0, 17),
+
+	GROUP(remote_output, 0, 31),/*ao9*/
+	GROUP(spdid_out_1, 0, 4),
+	GROUP(i2sout_ch45_ao9, 2, 1),
+	GROUP(pwm_ao_b_1, 0, 3),
+};
+
+static const char * const gpio_periphs_groups[] = {
+	"GPIOZ_0", "GPIOZ_1", "GPIOZ_2", "GPIOZ_3", "GPIOZ_4",
+	"GPIOZ_5", "GPIOZ_6", "GPIOZ_7", "GPIOZ_8", "GPIOZ_9",
+	"GPIOZ_10", "GPIOZ_11", "GPIOZ_12", "GPIOZ_13", "GPIOZ_14",
+	"GPIOZ_15",
+
+	"GPIOH_0", "GPIOH_1", "GPIOH_2", "GPIOH_3", "GPIOH_4",
+	"GPIOH_5", "GPIOH_6", "GPIOH_7", "GPIOH_8", "GPIOH_9",
+
+	"BOOT_0", "BOOT_1", "BOOT_2", "BOOT_3", "BOOT_4",
+	"BOOT_5", "BOOT_6", "BOOT_7", "BOOT_8", "BOOT_9",
+	"BOOT_10", "BOOT_11", "BOOT_12", "BOOT_13", "BOOT_14", "BOOT_15",
+
+	"CARD_0", "CARD_1", "CARD_2", "CARD_3", "CARD_4",
+	"CARD_5", "CARD_6",
+
+	"GPIODV_0", "GPIODV_1", "GPIODV_2", "GPIODV_3", "GPIODV_4",
+	"GPIODV_5", "GPIODV_6", "GPIODV_7", "GPIODV_8", "GPIODV_9",
+	"GPIODV_10", "GPIODV_11", "GPIODV_12", "GPIODV_13", "GPIODV_14",
+	"GPIODV_15", "GPIODV_16", "GPIODV_17", "GPIODV_18", "GPIODV_19",
+	"GPIODV_20", "GPIODV_21", "GPIODV_22", "GPIODV_23", "GPIODV_24",
+	"GPIODV_25", "GPIODV_26", "GPIODV_27", "GPIODV_28", "GPIODV_29",
+
+	"GPIOX_0", "GPIOX_1", "GPIOX_2", "GPIOX_3", "GPIOX_4",
+	"GPIOX_5", "GPIOX_6", "GPIOX_7", "GPIOX_8", "GPIOX_9",
+	"GPIOX_10", "GPIOX_11", "GPIOX_12", "GPIOX_13", "GPIOX_14",
+	"GPIOX_15", "GPIOX_16", "GPIOX_17", "GPIOX_18",
+
+	"GPIO_TEST_N",
+};
+
+static const char * const emmc_groups[] = {
+	"emmc_nand_d07", "emmc_clk", "emmc_cmd", "emmc_ds",
+};
+
+static const char * const sdcard_groups[] = {
+	"sdcard_d0", "sdcard_d1", "sdcard_d2", "sdcard_d3",
+	"sdcard_cmd", "sdcard_clk",
+};
+
+
+static const char * const uart_a_groups[] = {
+	"uart_tx_a", "uart_rx_a", "uart_cts_a", "uart_rts_a",
+};
+
+static const char * const uart_b_groups[] = {
+	"uart_tx_b", "uart_rx_b", "uart_cts_b", "uart_rts_b",
+};
+
+static const char * const uart_c_groups[] = {
+	"uart_tx_c", "uart_rx_c", "uart_cts_c", "uart_rts_c",
+};
+
+static const char * const eth_groups[] = {
+	"eth_mdio", "eth_mdc", "eth_clk_rx_clk", "eth_rx_dv",
+	"eth_rxd0", "eth_rxd1", "eth_rxd2", "eth_rxd3",
+	"eth_rgmii_tx_clk", "eth_tx_en",
+	"eth_txd0", "eth_txd1", "eth_txd2", "eth_txd3",
+};
+
+
+static const char * const jtag_groups[] = {
+	"jtag_tdi_0", "jtag_tdo_0", "jtag_clk_0", "jtag_tms_0",
+	"jtag_tdi_1", "jtag_tdo_1", "jtag_clk_1", "jtag_tms_1",
+};
+
+static const char * const pwm_e_groups[] = {
+	"pwm_e",
+};
+
+
+static const char * const pcm_a_groups[] = {
+	"pcm_out_a", "pcm_in_a", "pcm_fs_a", "pcm_clk_a",
+};
+
+static const char * const spdif_out_groups[] = {
+	"spdif_out",
+};
+
+
+static const char * const spi_groups[] = {
+	"spi_sclk_0", "spi_miso_0", "spi_mosi_0",
+	"spi_sclk_1", "spi_miso_1", "spi_mosi_1",
+};
+
+
+
+
+
+
+static const char * const nand_groups[] = {
+	"emmc_nand_d07", "nand_ce0", "nand_ce1", "nand_rb0", "nand_ale",
+	"nand_cle", "nand_wen_clk", "nand_ren_wr", "nand_dqs",
+};
+
+static const char * const hdmi_hpd_groups[] = {
+	"hdmi_hpd",
+};
+
+static const char * const hdmi_ddc_groups[] = {
+	"hdmi_sda", "hdmi_scl",
+};
+
+static const char * const i2c_a_groups[] = {
+	"i2c_sda_a", "i2c_scl_a",
+};
+
+static const char * const i2c_b_groups[] = {
+	"i2c_sda_b", "i2c_scl_b",
+};
+
+static const char * const i2c_c_groups[] = {
+	"i2c_sda_c", "i2c_scl_c",
+};
+
+static const char * const i2c_c_1_groups[] = {
+	"i2c_sda_c_1", "i2c_scl_c_1",
+};
+
+static const char * const i2c_d_groups[] = {
+	"i2c_sda_d", "i2c_sda_d",
+};
+
+static const char * const i2s_groups[] = {
+	"i2s_am_clk", "i2s_ao_clk_out", "i2s_lr_clk_out", "i2sout_ch01",
+};
+
+static const char * const sdio_groups[] = {
+	"sdio_d0", "sdio_d1", "sdio_d2", "sdio_d3", "sdio_clk", "sdio_cmd",
+};
+
+static const char * const uart_ao_a_1_groups[] = {
+	"uart_tx_ao_a_1", "uart_rx_ao_a_1",
+};
+
+static struct meson_pmx_func meson_gxl_periphs_functions[] = {
+	FUNCTION(gpio_periphs),
+	FUNCTION(emmc),
+	FUNCTION(sdcard),
+	FUNCTION(uart_a),
+	FUNCTION(uart_b),
+	FUNCTION(uart_c),
+	FUNCTION(eth),
+	FUNCTION(jtag),
+	FUNCTION(pwm_e),
+	FUNCTION(pcm_a),
+	FUNCTION(spdif_out),
+	FUNCTION(i2s),
+	FUNCTION(spi),
+	FUNCTION(i2c_a),
+	FUNCTION(i2c_b),
+	FUNCTION(i2c_c),
+	FUNCTION(i2c_d),
+	FUNCTION(hdmi_ddc),
+	FUNCTION(hdmi_hpd),
+	FUNCTION(nand),
+	FUNCTION(sdio),
+	FUNCTION(uart_ao_a_1),
 
 };
-#define NE 0xffffffff
-#define PK(reg, bit) ((reg<<5)|bit)
-static unsigned int gpio_to_pin[][6] = {
-	[PIN_GPIOX_0] = {PK(5, 31), NE, NE, NE, NE, NE,},
-	[PIN_GPIOX_1] = {PK(5, 30), NE, NE, NE, NE, NE,},
-	[PIN_GPIOX_2] = {PK(5, 29), NE, NE, NE, NE, NE,},
-	[PIN_GPIOX_3] = {PK(5, 28), NE, NE, NE, NE, NE,},
-	[PIN_GPIOX_4] = {PK(5, 27), NE, NE, NE, NE, NE,},
-	[PIN_GPIOX_5] = {PK(5, 26), NE, NE, NE, NE, NE,},
-	[PIN_GPIOX_6] = {PK(5, 25), NE, NE, NE, NE, NE,},
-	[PIN_GPIOX_7] = {PK(5, 24), PK(5, 14), NE, NE, NE, NE,},
-	[PIN_GPIOX_8] = {PK(5, 23), PK(5, 13), PK(5, 3), NE, NE, NE,},
-	[PIN_GPIOX_9] = {PK(5, 22), PK(5, 12), PK(5, 2), NE, NE, NE,},
-	[PIN_GPIOX_10] = {PK(5, 21), PK(5, 11), PK(5, 5), PK(5, 1), NE, NE,},
-	[PIN_GPIOX_11] = {PK(5, 20), PK(5, 10), PK(5, 4), PK(5, 0), NE, NE,},
-	[PIN_GPIOX_12] = {PK(5, 19), PK(5, 9), NE, NE, NE, NE,},
-	[PIN_GPIOX_13] = {PK(5, 18), PK(5, 8), NE, NE, NE, NE,},
-	[PIN_GPIOX_14] = {PK(5, 17), PK(5, 7), NE, NE, NE, NE,},
-	[PIN_GPIOX_15] = {PK(5, 16), PK(5, 6), NE, NE, NE, NE,},
-	[PIN_GPIOX_16] = {PK(5, 15), NE, NE, NE, NE, NE,},
-	[PIN_GPIOX_17] = {NE, NE, NE, NE, NE, NE,},
-	[PIN_GPIOX_18] = {NE, NE, NE, NE, NE, NE,},
 
-	[PIN_BOOT_0] = {PK(7, 31), NE, NE, NE, NE, NE,},
-	[PIN_BOOT_1] = {PK(7, 31), NE, NE, NE, NE, NE,},
-	[PIN_BOOT_2] = {PK(7, 31), NE, NE, NE, NE, NE,},
-	[PIN_BOOT_3] = {PK(7, 23), PK(7, 31), NE, NE, NE, NE,},
-	[PIN_BOOT_4] = {PK(7, 22), PK(7, 31), NE, NE, NE, NE,},
-	[PIN_BOOT_5] = {PK(7, 21), PK(7, 31), NE, NE, NE, NE,},
-	[PIN_BOOT_6] = {PK(7, 20), PK(7, 31), NE, NE, NE, NE,},
-	[PIN_BOOT_7] = {PK(7, 19), PK(7, 31), NE, NE, NE, NE,},
-	[PIN_BOOT_8] = {PK(7, 18), PK(7, 30), PK(7, 7), NE, NE, NE,},
-	[PIN_BOOT_9] = {PK(7, 17), PK(7, 6), NE, NE, NE, NE,},
-	[PIN_BOOT_10] = {PK(7, 16), PK(7, 29), PK(7, 5), NE, NE, NE,},
-	[PIN_BOOT_11] = {PK(7, 15), PK(7, 4), PK(7, 13), NE, NE, NE,},
-	[PIN_BOOT_12] = {PK(7, 3), PK(7, 12), NE, NE, NE, NE,},
-	[PIN_BOOT_13] = {PK(7, 2), PK(7, 11), NE, NE, NE, NE,},
-	[PIN_BOOT_14] = {PK(7, 1), NE, NE, NE, NE, NE,},
-	[PIN_BOOT_15] = {PK(7, 28), PK(7, 0), PK(7, 10), NE, NE, NE,},
-
-	[PIN_GPIOH_0] = {PK(6, 31), NE, NE, NE, NE, NE,},
-	[PIN_GPIOH_1] = {PK(6, 30), NE, NE, NE, NE, NE,},
-	[PIN_GPIOH_2] = {PK(6, 29), NE, NE, NE, NE, NE,},
-	[PIN_GPIOH_3] = {NE, NE, NE, NE, NE, NE,},
-	[PIN_GPIOH_4] = {PK(6, 28), PK(6, 27), NE, NE, NE, NE,},
-	[PIN_GPIOH_5] = {NE, NE, NE, NE, NE, NE,},
-	[PIN_GPIOH_6] = {PK(6, 26), PK(6, 20), NE, NE, NE, NE,},
-	[PIN_GPIOH_7] = {PK(6, 25), PK(6, 22), PK(6, 19), NE, NE, NE,},
-	[PIN_GPIOH_8] = {PK(6, 24), PK(6, 21), PK(6, 18), NE, NE, NE,},
-	[PIN_GPIOH_9] = {PK(6, 23), PK(6, 17), NE, NE, NE, NE,},
-
-	[PIN_GPIOZ_0] = {PK(4, 23), PK(3, 31), PK(3, 19), PK(3, 14), NE, NE,},
-	[PIN_GPIOZ_1] = {PK(4, 22), PK(3, 30), PK(3, 18), PK(3, 13), NE, NE,},
-	[PIN_GPIOZ_2] = {PK(4, 21), PK(3, 29), PK(3, 17), NE, NE, NE,},
-	[PIN_GPIOZ_3] = {PK(4, 20), PK(3, 28), PK(3, 16), PK(3, 12), NE, NE,},
-	[PIN_GPIOZ_4] = {PK(4, 19), PK(3, 27), PK(3, 15), PK(3, 11), NE, NE,},
-	[PIN_GPIOZ_5] = {PK(4, 18), PK(3, 26), PK(3, 11), NE, NE, NE,},
-	[PIN_GPIOZ_6] = {PK(4, 17), PK(4, 9), PK(3, 25), PK(3, 11), NE, NE,},
-	[PIN_GPIOZ_7] = {PK(4, 16), PK(4, 8), PK(3, 24), PK(3, 11), NE, NE,},
-	[PIN_GPIOZ_8] = {PK(4, 15), PK(4, 7), PK(3, 23), PK(3, 11), NE, NE,},
-	[PIN_GPIOZ_9] = {PK(4, 14), PK(4, 6), PK(3, 22), PK(3, 11), NE, NE,},
-	[PIN_GPIOZ_10] = {PK(4, 13), PK(4, 5), PK(3, 11), NE, NE, NE,},
-	[PIN_GPIOZ_11] = {PK(4, 12), PK(4, 4), PK(3, 11), NE, NE, NE,},
-	[PIN_GPIOZ_12] = {PK(4, 11), PK(4, 3), NE, NE, NE, NE,},
-	[PIN_GPIOZ_13] = {PK(4, 10), PK(4, 2), NE, NE, NE, NE,},
-	[PIN_GPIOZ_14] = {PK(3, 21), PK(4, 25), NE, NE, NE, NE,},
-	[PIN_GPIOZ_15] = {PK(3, 20), PK(4, 24), NE, NE, NE, NE,},
-
-	[PIN_GPIODV_0] = {PK(3, 10), PK(3, 2), PK(2, 10), PK(2, 4), PK(1, 8),
-				NE,},
-	[PIN_GPIODV_1] = {PK(3, 10), PK(3, 1), PK(2, 10), PK(2, 3), NE, NE,},
-	[PIN_GPIODV_2] = {PK(3, 9), PK(3, 0), PK(2, 10), PK(2, 3), NE, NE,},
-	[PIN_GPIODV_3] = {PK(3, 9), PK(2, 31), PK(2, 10), PK(2, 3), NE, NE,},
-	[PIN_GPIODV_4] = {PK(3, 9), PK(2, 30), PK(2, 10), PK(2, 3), NE, NE,},
-	[PIN_GPIODV_5] = {PK(3, 9), PK(2, 29), PK(2, 10), PK(2, 3), NE, NE,},
-	[PIN_GPIODV_6] = {PK(3, 9), PK(2, 28), PK(2, 10), PK(2, 3), NE, NE,},
-	[PIN_GPIODV_7] = {PK(3, 9), PK(2, 27), PK(2, 10), PK(2, 3), NE, NE,},
-	[PIN_GPIODV_8] = {PK(3, 8), PK(2, 26), PK(2, 10), PK(2, 2), NE, NE,},
-	[PIN_GPIODV_9] = {PK(3, 8), PK(2, 25), PK(2, 10), PK(2, 1), NE, NE,},
-	[PIN_GPIODV_10] = {PK(3, 7), PK(2, 24), PK(2, 10), PK(2, 0), NE, NE,},
-	[PIN_GPIODV_11] = {PK(3, 7), PK(2, 23), PK(2, 10), PK(1, 31), NE, NE,},
-	[PIN_GPIODV_12] = {PK(3, 7), PK(2, 22), PK(2, 10), PK(1, 30), NE, NE,},
-	[PIN_GPIODV_13] = {PK(3, 7), PK(2, 21), PK(2, 10), PK(1, 29), NE, NE,},
-	[PIN_GPIODV_14] = {PK(3, 7), PK(2, 20), PK(2, 10), PK(1, 28), NE, NE,},
-	[PIN_GPIODV_15] = {PK(3, 7), PK(2, 19), PK(2, 10), PK(1, 27), NE, NE,},
-	[PIN_GPIODV_16] = {PK(3, 6), PK(2, 9), PK(1, 26), PK(1, 24), NE, NE,},
-	[PIN_GPIODV_17] = {PK(3, 6), PK(2, 8), PK(1, 25), PK(1, 23), NE, NE,},
-	[PIN_GPIODV_18] = {PK(3, 5), PK(1, 25), PK(1, 17), NE, NE, NE,},
-	[PIN_GPIODV_19] = {PK(3, 5), PK(1, 25), PK(1, 16), NE, NE, NE,},
-	[PIN_GPIODV_20] = {PK(3, 5), PK(1, 25), NE, NE, NE, NE,},
-	[PIN_GPIODV_21] = {PK(3, 5), PK(1, 25), NE, NE, NE, NE,},
-	[PIN_GPIODV_22] = {PK(3, 5), PK(2, 18), PK(1, 25), NE, NE, NE,},
-	[PIN_GPIODV_23] = {PK(3, 5), PK(2, 17), PK(1, 25), NE, NE, NE,},
-	[PIN_GPIODV_24] = {PK(3, 4), PK(2, 16), PK(2, 7), PK(1, 22), PK(1, 15),
-				NE,},
-	[PIN_GPIODV_25] = {PK(3, 3), PK(2, 15), PK(2, 6), PK(1, 21), PK(1, 14),
-				NE,},
-	[PIN_GPIODV_26] = {PK(2, 14), PK(1, 20), PK(1, 13), NE, NE, NE,},
-	[PIN_GPIODV_27] = {PK(2, 13), PK(1, 18), PK(1, 19), PK(1, 12), NE, NE,},
-	[PIN_GPIODV_28] = {PK(2, 12), PK(1, 9), PK(1, 11), NE, NE, NE,},
-	[PIN_GPIODV_29] = {PK(2, 11), PK(2, 5), PK(1, 10), NE, NE, NE,},
-
-	[GPIOAO_0] = {PK(AO, 12), PK(AO, 26), NE, NE, NE, NE,},
-	[GPIOAO_1] = {PK(AO, 11), PK(AO, 25), NE, NE, NE, NE,},
-	[GPIOAO_2] = {PK(AO, 10), PK(AO, 8), NE, NE, NE, NE,},
-	[GPIOAO_3] = {PK(AO, 9), PK(AO, 7), PK(AO, 22), NE, NE, NE,},
-	[GPIOAO_4] = {PK(AO, 24), PK(AO, 6), PK(AO, 2), NE, NE, NE,},
-	[GPIOAO_5] = {PK(AO, 23), PK(AO, 5), PK(AO, 1), NE, NE, NE,},
-	[GPIOAO_6] = {PK(AO, 16), PK(AO, 18), NE, NE, NE, NE,},
-	[GPIOAO_7] = {PK(AO, 0), PK(AO, 21), NE, NE, NE, NE,},
-	[GPIOAO_8] = {PK(AO, 15), PK(AO, 14), PK(AO2, 0), PK(AO, 17), NE, NE,},
-	[GPIOAO_9] = {PK(AO, 31), PK(AO, 4), PK(AO2, 1), PK(AO, 3), NE, NE,},
-
-	[PIN_CARD_0] = {PK(6, 5), NE, NE, NE, NE, NE,},
-	[PIN_CARD_1] = {PK(6, 4), NE, NE, NE, NE, NE,},
-	[PIN_CARD_2] = {PK(6, 3), NE, NE, NE, NE, NE,},
-	[PIN_CARD_3] = {PK(6, 2), NE, NE, NE, NE, NE,},
-	[PIN_CARD_4] = {PK(6, 1), PK(6, 9), PK(6, 11), PK(6, 7
-	), NE, NE,},
-	[PIN_CARD_5] = {PK(6, 0), PK(6, 8), PK(6, 10), PK(6, 6
-	), NE, NE,},
-	[PIN_CARD_6] = {NE, NE, NE, NE, NE, NE,},
-
-	[PIN_GPIO_TEST_N] = {PK(AO, 13), PK(AO2, 2), NE, NE, NE, NE,},
+static const char * const gpio_aobus_groups[] = {
+	"GPIOAO_0", "GPIOAO_1", "GPIOAO_2", "GPIOAO_3", "GPIOAO_4",
+	"GPIOAO_5", "GPIOAO_6", "GPIOAO_7", "GPIOAO_8", "GPIOAO_9",
 };
 
-static int gxl_gpio_name_to_num(const char *name)
-{
-	int i, tmp = 100, num = 0;
-	int len = 0;
-	char *p = NULL;
-	char *start = NULL;
-	if (!name)
-		return -1;
-	if (!strcmp(name, "GPIO_TEST_N"))
-		return GPIO_TEST_N;
-	len = strlen(name);
-	p = kzalloc(len+1, GFP_KERNEL);
-	start = p;
-	if (!p) {
-		pr_info("%s:malloc error\n", __func__);
-		return -1;
-	}
-	p = strcpy(p, name);
-	for (i = 0; i < len; p++, i++) {
-		if (*p == '_') {
-			*p = '\0';
-			tmp = i;
-		}
-		if (i > tmp && *p >= '0' && *p <= '9')
-			num = num*10 + *p-'0';
-	}
-	p = start;
-	if (!strcmp(p, "GPIOAO"))
-		num = num+0;
-	else if (!strcmp(p, "GPIOZ"))
-		num = num+10;
-	else if (!strcmp(p, "GPIOH"))
-		num = num+26;
-	else if (!strcmp(p, "BOOT"))
-		num = num+36;
-	else if (!strcmp(p, "CARD"))
-		num = num+52;
-	else if (!strcmp(p, "GPIODV"))
-		num = num+59;
-	else if (!strcmp(p, "GPIOX"))
-		num = num+89;
-	else if (!strcmp(p, "GPIOCLK"))
-		num = num+108;
-	else
-		num = -1;
-	kzfree(start);
-	return num;
-
-	return num;
-}
-static int  gxl_clear_pinmux(struct amlogic_pmx *apmx, unsigned int pin)
-{
-	unsigned int *gpio_reg =  &gpio_to_pin[pin][0];
-	int i, dom, reg, bit, ret;
-	struct meson_domain *domain = NULL;
-	for (i = 0;
-	     i < sizeof(gpio_to_pin[pin])/sizeof(gpio_to_pin[pin][0]); i++) {
-		if (gpio_reg[i] != NE) {
-			reg = GPIO_REG(gpio_reg[i])&0xf;
-			bit = GPIO_BIT(gpio_reg[i]);
-			dom = GPIO_REG(gpio_reg[i])>>4;
-			domain = &apmx->domains[dom];
-			ret = regmap_update_bits(domain->reg_mux, reg * 4,
-						 BIT(bit), 0);
-			if (ret)
-				return ret;
-		}
-	}
-	return 0;
-
-}
-
-
-#ifdef CONFIG_ARM64
-
-/*
- * function id 0x82000046 is to set AO_SEC_REG0 bit[0] in bl31.
- * bit[0] is set with arg0.
- * 0: gpio input 1: gpio output
- *
- * this function supported by xing.xu@amlogic.com
- */
-static noinline int __invoke_psci_fn_smc(u64 function_id, u64 arg0, u64 arg1,
-					 u64 arg2)
-{
-	register long x0 asm("x0") = function_id;
-	register long x1 asm("x1") = arg0;
-	register long x2 asm("x2") = arg1;
-	register long x3 asm("x3") = arg2;
-	asm volatile(
-			__asmeq("%0", "x0")
-			__asmeq("%1", "x1")
-			__asmeq("%2", "x2")
-			__asmeq("%3", "x3")
-			"smc	#0\n"
-		: "+r" (x0)
-		: "r" (x1), "r" (x2), "r" (x3));
-
-	return function_id;
-}
-
-#else
-
-static noinline int __invoke_psci_fn_smc(u64 function_id, u64 arg0, u64 arg1,
-					 u64 arg2)
-{
-	return 0;
-}
-
-#endif /* CONFIG_ARM64 */
-
-/*
- * AO_GPIO_O_EN_N	0x09<<2=0x24	bit[31]		output level
- * AO_GPIO_I		0x0a<<2=0x28	bit[31]		input level
- * AO_SEC_REG0		0x50<<2=0x140	bit[0]		input enable
- * AO_SEC_REG0		0xda100000+0x140=0xda100140
- * AO_RTI_PULL_UP_REG	0x0b<<2=0x2c	bit[30]		pull-up/down
- * AO_RTI_PULL_UP_REG	0x0b<<2=0x2c	bit[14]		pull-up enable
- */
-static int gxl_extern_gpio_output(struct meson_domain *domain,
-				   unsigned int pin,
-				   int value)
-{
-	if (PIN_GPIO_TEST_N == pin) {
-		pr_info("%s PIN_GPIO_TEST_N\n", __func__);
-
-		/* set TEST_N to gpio output */
-		/* AO_SEC_REG0 bit[0] = 1 */
-		__invoke_psci_fn_smc(0x82000046, 1, 0, 0);
-
-		/* set TEST_N output level to #value */
-		aml_aobus_update_bits(0x24, BIT(31), value ? BIT(31) : 0);
-		return 0;
-	}
-	return 1;
-}
-int gxl_extern_gpio_get(struct meson_domain *domain, unsigned int pin)
-{
-	if (PIN_GPIO_TEST_N == pin)
-		return !!(aml_read_aobus(0x24) & BIT(31));
-
-	return -1;
-}
-
-static struct amlogic_pinctrl_soc_data gxl_pinctrl = {
-	.pins = gxl_pads,
-	.npins = ARRAY_SIZE(gxl_pads),
-	.domain_data	= mesongxl_domain_data,
-	.num_domains	= ARRAY_SIZE(mesongxl_domain_data),
-	.meson_clear_pinmux = gxl_clear_pinmux,
-	.name_to_pin = gxl_gpio_name_to_num,
-	.soc_extern_gpio_output = gxl_extern_gpio_output,
-	.soc_extern_gpio_get = gxl_extern_gpio_get,
-};
-static struct of_device_id gxl_pinctrl_of_table[] = {
-	{
-		.compatible = "amlogic, pinmux-gxl",
-	},
-	{},
+static const char * const uart_ao_groups[] = {
+	"uart_tx_ao_a_0", "uart_rx_ao_a_0",
 };
 
-static int  gxl_pmx_probe(struct platform_device *pdev)
-{
-	return amlogic_pmx_probe(pdev, &gxl_pinctrl);
-}
-
-static int  gxl_pmx_remove(struct platform_device *pdev)
-{
-	return amlogic_pmx_remove(pdev);
-}
-
-static struct platform_driver gxl_pmx_driver = {
-	.driver = {
-		.name = "pinmux-gxl",
-		.owner = THIS_MODULE,
-		.of_match_table = of_match_ptr(gxl_pinctrl_of_table),
-	},
-	.probe = gxl_pmx_probe,
-	.remove = gxl_pmx_remove,
+static const char * const uart_ao_b_groups[] = {
+	"uart_tx_ao_b_0", "uart_rx_ao_b_0", "uart_cts_ao_b_0",
+	"uart_rts_ao_b_0",	"uart_tx_ao_b_0", "uart_rx_ao_b_0",
+	"uart_cts_ao_b_0", "uart_rts_ao_b_0",
 };
 
-static int __init gxl_pmx_init(void)
-{
-	return platform_driver_register(&gxl_pmx_driver);
-}
-arch_initcall(gxl_pmx_init);
+static const char * const i2c_ao_groups[] = {
+	"i2c_sck_ao", "i2c_sda_ao",
+};
 
-static void __exit gxl_pmx_exit(void)
-{
-	platform_driver_unregister(&gxl_pmx_driver);
-}
-module_exit(gxl_pmx_exit);
-MODULE_DESCRIPTION("gxl pin control driver");
-MODULE_LICENSE("GPL v2");
+static const char * const i2c_slave_ao_groups[] = {
+	"i2c_slave_sck_ao", "i2c_slave_sda_ao",
+};
+
+static const char * const remote_groups[] = {
+	"remote_input",
+};
+
+static const char * const ee_cec_groups[] = {
+	"ee_cec",
+};
+
+static const char * const ao_cec_groups[] = {
+	"ao_cec",
+};
+static struct meson_pmx_func meson_gxl_aobus_functions[] = {
+	FUNCTION(gpio_aobus),
+	FUNCTION(uart_ao),
+	FUNCTION(uart_ao_b),
+	FUNCTION(i2c_ao),
+	FUNCTION(i2c_slave_ao),
+	FUNCTION(remote),
+	FUNCTION(ee_cec),
+	FUNCTION(ao_cec),
+};
+
+static struct meson_bank meson_gxl_periphs_banks[] = {
+	/*   name    first   last     pullen  pull    dir     out     in  */
+	BANK("X",    PIN(GPIOX_0, EE_OFF),	PIN(GPIOX_18, EE_OFF),
+		4,  0,  4,  0,  12, 0,  13, 0,  14, 0),
+
+	BANK("DV",   PIN(GPIODV_0, EE_OFF),	PIN(GPIODV_29, EE_OFF),
+		0,  0,  0,  0,  0,  0,  1,  0,  2,  0),
+	BANK("H",    PIN(GPIOH_0, EE_OFF),	PIN(GPIOH_9, EE_OFF),
+		1, 20,  1, 20,  3, 20,  4, 20,  5, 20),
+	BANK("Z",    PIN(GPIOZ_0, EE_OFF),	PIN(GPIOZ_15, EE_OFF),
+		3,  0,  3,  0,  9,  0,  10, 0, 11,  0),
+	BANK("CARD", PIN(CARD_0, EE_OFF),	PIN(CARD_6, EE_OFF),
+		2, 20,  2, 20,  6, 20,  7, 20,  8, 20),
+	BANK("BOOT", PIN(BOOT_0, EE_OFF),	PIN(BOOT_15, EE_OFF),
+		2,  0,  2,  0,  6,  0,  7,  0,  8,  0),
+	BANK("CLK",  PIN(GPIOCLK_0, EE_OFF),	PIN(GPIOCLK_1, EE_OFF),
+		3, 28,  3, 28,  9, 28, 10, 28, 11, 28),
+};
+
+static struct meson_bank meson_gxl_aobus_banks[] = {
+	/* name    first   last   pullen  pull    dir     out     in  */
+	BANK("AO",   PIN(GPIOAO_0, 0),  PIN(GPIOAO_9, 0),
+		0,  0,  0, 16,  0,  0,  0, 16,  1,  0),
+};
+
+static struct meson_domain_data meson_gxl_periphs_domain_data = {
+	.name		= "periphs-banks",
+	.banks		= meson_gxl_periphs_banks,
+	.num_banks	= ARRAY_SIZE(meson_gxl_periphs_banks),
+	.pin_base	= 10,
+	.num_pins	= 101,
+};
+
+static struct meson_domain_data meson_gxl_aobus_domain_data = {
+	.name		= "aobus-banks",
+	.banks		= meson_gxl_aobus_banks,
+	.num_banks	= ARRAY_SIZE(meson_gxl_aobus_banks),
+	.pin_base	= 0,
+	.num_pins	= 10,
+};
+
+struct meson_pinctrl_data meson_gxl_periphs_pinctrl_data = {
+	.pins		= meson_gxl_periphs_pins,
+	.groups		= meson_gxl_periphs_groups,
+	.funcs		= meson_gxl_periphs_functions,
+	.domain_data	= &meson_gxl_periphs_domain_data,
+	.num_pins	= ARRAY_SIZE(meson_gxl_periphs_pins),
+	.num_groups	= ARRAY_SIZE(meson_gxl_periphs_groups),
+	.num_funcs	= ARRAY_SIZE(meson_gxl_periphs_functions),
+};
+
+struct meson_pinctrl_data meson_gxl_aobus_pinctrl_data = {
+	.pins		= meson_gxl_aobus_pins,
+	.groups		= meson_gxl_aobus_groups,
+	.funcs		= meson_gxl_aobus_functions,
+	.domain_data	= &meson_gxl_aobus_domain_data,
+	.num_pins	= ARRAY_SIZE(meson_gxl_aobus_pins),
+	.num_groups	= ARRAY_SIZE(meson_gxl_aobus_groups),
+	.num_funcs	= ARRAY_SIZE(meson_gxl_aobus_functions),
+};

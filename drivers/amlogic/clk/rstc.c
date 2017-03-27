@@ -1,7 +1,7 @@
 /*
  * drivers/amlogic/clk/rstc.c
  *
- * Copyright (C) 2015 Amlogic, Inc. All rights reserved.
+ * Copyright (C) 2017 Amlogic, Inc. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,15 +13,15 @@
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
-*/
-
+ */
 
 #include <linux/io.h>
+#include <linux/of.h>
+#include <linux/module.h>
 #include <linux/reset-controller.h>
 #include <linux/slab.h>
 #include <linux/spinlock.h>
-
-#include "clk.h"
+#include <linux/platform_device.h>
 
 /*
  * Modules and submodules within the chip can be reset by disabling the
@@ -34,13 +34,8 @@
 
 struct meson_rstc {
 	struct reset_controller_dev	rcdev;
-	void __iomem			*ao_base;
-	void __iomem			*ot_base;
-	unsigned int			num_regs;
-	unsigned int			ao_off_id;
-	u8				flags;
+	void __iomem *membase;
 	spinlock_t			lock;
-	s8				*id_ref;
 };
 
 static int meson_rstc_assert(struct reset_controller_dev *rcdev,
@@ -50,28 +45,16 @@ static int meson_rstc_assert(struct reset_controller_dev *rcdev,
 					       struct meson_rstc,
 					       rcdev);
 	int bank = id / BITS_PER_REG;
-	int offset;
+	int offset = id % BITS_PER_REG;
 	void __iomem *rstc_mem;
 	unsigned long flags;
 	u32 reg;
 
-	/*
-	 * The higher IDs are used for the AO domain register
-	 */
-	if (id >= rstc->ao_off_id) {
-		offset = id - rstc->ao_off_id;
-		rstc_mem = rstc->ao_base;
-	} else {
-		offset = id % BITS_PER_REG;
-		rstc_mem = rstc->ot_base + (bank << 2);
-	}
-
 	spin_lock_irqsave(&rstc->lock, flags);
-	if (--rstc->id_ref[id] <= 0) {
-		reg = readl(rstc_mem);
-		writel(reg & ~BIT(offset), rstc_mem);
-		rstc->id_ref[id] = 0;
-	}
+
+	rstc_mem = rstc->membase + (bank << 2);
+	reg = readl(rstc_mem);
+	writel(reg & ~BIT(offset), rstc_mem);
 	spin_unlock_irqrestore(&rstc->lock, flags);
 
 	return 0;
@@ -84,31 +67,24 @@ static int meson_rstc_deassert(struct reset_controller_dev *rcdev,
 					       struct meson_rstc,
 					       rcdev);
 	int bank = id / BITS_PER_REG;
-	int offset;
+	int offset = id % BITS_PER_REG;
 	void __iomem *rstc_mem;
 	unsigned long flags;
 	u32 reg;
 
-	if (id >= rstc->ao_off_id) {
-		offset = id - rstc->ao_off_id;
-		rstc_mem = rstc->ao_base;
-	} else {
-		offset = id % BITS_PER_REG;
-		rstc_mem = rstc->ot_base + (bank << 2);
-	}
-
 	spin_lock_irqsave(&rstc->lock, flags);
-	if (rstc->id_ref[id]++ == 0) {
-		reg = readl(rstc_mem);
-		writel(reg | BIT(offset), rstc_mem);
-	}
+
+	rstc_mem = rstc->membase + (bank << 2);
+	reg = readl(rstc_mem);
+	writel(reg | BIT(offset), rstc_mem);
 	spin_unlock_irqrestore(&rstc->lock, flags);
 
 	return 0;
 
 }
 
-static int meson_rstc_reset(struct reset_controller_dev *rcdev, unsigned long id)
+static int meson_rstc_reset(struct reset_controller_dev *rcdev,
+							unsigned long id)
 {
 	int err;
 
@@ -125,60 +101,54 @@ static struct reset_control_ops meson_rstc_ops = {
 	.reset		= meson_rstc_reset,
 };
 
-static __init void meson_init_id_ref(struct meson_rstc *rstc)
-{
-	unsigned long flags;
-	int i, bank, offset;
-	void __iomem *rstc_mem;
-	u32 reg;
-	spin_lock_irqsave(&rstc->lock, flags);
-	for (i = 0; i < rstc->ao_off_id; i++) {
-		bank = i / BITS_PER_REG;
-		offset = i % BITS_PER_REG;
-		rstc_mem = rstc->ot_base + (bank << 2);
-		reg = readl(rstc_mem);
-		rstc->id_ref[i] = (reg & (1 << offset)) ? 1 : 0;
-		/* pr_info("id_ref[%d]: %d\n", i, rstc->id_ref[i]); */
-	}
-	spin_unlock_irqrestore(&rstc->lock, flags);
-}
-
-void __init meson_register_rstc(struct device_node *np, unsigned int num_regs,
-				void __iomem *ao_base, void __iomem *ot_base,
-				unsigned int ao_off_id, u8 flags)
+static int meson_reset_probe(struct platform_device *pdev)
 {
 	struct meson_rstc *rstc;
+	struct resource *res;
 	int ret;
 
-	rstc = kzalloc(sizeof(*rstc), GFP_KERNEL);
+	rstc = devm_kzalloc(&pdev->dev, sizeof(*rstc), GFP_KERNEL);
 	if (!rstc)
-		return;
-	rstc->id_ref = kzalloc(ao_off_id + 1, GFP_KERNEL);
-	if (!rstc->id_ref) {
-		pr_err("rstc->id_ref is not allocated\n");
-		kfree(rstc);
-		return;
-	}
+		return -ENOMEM;
+
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	rstc->membase = devm_ioremap_resource(&pdev->dev, res);
+	if (IS_ERR(rstc->membase))
+		return PTR_ERR(rstc->membase);
 
 	spin_lock_init(&rstc->lock);
 
-	rstc->ao_base = ao_base;
-	rstc->ot_base = ot_base;
-	rstc->num_regs = num_regs;
-	rstc->flags = flags;
-
 	rstc->rcdev.owner = THIS_MODULE;
-	rstc->rcdev.nr_resets = num_regs * BITS_PER_REG;
-	rstc->rcdev.of_node = np;
+	rstc->rcdev.nr_resets = resource_size(res) * BITS_PER_REG;
+	rstc->rcdev.of_node = pdev->dev.of_node;
 	rstc->rcdev.ops = &meson_rstc_ops;
-	rstc->ao_off_id = ao_off_id;
-	meson_init_id_ref(rstc);
 
 	ret = reset_controller_register(&rstc->rcdev);
 	if (ret) {
-		pr_err("%s: could not register reset controller: %d\n",
+		dev_err(&pdev->dev, "%s: could not register reset controller: %d\n",
 		       __func__, ret);
-		kfree(rstc->id_ref);
-		kfree(rstc);
 	}
+
+	dev_info(&pdev->dev, "%s: register reset controller ok,ret: %d\n",
+		       __func__, ret);
+	return ret;
 }
+static const struct of_device_id meson_reset_dt_ids[] = {
+	 { .compatible = "amlogic,reset", },
+	 { /* sentinel */ },
+};
+MODULE_DEVICE_TABLE(of, meson_reset_dt_ids);
+
+static struct platform_driver meson_reset_driver = {
+	.probe	= meson_reset_probe,
+	.driver = {
+		.name		= "meson_reset",
+		.of_match_table	= meson_reset_dt_ids,
+	},
+};
+
+module_platform_driver(meson_reset_driver);
+
+MODULE_AUTHOR("Neil Armstrong <narmstrong@baylibre.com>");
+MODULE_DESCRIPTION("Amlogic Meson Reset Controller driver");
+MODULE_LICENSE("GPL");

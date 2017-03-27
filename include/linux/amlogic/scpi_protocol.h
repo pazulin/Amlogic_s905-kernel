@@ -1,24 +1,23 @@
 /*
- * SCPI Message Protocol driver header
+ * include/linux/amlogic/scpi_protocol.h
  *
- * Copyright (C) 2014 ARM Ltd.
+ * Copyright (C) 2017 Amlogic, Inc. All rights reserved.
  *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
- * This program is distributed in the hope it will be useful, but WITHOUT
+ * This program is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
- * You should have received a copy of the GNU General Public License along with
- * this program. If not, see <http://www.gnu.org/licenses/>.
  */
+
 #ifndef _SCPI_PROTOCOL_H_
 #define _SCPI_PROTOCOL_H_
 #include <linux/types.h>
-
 
 enum scpi_client_id {
 	SCPI_CL_NONE,
@@ -73,10 +72,10 @@ struct scpi_opp_entry {
 	u32 volt_mv;
 } __packed;
 
-struct scpi_opp {
+struct scpi_dvfs_info {
+	unsigned int count;
+	unsigned int latency; /* in usecs */
 	struct scpi_opp_entry *opp;
-	u32 latency; /* in usecs */
-	int count;
 } __packed;
 
 
@@ -84,7 +83,7 @@ unsigned long scpi_clk_get_val(u16 clk_id);
 int scpi_clk_set_val(u16 clk_id, unsigned long rate);
 int scpi_dvfs_get_idx(u8 domain);
 int scpi_dvfs_set_idx(u8 domain, u8 idx);
-struct scpi_opp *scpi_dvfs_get_opps(u8 domain);
+struct scpi_dvfs_info *scpi_dvfs_get_opps(u8 domain);
 int scpi_get_sensor(char *name);
 int scpi_get_sensor_value(u16 sensor, u32 *val);
 int scpi_send_usr_data(u32 client_id, u32 *val, u32 size);

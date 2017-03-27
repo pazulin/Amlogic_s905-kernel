@@ -53,24 +53,26 @@ struct mmc_partitions_fmt {
 	int checksum;
 	struct partitions partitions[MAX_MMC_PART_NUM];
 };
-#ifdef CONFIG_MMC_AML
+/*#ifdef CONFIG_MMC_AML*/
 int aml_emmc_partition_ops(struct mmc_card *card, struct gendisk *disk);
-#else
-static inline int aml_emmc_partition_ops(struct mmc_card *card,
-					 struct gendisk *disk)
-{
-	return -1;
-}
-#endif
+/*
+ *#else
+ *static inline int aml_emmc_partition_ops(struct mmc_card *card,
+ *					 struct gendisk *disk)
+ *{
+ *	return -1;
+ *}
+ *#endif
+ */
 unsigned int mmc_capacity(struct mmc_card *card);
 int mmc_read_internal(struct mmc_card *card,
-	unsigned dev_addr, unsigned blocks, void *buf);
+		unsigned dev_addr, unsigned blocks, void *buf);
 int mmc_write_internal(struct mmc_card *card,
-	unsigned dev_addr, unsigned blocks, void *buf);
+		unsigned dev_addr, unsigned blocks, void *buf);
 int get_reserve_partition_off_from_tbl(void);
 int get_reserve_partition_off(struct mmc_card *card);/* byte unit */
 
 #endif
 
-extern int amlmmc_dtb_init(struct mmc_card *card);
 extern struct mmc_partitions_fmt *pt_fmt;
+

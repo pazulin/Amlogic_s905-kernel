@@ -62,6 +62,10 @@
 		pinctrl-0 = <&pmx_gpio_19>;
 		pinctrl-names = "default";
 	};
+
+	gpu-subsystem {
+		status = "okay";
+	};
 };
 
 &uart0 { status = "okay"; };
@@ -72,6 +76,10 @@
 &ethphy {
 	compatible = "marvell,88e1310";
 	reg = <1>;
+};
+
+&gpu {
+	status = "okay";
 };
 
 &i2c0 {
@@ -87,6 +95,7 @@
 
 		/* connect xtal input to 25MHz reference */
 		clocks = <&ref25>;
+		clock-names = "xtal";
 
 		/* connect xtal input as source of pll0 and pll1 */
 		silabs,pll-source = <0 0>, <1 0>;
@@ -111,9 +120,6 @@
 
 &sdio0 {
 	status = "okay";
-	/* sdio0 card detect is connected to wrong pin on CuBox */
-	cd-gpios = <&gpio0 12 1>;
-	pinctrl-0 = <&pmx_sdio0 &pmx_gpio_12>;
 };
 
 &spi0 {

@@ -509,11 +509,15 @@ intvec_\vecname:
 	.ifc \c_routine, do_trap
 	mfspr   r2, GPV_REASON
 	.else
-	.ifc \c_routine, op_handle_perf_interrupt
+	.ifc \c_routine, handle_perf_interrupt
 	mfspr   r2, PERF_COUNT_STS
 	.else
-	.ifc \c_routine, op_handle_aux_perf_interrupt
+	.ifc \c_routine, handle_perf_interrupt
 	mfspr   r2, AUX_PERF_COUNT_STS
+	.endif
+	.ifc \c_routine, do_nmi
+	mfspr   r2, SPR_SYSTEM_SAVE_K_2   /* nmi type */
+	.else
 	.endif
 	.endif
 	.endif
@@ -654,7 +658,7 @@ intvec_\vecname:
 	 */
 	mfspr   r32, SPR_EX_CONTEXT_K_1
 	{
-	 IS_KERNEL_EX1(r22, r22)
+	 IS_KERNEL_EX1(r32, r32)
 	 PTREGS_PTR(r21, PTREGS_OFFSET_FLAGS)
 	}
 	beqzt   r32, 1f       /* zero if from user space */
@@ -749,7 +753,7 @@ intvec_\vecname:
 	}
 	wh64    r52
 
-#ifdef CONFIG_TRACE_IRQFLAGS
+#if defined(CONFIG_TRACE_IRQFLAGS) || defined(CONFIG_CONTEXT_TRACKING)
 	.ifnc \function,handle_nmi
 	/*
 	 * We finally have enough state set up to notify the irq
@@ -765,6 +769,9 @@ intvec_\vecname:
 	{ move r32, r2; move r33, r3 }
 	.endif
 	TRACE_IRQS_OFF
+#ifdef CONFIG_CONTEXT_TRACKING
+	jal     context_tracking_user_exit
+#endif
 	.ifnc \function,handle_syscall
 	{ move r0, r30; move r1, r31 }
 	{ move r2, r32; move r3, r33 }
@@ -875,20 +882,6 @@ STD_ENTRY(interrupt_return)
 	FEEDBACK_REENTER(interrupt_return)
 
 	/*
-	 * Use r33 to hold whether we have already loaded the callee-saves
-	 * into ptregs.  We don't want to do it twice in this loop, since
-	 * then we'd clobber whatever changes are made by ptrace, etc.
-	 */
-	{
-	 movei  r33, 0
-	 move   r32, sp
-	}
-
-	/* Get base of stack in r32. */
-	EXTRACT_THREAD_INFO(r32)
-
-.Lretry_work_pending:
-	/*
 	 * Disable interrupts so as to make sure we don't
 	 * miss an interrupt that sets any of the thread flags (like
 	 * need_resched or sigpending) between sampling and the iret.
@@ -898,33 +891,28 @@ STD_ENTRY(interrupt_return)
 	IRQ_DISABLE(r20, r21)
 	TRACE_IRQS_OFF  /* Note: clobbers registers r0-r29 */
 
-
-	/* Check to see if there is any work to do before returning to user. */
-	{
-	 addi   r29, r32, THREAD_INFO_FLAGS_OFFSET
-	 moveli r1, hw1_last(_TIF_ALLWORK_MASK)
-	}
-	{
-	 ld     r29, r29
-	 shl16insli r1, r1, hw0(_TIF_ALLWORK_MASK)
-	}
-	and     r1, r29, r1
-	beqzt   r1, .Lrestore_all
-
 	/*
-	 * Make sure we have all the registers saved for signal
-	 * handling or notify-resume.  Call out to C code to figure out
-	 * exactly what we need to do for each flag bit, then if
-	 * necessary, reload the flags and recheck.
+	 * See if there are any work items (including single-shot items)
+	 * to do.  If so, save the callee-save registers to pt_regs
+	 * and then dispatch to C code.
 	 */
+	move    r21, sp
+	EXTRACT_THREAD_INFO(r21)
+	{
+	 addi   r22, r21, THREAD_INFO_FLAGS_OFFSET
+	 moveli r20, hw1_last(_TIF_ALLWORK_MASK)
+	}
+	{
+	 ld     r22, r22
+	 shl16insli r20, r20, hw0(_TIF_ALLWORK_MASK)
+	}
+	and     r1, r22, r20
 	{
 	 PTREGS_PTR(r0, PTREGS_OFFSET_BASE)
-	 bnez   r33, 1f
+	 beqzt  r1, .Lrestore_all
 	}
 	push_extra_callee_saves r0
-	movei   r33, 1
-1:	jal     do_work_pending
-	bnez    r0, .Lretry_work_pending
+	jal     prepare_exit_to_usermode
 
 	/*
 	 * In the NMI case we
@@ -971,6 +959,15 @@ STD_ENTRY(interrupt_return)
 	beqzt   r30, .Lrestore_regs
 3:
 
+#if INT_PERF_COUNT + 1 != INT_AUX_PERF_COUNT
+# error Bad interrupt assumption
+#endif
+	{
+	 movei  r0, 3   /* two adjacent bits for the PERF_COUNT mask */
+	 beqz   r31, .Lrestore_regs
+	}
+	shli    r0, r0, INT_PERF_COUNT
+	mtspr   SPR_INTERRUPT_MASK_RESET_K, r0
 
 	/*
 	 * We now commit to returning from this interrupt, since we will be
@@ -1187,7 +1184,7 @@ handle_nmi:
 	FEEDBACK_REENTER(handle_nmi)
 	{
 	 movei  r30, 1
-	 move   r31, r0
+	 cmpeq  r31, r0, zero
 	}
 	j       interrupt_return
 	STD_ENDPROC(handle_nmi)
@@ -1234,6 +1231,7 @@ handle_syscall:
 	 jal    do_syscall_trace_enter
 	}
 	FEEDBACK_REENTER(handle_syscall)
+	bltz    r0, .Lsyscall_sigreturn_skip
 
 	/*
 	 * We always reload our registers from the stack at this
@@ -1397,7 +1395,7 @@ STD_ENTRY(ret_from_kernel_thread)
 	FEEDBACK_REENTER(ret_from_kernel_thread)
 	{
 	 movei  r30, 0               /* not an NMI */
-	 j      .Lresume_userspace   /* jump into middle of interrupt_return */
+	 j      interrupt_return
 	}
 	STD_ENDPROC(ret_from_kernel_thread)
 
@@ -1491,8 +1489,9 @@ STD_ENTRY(fill_ra_stack)
 	.global intrpt_start
 intrpt_start:
 
-#define op_handle_perf_interrupt bad_intr
-#define op_handle_aux_perf_interrupt bad_intr
+#ifndef CONFIG_USE_PMC
+#define handle_perf_interrupt bad_intr
+#endif
 
 #ifndef CONFIG_HARDWALL
 #define do_hardwall_trap bad_intr
@@ -1540,9 +1539,9 @@ intrpt_start:
 #endif
 	int_hand     INT_IPI_0, IPI_0, bad_intr
 	int_hand     INT_PERF_COUNT, PERF_COUNT, \
-		     op_handle_perf_interrupt, handle_nmi
+		     handle_perf_interrupt, handle_nmi
 	int_hand     INT_AUX_PERF_COUNT, AUX_PERF_COUNT, \
-		     op_handle_perf_interrupt, handle_nmi
+		     handle_perf_interrupt, handle_nmi
 	int_hand     INT_INTCTRL_3, INTCTRL_3, bad_intr
 #if CONFIG_KERNEL_PL == 2
 	dc_dispatch  INT_INTCTRL_2, INTCTRL_2
@@ -1561,3 +1560,5 @@ intrpt_start:
 
 	/* Synthetic interrupt delivered only by the simulator */
 	int_hand     INT_BREAKPOINT, BREAKPOINT, do_breakpoint
+	/* Synthetic interrupt delivered by hv */
+	int_hand     INT_NMI_DWNCL, NMI_DWNCL, do_nmi, handle_nmi

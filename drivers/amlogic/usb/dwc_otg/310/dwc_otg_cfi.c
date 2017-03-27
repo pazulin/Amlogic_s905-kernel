@@ -507,7 +507,7 @@ static int cfi_ep_enable(struct cfiobject *cfi, struct dwc_otg_pcd *pcd,
 	int retval = -DWC_E_NOT_SUPPORTED;
 
 	CFI_INFO("%s: epname=%s; epnum=0x%02x\n", __func__,
-		 "EP_" /*ep->ep.name */ , ep->desc->bEndpointAddress);
+		 "EP_" /*ep->ep.name */, ep->desc->bEndpointAddress);
 	/* MAS - Check whether this endpoint already is in the list */
 	cfiep = get_cfi_ep_by_pcd_ep(cfi, ep);
 

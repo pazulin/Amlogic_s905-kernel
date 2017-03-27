@@ -1,1 +1,1 @@
-obj-$(CONFIG_AML_REG_ACCESS)	=reg_access.o
+obj-$(CONFIG_AMLOGIC_REG_ACCESS)	=reg_access.o

@@ -1,7 +1,7 @@
 /*
  * drivers/amlogic/efuse/efuse64.c
  *
- * Copyright (C) 2015 Amlogic, Inc. All rights reserved.
+ * Copyright (C) 2017 Amlogic, Inc. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
-*/
+ */
 
 #include <linux/cdev.h>
 #include <linux/types.h>
@@ -25,12 +25,13 @@
 #include <linux/platform_device.h>
 #include <linux/module.h>
 #include <linux/of.h>
-#include <linux/reset.h>
+#include <linux/clk.h>
+#include <linux/clk-provider.h>
 
 #include <linux/amlogic/secmon.h>
 #include "efuse.h"
 #ifdef CONFIG_ARM64
-#include <linux/amlogic/efuse-amlogic.h>
+#include <linux/amlogic/efuse.h>
 #endif
 
 #define EFUSE_MODULE_NAME   "efuse"
@@ -39,7 +40,7 @@
 #define EFUSE_CLASS_NAME    "efuse"
 #define EFUSE_IS_OPEN           (0x01)
 
-struct efusekey_info *efusekey_infos = NULL;
+struct efusekey_info *efusekey_infos;
 int efusekeynum =  -1;
 
 struct efuse_dev_t {
@@ -53,9 +54,9 @@ static dev_t efuse_devno;
 
 void __iomem *sharemem_input_base;
 void __iomem *sharemem_output_base;
-unsigned efuse_read_cmd;
-unsigned efuse_write_cmd;
-unsigned efuse_get_max_cmd;
+unsigned int efuse_read_cmd;
+unsigned int efuse_write_cmd;
+unsigned int efuse_get_max_cmd;
 
 #define  DEFINE_EFUEKEY_SHOW_ATTR(keyname)	\
 	static ssize_t  show_##keyname(struct class *cla, \
@@ -204,11 +205,11 @@ static ssize_t efuse_read(struct file *file, char __user *buf,
 {
 	int ret;
 	int local_count = 0;
-	unsigned char *local_buf = kzalloc(sizeof(char)*count, GFP_KERNEL);
-	if (!local_buf) {
-		pr_info("memory not enough\n");
+
+	unsigned char *local_buf = kcalloc(count, sizeof(char), GFP_KERNEL);
+
+	if (!local_buf)
 		return -ENOMEM;
-	}
 
 	local_count = efuse_read_usr(local_buf, count, ppos);
 	if (local_count < 0) {
@@ -233,8 +234,10 @@ error_exit:
 static ssize_t efuse_write(struct file *file,
 	const char __user *buf, size_t count, loff_t *ppos)
 {
-	unsigned int  pos = (unsigned int)*ppos;
 	int ret, size;
+
+	unsigned int  pos = (unsigned int)*ppos;
+
 	unsigned char *contents = NULL;
 
 	if (pos >= EFUSE_BYTES)
@@ -245,10 +248,9 @@ static ssize_t efuse_write(struct file *file,
 		return -EFAULT;
 
 	contents = kzalloc(sizeof(unsigned char)*EFUSE_BYTES, GFP_KERNEL);
-	if (!contents) {
-		pr_info("memory not enough\n");
+	if (!contents)
 		return -ENOMEM;
-	}
+
 	size = sizeof(contents);
 	memset(contents, 0, size);
 	if (copy_from_user(contents, buf, count)) {
@@ -291,7 +293,7 @@ ssize_t efuse_user_attr_store(char *name, const char *buf, size_t count)
 	int i;
 	const char *c, *s;
 	struct efusekey_info info;
-	unsigned uint_val;
+	unsigned int uint_val;
 
 	if (efuse_getinfo(name, &info) < 0) {
 		pr_err("%s is not found\n", name);
@@ -304,21 +306,21 @@ ssize_t efuse_user_attr_store(char *name, const char *buf, size_t count)
 
 	c = ":";
 	s = local_buf;
-	if (NULL != strstr(s, c)) {
-			for (i = 0; i < info.size; i++) {
-				uint_val = 0;
-				ret = sscanf(s, "%x", &uint_val);
-				if (ret < 0) {
-					pr_err("ERROR: efuse get user data fail!\n");
-					goto error_exit;
-				} else
-					local_buf[i] = uint_val;
-				s += 2;
-				if (!strncmp(s, c, 1))
-					s++;
-				pr_debug("local_buf[%d]: 0x%x\n",
-					i, local_buf[i]);
-			}
+	if (strstr(s, c) != NULL) {
+		for (i = 0; i < info.size; i++) {
+			uint_val = 0;
+			ret = kstrtouint(s, 0, &uint_val);
+			if (ret < 0) {
+				pr_err("ERROR: efuse get user data fail!\n");
+				goto error_exit;
+			} else
+				local_buf[i] = uint_val;
+			s += 2;
+			if (!strncmp(s, c, 1))
+				s++;
+			pr_debug("local_buf[%d]: 0x%x\n",
+				i, local_buf[i]);
+		}
 	}
 
 	ret = efuse_write_usr(local_buf, info.size, (loff_t *)&(info.offset));
@@ -373,25 +375,6 @@ error_exit:
 	return ret;
 }
 
-char *efuse_get_mac(char *addr)
-{
-	char buf[6];
-	loff_t offset = 0x34;
-	int ret;
-
-	/* Copy H/W MAC address from eFuse programmed on production.
-	 * If missing or an error, C0:FF:EE:00:01:9F will be used.
-	 */
-	ret = efuse_read_usr(buf, sizeof(buf), &offset);
-	if (ret < 0) {
-		pr_err("hwmac: error to read MAC address, use default address\n");
-		memcpy(buf, "\xc0\xff\xee\x00\x01\x9f", 6);
-	}
-
-	return memcpy(addr, buf, 6);
-}
-EXPORT_SYMBOL(efuse_get_mac);
-
 static ssize_t userdata_show(struct class *cla,
 	struct class_attribute *attr, char *buf)
 {
@@ -403,9 +386,8 @@ static ssize_t userdata_show(struct class *cla,
 
 	max_size = efuse_get_max();
 
-	op = kmalloc(sizeof(char)*max_size, GFP_KERNEL);
+	op = kmalloc_array(max_size, sizeof(char), GFP_KERNEL);
 	if (!op) {
-		pr_err("efuse: failed to allocate memory\n");
 		ret = -ENOMEM;
 		return ret;
 	}
@@ -474,20 +456,20 @@ static struct class_attribute efuse_class_attrs[] = {
 
 	#ifndef EFUSE_READ_ONLY
 	/*make the efuse can not be write through sysfs */
-	__ATTR(userdata, S_IRWXU, userdata_show, userdata_write),
+	__ATTR(userdata, 0700, userdata_show, userdata_write),
 
 	#else
 	__ATTR_RO(userdata),
 
 	#endif
 
-	__ATTR(mac, S_IRWXU, show_mac, store_mac),
+	__ATTR(mac, 0700, show_mac, store_mac),
 
-	__ATTR(mac_bt, S_IRWXU, show_mac_bt, store_mac_bt),
+	__ATTR(mac_bt, 0700, show_mac_bt, store_mac_bt),
 
-	__ATTR(mac_wifi, S_IRWXU, show_mac_wifi, store_mac_wifi),
+	__ATTR(mac_wifi, 0700, show_mac_wifi, store_mac_wifi),
 
-	__ATTR(usid, S_IRWXU, show_usid, store_usid),
+	__ATTR(usid, 0700, show_usid, store_usid),
 
 	__ATTR_NULL
 
@@ -514,7 +496,8 @@ int get_efusekey_info(struct device_node *np)
 	if (!phandle) {
 		pr_info("%s:don't find match key\n", __func__);
 		return -1;
-	} else {
+	}
+	if (phandle) {
 		np_efusekey = of_find_node_by_phandle(be32_to_cpup(phandle));
 		if (!np_efusekey) {
 			pr_err("can't find device node key\n");
@@ -532,10 +515,8 @@ int get_efusekey_info(struct device_node *np)
 	if (efusekeynum > 0) {
 		efusekey_infos = kzalloc((sizeof(struct efusekey_info))
 			*efusekeynum, GFP_KERNEL);
-		if (!efusekey_infos) {
-			pr_err("%s efuse_keys alloc err\n", __func__);
+		if (!efusekey_infos)
 			return -1;
-		}
 	}
 
 	for (index = 0; index < efusekeynum; index++) {
@@ -546,12 +527,12 @@ int get_efusekey_info(struct device_node *np)
 			pr_err("don't find  match %s\n", propname);
 			goto err;
 		}
-		if (phandle){
+		if (phandle) {
 			np_key = of_find_node_by_phandle(be32_to_cpup(phandle));
-		  if (!np_key) {
+			if (!np_key) {
 				pr_err("can't find device node\n");
-		    goto err;
-		  }
+				goto err;
+			}
 		}
 		ret = of_property_read_string(np_key, "keyname", &uname);
 		if (ret) {
@@ -590,14 +571,17 @@ static int efuse_probe(struct platform_device *pdev)
 	int ret;
 	struct device *devp;
 	struct device_node *np = pdev->dev.of_node;
-	struct reset_control *efuse_rst;
+	struct clk *efuse_clk;
 
 	/* open clk gate HHI_GCLK_MPEG0 bit62*/
-	efuse_rst = devm_reset_control_get(&pdev->dev, "efuse_clk");
-	if (IS_ERR(efuse_rst))
+	efuse_clk = devm_clk_get(&pdev->dev, "efuse_clk");
+	if (IS_ERR(efuse_clk))
 		dev_err(&pdev->dev, " open efuse clk gate error!!\n");
-	else
-		reset_control_deassert(efuse_rst);
+	else{
+		ret = clk_prepare_enable(efuse_clk);
+		if (ret)
+			dev_err(&pdev->dev, "enable efuse clk gate error!!\n");
+	}
 
 	if (pdev->dev.of_node) {
 		of_node_get(np);
@@ -625,7 +609,6 @@ static int efuse_probe(struct platform_device *pdev)
 
 	ret = alloc_chrdev_region(&efuse_devno, 0, 1, EFUSE_DEVICE_NAME);
 	if (ret < 0) {
-		dev_err(&pdev->dev, "efuse: failed to allocate major number\n");
 		ret = -ENODEV;
 		goto out;
 	}
@@ -636,7 +619,6 @@ static int efuse_probe(struct platform_device *pdev)
 
 	efuse_devp = kmalloc(sizeof(struct efuse_dev_t), GFP_KERNEL);
 	if (!efuse_devp) {
-		dev_err(&pdev->dev, "efuse: failed to allocate memory\n");
 		ret = -ENOMEM;
 		goto error2;
 	}
@@ -708,6 +690,7 @@ static struct platform_driver efuse_driver = {
 static int __init efuse_init(void)
 {
 	int ret = -1;
+
 	ret = platform_driver_register(&efuse_driver);
 	if (ret != 0) {
 		pr_err("failed to register efuse driver, error %d\n", ret);

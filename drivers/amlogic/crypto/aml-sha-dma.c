@@ -1,17 +1,19 @@
 /*
- * Cryptographic API.
+ * drivers/amlogic/crypto/aml-sha-dma.c
  *
- * Support for Amlogic SHA1/SHA224/SHA256 HW acceleration.
- *
- * Copyright (c) 2015 Amlogic Inc
+ * Copyright (C) 2017 Amlogic, Inc. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as published
- * by the Free Software Foundation.
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
- * Some ideas are borrowed from atmel-sha.c drivers.
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
  */
-
 
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -65,7 +67,7 @@
 
 #define DMA_THREAD_REG (DMA_T0 + SHA_THREAD_INDEX)
 #define DMA_STATUS_REG (DMA_STS0 + SHA_THREAD_INDEX)
-u8 map_in_sha_dma = 0;
+u8 map_in_sha_dma;
 struct aml_sha_dev;
 
 struct aml_sha_reqctx {
@@ -202,7 +204,6 @@ static int aml_sha_init(struct ahash_request *req)
 		break;
 	default:
 		return -EINVAL;
-		break;
 	}
 
 	ctx->digest = 0;
@@ -302,6 +303,7 @@ static int aml_sha_xmit_dma_map(struct aml_sha_dev *dd,
 					size_t length, int final)
 {
 	struct dma_dsc *dsc = dd->descriptor;
+
 	ctx->dma_addr = dma_map_single(dd->dev, ctx->buffer,
 				ctx->buflen, DMA_TO_DEVICE);
 	if (dma_mapping_error(dd->dev, ctx->dma_addr)) {
@@ -360,8 +362,8 @@ static int aml_sha_update_dma_start(struct aml_sha_dev *dd)
 	if (!ctx->total)
 		return 0;
 
-	/* walk across (nents - 1) sg
-	 * because the last sg maybe only partially used */
+	/* walk across (nents - 1) sg */
+	/* because the last sg maybe only partially used */
 	while (ctx->fast_nents > 1) {
 		ctx->sg = sg_next(ctx->sg);
 		ctx->fast_nents--;
@@ -703,9 +705,9 @@ static int aml_sha_handle_queue(struct aml_sha_dev *dd,
 
 	if (ctx->op == SHA_OP_UPDATE) {
 		err = aml_sha_update_req(dd);
+		/* no final() after finup() */
 		if (err != -EINPROGRESS && (ctx->flags & SHA_FLAGS_FINUP))
-			err = aml_sha_final_req(dd); /* no final()
-							after finup() */
+			err = aml_sha_final_req(dd);
 	} else if (ctx->op == SHA_OP_FINAL) {
 		err = aml_sha_final_req(dd);
 	}
@@ -753,7 +755,7 @@ static int aml_sha_final(struct ahash_request *req)
 
 	if (ctx->bufcnt)
 		return aml_sha_enqueue(req, SHA_OP_FINAL);
-	 else
+	else
 		return aml_sha_finish(req); /* copy ready hash */
 }
 
@@ -770,7 +772,7 @@ static int aml_sha_finup(struct ahash_request *req)
 
 	/*
 	 * final() has to be always called to cleanup resources
-	 * even if udpate() failed, except EINPROGRESS
+	 * even if update() failed, except EINPROGRESS
 	 */
 	err2 = aml_sha_final(req);
 
@@ -830,7 +832,6 @@ static int aml_sha_setkey(struct crypto_ahash *tfm, const u8 *key,
 		break;
 	default:
 		return -EINVAL;
-		break;
 	}
 
 	if (keylen > bs)
@@ -907,6 +908,7 @@ static void aml_sha_cra_exit(struct crypto_tfm *tfm)
 static int aml_hmac_cra_init(struct crypto_tfm *tfm)
 {
 	struct aml_sha_ctx *tctx = crypto_tfm_ctx(tfm);
+
 	tctx->flags |= SHA_FLAGS_HMAC;
 	return aml_sha_cra_init_alg(tfm, NULL);
 }
@@ -924,6 +926,9 @@ static struct ahash_alg sha_algs[] = {
 		.digest		= aml_sha_digest,
 		.halg = {
 			.digestsize	= SHA1_DIGEST_SIZE,
+			/* although we don't support import/export, */
+			/* let's cheat it. */
+			.statesize =  sizeof(struct aml_sha_ctx),
 			.base	= {
 				.cra_name	  = "sha1",
 				.cra_driver_name  = "aml-sha1",
@@ -946,6 +951,9 @@ static struct ahash_alg sha_algs[] = {
 		.digest		= aml_sha_digest,
 		.halg = {
 			.digestsize	= SHA256_DIGEST_SIZE,
+			/* although we don't support import/export, */
+			/* let's cheat it. */
+			.statesize =  sizeof(struct aml_sha_ctx),
 			.base	= {
 				.cra_name	  = "sha256",
 				.cra_driver_name  = "aml-sha256",
@@ -968,6 +976,9 @@ static struct ahash_alg sha_algs[] = {
 		.digest		= aml_sha_digest,
 		.halg = {
 			.digestsize	= SHA224_DIGEST_SIZE,
+			/* although we don't support import/export, */
+			/* let's cheat it. */
+			.statesize =  sizeof(struct aml_sha_ctx),
 			.base	= {
 				.cra_name	  = "sha224",
 				.cra_driver_name  = "aml-sha224",
@@ -991,6 +1002,9 @@ static struct ahash_alg sha_algs[] = {
 		.setkey         = aml_sha_setkey,
 		.halg = {
 			.digestsize	= SHA1_DIGEST_SIZE,
+			/* although we don't support import/export, */
+			/* let's cheat it. */
+			.statesize =  sizeof(struct aml_sha_ctx),
 			.base	= {
 				.cra_name	  = "hmac(sha1)",
 				.cra_driver_name  = "aml-hmac-sha1",
@@ -1014,6 +1028,9 @@ static struct ahash_alg sha_algs[] = {
 		.setkey         = aml_sha_setkey,
 		.halg = {
 			.digestsize	= SHA224_DIGEST_SIZE,
+			/* although we don't support import/export, */
+			/* let's cheat it. */
+			.statesize =  sizeof(struct aml_sha_ctx),
 			.base	= {
 				.cra_name	  = "hmac(sha224)",
 				.cra_driver_name  = "aml-hmac-sha224",
@@ -1037,6 +1054,9 @@ static struct ahash_alg sha_algs[] = {
 		.setkey         = aml_sha_setkey,
 		.halg = {
 			.digestsize	= SHA256_DIGEST_SIZE,
+			/* although we don't support import/export, */
+			/* let's cheat it. */
+			.statesize =  sizeof(struct aml_sha_ctx),
 			.base	= {
 				.cra_name	  = "hmac(sha256)",
 				.cra_driver_name  = "aml-hmac-sha256",
@@ -1057,8 +1077,8 @@ static void aml_sha_done_task(unsigned long data)
 {
 	struct aml_sha_dev *dd = (struct aml_sha_dev *)data;
 	struct aml_sha_reqctx *ctx = ahash_request_ctx(dd->req);
-
 	int err = 0;
+
 	if (!(SHA_FLAGS_BUSY & dd->flags)) {
 		aml_sha_handle_queue(dd, NULL);
 		return;
@@ -1125,8 +1145,7 @@ static void aml_sha_unregister_algs(struct aml_sha_dev *dd)
 
 static int aml_sha_register_algs(struct aml_sha_dev *dd)
 {
-	int err;
-	int i;
+	int err, i, j;
 
 	for (i = 0; i < ARRAY_SIZE(sha_algs); i++) {
 		err = crypto_register_ahash(&sha_algs[i]);
@@ -1137,7 +1156,8 @@ static int aml_sha_register_algs(struct aml_sha_dev *dd)
 	return 0;
 
 err_sha_algs:
-	aml_sha_unregister_algs(dd);
+	for (j = 0; j < i; j++)
+		crypto_unregister_ahash(&sha_algs[j]);
 	return err;
 }
 
@@ -1151,7 +1171,6 @@ static int aml_sha_probe(struct platform_device *pdev)
 
 	sha_dd = kzalloc(sizeof(struct aml_sha_dev), GFP_KERNEL);
 	if (sha_dd == NULL) {
-		dev_err(dev, "unable to alloc data struct.\n");
 		err = -ENOMEM;
 		goto sha_dd_err;
 	}

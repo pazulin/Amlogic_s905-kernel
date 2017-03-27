@@ -4,16 +4,19 @@
 
 menu "MESON MHU mailbox Support"
 
-config MESON_MHU_MBOX
-	boolean "MESON MHU Mailbox"
+config AMLOGIC_MHU_MBOX
+	tristate "MESON MHU Mailbox"
 	default n
 	select MAILBOX
 	select ARM_SCPI_PROTOCOL
 	help
 		MESON MHU Mailbox driver.
+		.
+		.
+		.
 
 config ARM_SCPI_PROTOCOL
-	bool "ARM System Control and Power Interface (SCPI) Message Protocol"
+	tristate "ARM System Control and Power Interface (SCPI) Message Protocol"
 	default n
 	help
 		System Control and Power Interface (SCPI) Message Protocol is
@@ -22,7 +25,7 @@ config ARM_SCPI_PROTOCOL
 		provides a mechanism for inter-processor communication between SCP
 		and AP.
 
-	  	This protocol library provides interface for all the client drivers
-	  	making use of the features offered by the SCP.
+		This protocol library provides interface for all the client drivers
+		making use of the features offered by the SCP.
 
 endmenu

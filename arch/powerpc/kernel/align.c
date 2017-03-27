@@ -25,14 +25,14 @@
 #include <asm/cputable.h>
 #include <asm/emulated_ops.h>
 #include <asm/switch_to.h>
+#include <asm/disassemble.h>
+#include <asm/cpu_has_feature.h>
 
 struct aligninfo {
 	unsigned char len;
 	unsigned char flags;
 };
 
-#define IS_XFORM(inst)	(((inst) >> 26) == 31)
-#define IS_DSFORM(inst)	(((inst) >> 26) >= 56)
 
 #define INVALID	{ 0, 0 }
 
@@ -73,7 +73,7 @@ static struct aligninfo aligninfo[128] = {
 	{ 8, LD+F },		/* 00 0 1001: lfd */
 	{ 4, ST+F+S },		/* 00 0 1010: stfs */
 	{ 8, ST+F },		/* 00 0 1011: stfd */
-	INVALID,		/* 00 0 1100 */
+	{ 16, LD },		/* 00 0 1100: lq */
 	{ 8, LD },		/* 00 0 1101: ld/ldu/lwa */
 	INVALID,		/* 00 0 1110 */
 	{ 8, ST },		/* 00 0 1111: std/stdu */
@@ -140,7 +140,7 @@ static struct aligninfo aligninfo[128] = {
 	{ 2, LD+SW },		/* 10 0 1100: lhbrx */
 	{ 4, LD+SE },		/* 10 0 1101  lwa */
 	{ 2, ST+SW },		/* 10 0 1110: sthbrx */
-	INVALID,		/* 10 0 1111 */
+	{ 16, ST },		/* 10 0 1111: stq */
 	INVALID,		/* 10 1 0000 */
 	INVALID,		/* 10 1 0001 */
 	INVALID,		/* 10 1 0010 */
@@ -192,37 +192,6 @@ static struct aligninfo aligninfo[128] = {
 };
 
 /*
- * Create a DSISR value from the instruction
- */
-static inline unsigned make_dsisr(unsigned instr)
-{
-	unsigned dsisr;
-
-
-	/* bits  6:15 --> 22:31 */
-	dsisr = (instr & 0x03ff0000) >> 16;
-
-	if (IS_XFORM(instr)) {
-		/* bits 29:30 --> 15:16 */
-		dsisr |= (instr & 0x00000006) << 14;
-		/* bit     25 -->    17 */
-		dsisr |= (instr & 0x00000040) << 8;
-		/* bits 21:24 --> 18:21 */
-		dsisr |= (instr & 0x00000780) << 3;
-	} else {
-		/* bit      5 -->    17 */
-		dsisr |= (instr & 0x04000000) >> 12;
-		/* bits  1: 4 --> 18:21 */
-		dsisr |= (instr & 0x78000000) >> 17;
-		/* bits 30:31 --> 12:13 */
-		if (IS_DSFORM(instr))
-			dsisr |= (instr & 0x00000003) << 18;
-	}
-
-	return dsisr;
-}
-
-/*
  * The dcbz (data cache block zero) instruction
  * gives an alignment fault if used on non-cacheable
  * memory.  We handle the fault mainly for the
@@ -260,9 +229,7 @@ static int emulate_dcbz(struct pt_regs *regs, unsigned char __user *addr)
 #else
 #define REG_BYTE(rp, i)		*((u8 *)(rp) + (i))
 #endif
-#endif
-
-#ifdef __LITTLE_ENDIAN__
+#else
 #define REG_BYTE(rp, i)		(*(((u8 *)((rp) + ((i)>>2)) + ((i)&3))))
 #endif
 
@@ -385,8 +352,6 @@ static int emulate_fp_pair(unsigned char __user *addr, unsigned int reg,
 	char *ptr1 = (char *) &current->thread.TS_FPR(reg+1);
 	int i, ret, sw = 0;
 
-	if (!(flags & F))
-		return 0;
 	if (reg & 1)
 		return 0;	/* invalid form: FRS/FRT must be even */
 	if (flags & SW)
@@ -405,6 +370,34 @@ static int emulate_fp_pair(unsigned char __user *addr, unsigned int reg,
 		return -EFAULT;
 	return 1;	/* exception handled and fixed up */
 }
+
+#ifdef CONFIG_PPC64
+static int emulate_lq_stq(struct pt_regs *regs, unsigned char __user *addr,
+			  unsigned int reg, unsigned int flags)
+{
+	char *ptr0 = (char *)&regs->gpr[reg];
+	char *ptr1 = (char *)&regs->gpr[reg+1];
+	int i, ret, sw = 0;
+
+	if (reg & 1)
+		return 0;	/* invalid form: GPR must be even */
+	if (flags & SW)
+		sw = 7;
+	ret = 0;
+	for (i = 0; i < 8; ++i) {
+		if (!(flags & ST)) {
+			ret |= __get_user(ptr0[i^sw], addr + i);
+			ret |= __get_user(ptr1[i^sw], addr + i + 8);
+		} else {
+			ret |= __put_user(ptr0[i^sw], addr + i);
+			ret |= __put_user(ptr1[i^sw], addr + i + 8);
+		}
+	}
+	if (ret)
+		return -EFAULT;
+	return 1;	/* exception handled and fixed up */
+}
+#endif /* CONFIG_PPC64 */
 
 #ifdef CONFIG_SPE
 
@@ -881,6 +874,20 @@ int fix_alignment(struct pt_regs *regs)
 		return emulate_vsx(addr, reg, areg, regs, flags, nb, elsize);
 	}
 #endif
+
+	/*
+	 * ISA 3.0 (such as P9) copy, copy_first, paste and paste_last alignment
+	 * check.
+	 *
+	 * Send a SIGBUS to the process that caused the fault.
+	 *
+	 * We do not emulate these because paste may contain additional metadata
+	 * when pasting to a co-processor. Furthermore, paste_last is the
+	 * synchronisation point for preceding copy/paste sequences.
+	 */
+	if ((instruction & 0xfc0006fe) == PPC_INST_COPY)
+		return -EIO;
+
 	/* A size of 0 indicates an instruction we don't support, with
 	 * the exception of DCBZ which is handled as a special case here
 	 */
@@ -914,10 +921,20 @@ int fix_alignment(struct pt_regs *regs)
 		flush_fp_to_thread(current);
 	}
 
-	/* Special case for 16-byte FP loads and stores */
 	if (nb == 16) {
-		PPC_WARN_ALIGNMENT(fp_pair, regs);
-		return emulate_fp_pair(addr, reg, flags);
+		if (flags & F) {
+			/* Special case for 16-byte FP loads and stores */
+			PPC_WARN_ALIGNMENT(fp_pair, regs);
+			return emulate_fp_pair(addr, reg, flags);
+		} else {
+#ifdef CONFIG_PPC64
+			/* Special case for 16-byte loads and stores */
+			PPC_WARN_ALIGNMENT(lq_stq, regs);
+			return emulate_lq_stq(regs, addr, reg, flags);
+#else
+			return 0;
+#endif
+		}
 	}
 
 	PPC_WARN_ALIGNMENT(unaligned, regs);
@@ -956,6 +973,7 @@ int fix_alignment(struct pt_regs *regs)
 			preempt_disable();
 			enable_kernel_fp();
 			cvt_df(&data.dd, (float *)&data.x32.low32);
+			disable_kernel_fp();
 			preempt_enable();
 #else
 			return 0;
@@ -996,6 +1014,7 @@ int fix_alignment(struct pt_regs *regs)
 		preempt_disable();
 		enable_kernel_fp();
 		cvt_fd((float *)&data.x32.low32, &data.dd);
+		disable_kernel_fp();
 		preempt_enable();
 #else
 		return 0;

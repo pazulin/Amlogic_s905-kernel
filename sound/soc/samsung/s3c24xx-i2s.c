@@ -23,7 +23,6 @@
 #include <sound/soc.h>
 #include <sound/pcm_params.h>
 
-#include <mach/dma.h>
 #include <mach/gpio-samsung.h>
 #include <plat/gpio-cfg.h>
 #include "regs-iis.h"
@@ -31,26 +30,16 @@
 #include "dma.h"
 #include "s3c24xx-i2s.h"
 
-static struct s3c2410_dma_client s3c24xx_dma_client_out = {
-	.name = "I2S PCM Stereo out"
+#include <linux/platform_data/asoc-s3c.h>
+
+static struct snd_dmaengine_dai_dma_data s3c24xx_i2s_pcm_stereo_out = {
+	.chan_name	= "tx",
+	.addr_width	= 2,
 };
 
-static struct s3c2410_dma_client s3c24xx_dma_client_in = {
-	.name = "I2S PCM Stereo in"
-};
-
-static struct s3c_dma_params s3c24xx_i2s_pcm_stereo_out = {
-	.client		= &s3c24xx_dma_client_out,
-	.channel	= DMACH_I2S_OUT,
-	.dma_addr	= S3C2410_PA_IIS + S3C2410_IISFIFO,
-	.dma_size	= 2,
-};
-
-static struct s3c_dma_params s3c24xx_i2s_pcm_stereo_in = {
-	.client		= &s3c24xx_dma_client_in,
-	.channel	= DMACH_I2S_IN,
-	.dma_addr	= S3C2410_PA_IIS + S3C2410_IISFIFO,
-	.dma_size	= 2,
+static struct snd_dmaengine_dai_dma_data s3c24xx_i2s_pcm_stereo_in = {
+	.chan_name	= "rx",
+	.addr_width	= 2,
 };
 
 struct s3c24xx_i2s_info {
@@ -231,31 +220,25 @@ static int s3c24xx_i2s_hw_params(struct snd_pcm_substream *substream,
 				 struct snd_pcm_hw_params *params,
 				 struct snd_soc_dai *dai)
 {
-	struct snd_soc_pcm_runtime *rtd = substream->private_data;
-	struct s3c_dma_params *dma_data;
+	struct snd_dmaengine_dai_dma_data *dma_data;
 	u32 iismod;
 
 	pr_debug("Entered %s\n", __func__);
 
-	if (substream->stream == SNDRV_PCM_STREAM_PLAYBACK)
-		dma_data = &s3c24xx_i2s_pcm_stereo_out;
-	else
-		dma_data = &s3c24xx_i2s_pcm_stereo_in;
-
-	snd_soc_dai_set_dma_data(rtd->cpu_dai, substream, dma_data);
+	dma_data = snd_soc_dai_get_dma_data(dai, substream);
 
 	/* Working copies of register */
 	iismod = readl(s3c24xx_i2s.regs + S3C2410_IISMOD);
 	pr_debug("hw_params r: IISMOD: %x\n", iismod);
 
-	switch (params_format(params)) {
-	case SNDRV_PCM_FORMAT_S8:
+	switch (params_width(params)) {
+	case 8:
 		iismod &= ~S3C2410_IISMOD_16BIT;
-		dma_data->dma_size = 1;
+		dma_data->addr_width = 1;
 		break;
-	case SNDRV_PCM_FORMAT_S16_LE:
+	case 16:
 		iismod |= S3C2410_IISMOD_16BIT;
-		dma_data->dma_size = 2;
+		dma_data->addr_width = 2;
 		break;
 	default:
 		return -EINVAL;
@@ -270,8 +253,6 @@ static int s3c24xx_i2s_trigger(struct snd_pcm_substream *substream, int cmd,
 			       struct snd_soc_dai *dai)
 {
 	int ret = 0;
-	struct s3c_dma_params *dma_data =
-		snd_soc_dai_get_dma_data(dai, substream);
 
 	pr_debug("Entered %s\n", __func__);
 
@@ -290,7 +271,6 @@ static int s3c24xx_i2s_trigger(struct snd_pcm_substream *substream, int cmd,
 		else
 			s3c24xx_snd_txctrl(1);
 
-		s3c2410_dma_ctrl(dma_data->channel, S3C2410_DMAOP_STARTED);
 		break;
 	case SNDRV_PCM_TRIGGER_STOP:
 	case SNDRV_PCM_TRIGGER_SUSPEND:
@@ -380,17 +360,15 @@ static int s3c24xx_i2s_probe(struct snd_soc_dai *dai)
 {
 	pr_debug("Entered %s\n", __func__);
 
-	s3c24xx_i2s.regs = ioremap(S3C2410_PA_IIS, 0x100);
-	if (s3c24xx_i2s.regs == NULL)
-		return -ENXIO;
+	snd_soc_dai_init_dma_data(dai, &s3c24xx_i2s_pcm_stereo_out,
+					&s3c24xx_i2s_pcm_stereo_in);
 
-	s3c24xx_i2s.iis_clk = clk_get(dai->dev, "iis");
+	s3c24xx_i2s.iis_clk = devm_clk_get(dai->dev, "iis");
 	if (IS_ERR(s3c24xx_i2s.iis_clk)) {
 		pr_err("failed to get iis_clock\n");
-		iounmap(s3c24xx_i2s.regs);
 		return PTR_ERR(s3c24xx_i2s.iis_clk);
 	}
-	clk_enable(s3c24xx_i2s.iis_clk);
+	clk_prepare_enable(s3c24xx_i2s.iis_clk);
 
 	/* Configure the I2S pins (GPE0...GPE4) in correct mode */
 	s3c_gpio_cfgall_range(S3C2410_GPE(0), 5, S3C_GPIO_SFN(2),
@@ -414,7 +392,7 @@ static int s3c24xx_i2s_suspend(struct snd_soc_dai *cpu_dai)
 	s3c24xx_i2s.iisfcon = readl(s3c24xx_i2s.regs + S3C2410_IISFCON);
 	s3c24xx_i2s.iispsr = readl(s3c24xx_i2s.regs + S3C2410_IISPSR);
 
-	clk_disable(s3c24xx_i2s.iis_clk);
+	clk_disable_unprepare(s3c24xx_i2s.iis_clk);
 
 	return 0;
 }
@@ -422,7 +400,7 @@ static int s3c24xx_i2s_suspend(struct snd_soc_dai *cpu_dai)
 static int s3c24xx_i2s_resume(struct snd_soc_dai *cpu_dai)
 {
 	pr_debug("Entered %s\n", __func__);
-	clk_enable(s3c24xx_i2s.iis_clk);
+	clk_prepare_enable(s3c24xx_i2s.iis_clk);
 
 	writel(s3c24xx_i2s.iiscon, s3c24xx_i2s.regs + S3C2410_IISCON);
 	writel(s3c24xx_i2s.iismod, s3c24xx_i2s.regs + S3C2410_IISMOD);
@@ -474,39 +452,48 @@ static const struct snd_soc_component_driver s3c24xx_i2s_component = {
 static int s3c24xx_iis_dev_probe(struct platform_device *pdev)
 {
 	int ret = 0;
+	struct resource *res;
+	struct s3c_audio_pdata *pdata = dev_get_platdata(&pdev->dev);
 
-	ret = snd_soc_register_component(&pdev->dev, &s3c24xx_i2s_component,
-					 &s3c24xx_i2s_dai, 1);
+	if (!pdata) {
+		dev_err(&pdev->dev, "missing platform data");
+		return -ENXIO;
+	}
+
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!res) {
+		dev_err(&pdev->dev, "Can't get IO resource.\n");
+		return -ENOENT;
+	}
+	s3c24xx_i2s.regs = devm_ioremap_resource(&pdev->dev, res);
+	if (IS_ERR(s3c24xx_i2s.regs))
+		return PTR_ERR(s3c24xx_i2s.regs);
+
+	s3c24xx_i2s_pcm_stereo_out.addr = res->start + S3C2410_IISFIFO;
+	s3c24xx_i2s_pcm_stereo_out.filter_data = pdata->dma_playback;
+	s3c24xx_i2s_pcm_stereo_in.addr = res->start + S3C2410_IISFIFO;
+	s3c24xx_i2s_pcm_stereo_in.filter_data = pdata->dma_capture;
+
+	ret = samsung_asoc_dma_platform_register(&pdev->dev,
+						 pdata->dma_filter,
+						 NULL, NULL);
 	if (ret) {
-		pr_err("failed to register the dai\n");
+		pr_err("failed to register the dma: %d\n", ret);
 		return ret;
 	}
 
-	ret = samsung_asoc_dma_platform_register(&pdev->dev);
-	if (ret) {
-		pr_err("failed to register the dma: %d\n", ret);
-		goto err;
-	}
+	ret = devm_snd_soc_register_component(&pdev->dev,
+			&s3c24xx_i2s_component, &s3c24xx_i2s_dai, 1);
+	if (ret)
+		pr_err("failed to register the dai\n");
 
-	return 0;
-err:
-	snd_soc_unregister_component(&pdev->dev);
 	return ret;
-}
-
-static int s3c24xx_iis_dev_remove(struct platform_device *pdev)
-{
-	samsung_asoc_dma_platform_unregister(&pdev->dev);
-	snd_soc_unregister_component(&pdev->dev);
-	return 0;
 }
 
 static struct platform_driver s3c24xx_iis_driver = {
 	.probe  = s3c24xx_iis_dev_probe,
-	.remove = s3c24xx_iis_dev_remove,
 	.driver = {
 		.name = "s3c24xx-iis",
-		.owner = THIS_MODULE,
 	},
 };
 

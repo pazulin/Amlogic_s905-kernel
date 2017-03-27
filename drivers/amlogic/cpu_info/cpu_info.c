@@ -1,8 +1,26 @@
+/*
+ * drivers/amlogic/cpu_info/cpu_info.c
+ *
+ * Copyright (C) 2017 Amlogic, Inc. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ */
+
 #include <linux/cdev.h>
 #include <linux/types.h>
 #include <linux/fs.h>
 #include <linux/device.h>
 #include <linux/slab.h>
+ #include <linux/module.h>
 #include <linux/delay.h>
 #include <linux/uaccess.h>
 #include <linux/sched.h>
@@ -53,7 +71,7 @@ static noinline int fn_smc(u64 function_id, u64 arg0, u64 arg1,
 static int cpuinfo_probe(struct platform_device *pdev)
 {
 	struct device_node *np = pdev->dev.of_node;
-	unsigned id;
+	unsigned int id;
 	unsigned int *p = NULL;
 	unsigned int version =
 		(get_meson_cpu_version(MESON_CPU_VERSION_LVL_MAJOR) << 24) |
@@ -80,6 +98,7 @@ static int cpuinfo_probe(struct platform_device *pdev)
 #if 0
 	int i;
 	unsigned int *p = (unsigned int *)(cpu_info_buf->chipid);
+
 	for (i = 0; i < 12; i++)
 		pr_info("cpu_info_buf->chipid[%d]=%x\n",
 					i, cpu_info_buf->chipid[i]);
@@ -108,9 +127,10 @@ static  struct platform_driver cpuinfo_platform_driver = {
 	},
 };
 
-int __init meson_cpuinfo_init(void)
+static int __init meson_cpuinfo_init(void)
 {
 	return  platform_driver_register(&cpuinfo_platform_driver);
 }
 module_init(meson_cpuinfo_init);
+
 

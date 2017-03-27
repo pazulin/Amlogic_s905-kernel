@@ -359,9 +359,9 @@ typedef struct
 		per_cr_bits    bits;
 	} control_regs;
 	/*
-	 * Use these flags instead of setting em_instruction_fetch
-	 * directly they are used so that single stepping can be
-	 * switched on & off while not affecting other tracing
+	 * The single_step and instruction_fetch bits are obsolete,
+	 * the kernel always sets them to zero. To enable single
+	 * stepping use ptrace(PTRACE_SINGLESTEP) instead.
 	 */
 	unsigned  single_step       : 1;
 	unsigned  instruction_fetch : 1;
@@ -401,6 +401,12 @@ typedef struct
 #define PTRACE_ENABLE_TE	      0x5009
 #define PTRACE_DISABLE_TE	      0x5010
 #define PTRACE_TE_ABORT_RAND	      0x5011
+
+/*
+ * The numbers chosen here are somewhat arbitrary but absolutely MUST
+ * not overlap with any of the number assigned in <linux/ptrace.h>.
+ */
+#define PTRACE_SINGLEBLOCK	12	/* resume execution until next branch */
 
 /*
  * PT_PROT definition is loosely based on hppa bsd definition in

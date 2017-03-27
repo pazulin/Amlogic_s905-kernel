@@ -24,7 +24,6 @@
 #include "xfs_shared.h"
 #include "xfs_trans_resv.h"
 #include "xfs_sb.h"
-#include "xfs_ag.h"
 #include "xfs_mount.h"
 #include "xfs_alloc.h"
 #include "xfs_extent_busy.h"
@@ -385,7 +384,7 @@ restart:
 		 * If this is a metadata allocation, try to reuse the busy
 		 * extent instead of trimming the allocation.
 		 */
-		if (!args->userdata &&
+		if (!xfs_alloc_is_userdata(args->datatype) &&
 		    !(busyp->flags & XFS_EXTENT_BUSY_DISCARDED)) {
 			if (!xfs_extent_busy_update_extent(args->mp, args->pag,
 							  busyp, fbno, flen,

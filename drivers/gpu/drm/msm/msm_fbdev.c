@@ -19,6 +19,11 @@
 
 #include "drm_crtc.h"
 #include "drm_fb_helper.h"
+#include "msm_gem.h"
+
+extern int msm_gem_mmap_obj(struct drm_gem_object *obj,
+					struct vm_area_struct *vma);
+static int msm_fbdev_mmap(struct fb_info *info, struct vm_area_struct *vma);
 
 /*
  * fbdev funcs, to implement legacy fbdev interface on top of drm driver
@@ -38,11 +43,12 @@ static struct fb_ops msm_fb_ops = {
 	/* Note: to properly handle manual update displays, we wrap the
 	 * basic fbdev ops which write to the framebuffer
 	 */
-	.fb_read = fb_sys_read,
-	.fb_write = fb_sys_write,
-	.fb_fillrect = sys_fillrect,
-	.fb_copyarea = sys_copyarea,
-	.fb_imageblit = sys_imageblit,
+	.fb_read = drm_fb_helper_sys_read,
+	.fb_write = drm_fb_helper_sys_write,
+	.fb_fillrect = drm_fb_helper_sys_fillrect,
+	.fb_copyarea = drm_fb_helper_sys_copyarea,
+	.fb_imageblit = drm_fb_helper_sys_imageblit,
+	.fb_mmap = msm_fbdev_mmap,
 
 	.fb_check_var = drm_fb_helper_check_var,
 	.fb_set_par = drm_fb_helper_set_par,
@@ -50,6 +56,22 @@ static struct fb_ops msm_fb_ops = {
 	.fb_blank = drm_fb_helper_blank,
 	.fb_setcmap = drm_fb_helper_setcmap,
 };
+
+static int msm_fbdev_mmap(struct fb_info *info, struct vm_area_struct *vma)
+{
+	struct drm_fb_helper *helper = (struct drm_fb_helper *)info->par;
+	struct msm_fbdev *fbdev = to_msm_fbdev(helper);
+	struct drm_gem_object *drm_obj = fbdev->bo;
+	int ret = 0;
+
+	ret = drm_gem_mmap_obj(drm_obj, drm_obj->size, vma);
+	if (ret) {
+		pr_err("%s:drm_gem_mmap_obj fail\n", __func__);
+		return ret;
+	}
+
+	return msm_gem_mmap_obj(drm_obj, vma);
+}
 
 static int msm_fbdev_create(struct drm_fb_helper *helper,
 		struct drm_fb_helper_surface_size *sizes)
@@ -59,14 +81,8 @@ static int msm_fbdev_create(struct drm_fb_helper *helper,
 	struct drm_framebuffer *fb = NULL;
 	struct fb_info *fbi = NULL;
 	struct drm_mode_fb_cmd2 mode_cmd = {0};
-	dma_addr_t paddr;
+	uint32_t paddr;
 	int ret, size;
-
-	/* only doing ARGB32 since this is what is needed to alpha-blend
-	 * with video overlays:
-	 */
-	sizes->surface_bpp = 32;
-	sizes->surface_depth = 32;
 
 	DBG("create fbdev: %dx%d@%d (%dx%d)", sizes->surface_width,
 			sizes->surface_height, sizes->surface_bpp,
@@ -85,7 +101,8 @@ static int msm_fbdev_create(struct drm_fb_helper *helper,
 	size = mode_cmd.pitches[0] * mode_cmd.height;
 	DBG("allocating %d bytes for fb %d", size, dev->primary->index);
 	mutex_lock(&dev->struct_mutex);
-	fbdev->bo = msm_gem_new(dev, size, MSM_BO_SCANOUT | MSM_BO_WC);
+	fbdev->bo = msm_gem_new(dev, size, MSM_BO_SCANOUT |
+			MSM_BO_WC | MSM_BO_STOLEN);
 	mutex_unlock(&dev->struct_mutex);
 	if (IS_ERR(fbdev->bo)) {
 		ret = PTR_ERR(fbdev->bo);
@@ -100,20 +117,28 @@ static int msm_fbdev_create(struct drm_fb_helper *helper,
 		/* note: if fb creation failed, we can't rely on fb destroy
 		 * to unref the bo:
 		 */
-		drm_gem_object_unreference(fbdev->bo);
+		drm_gem_object_unreference_unlocked(fbdev->bo);
 		ret = PTR_ERR(fb);
 		goto fail;
 	}
 
 	mutex_lock(&dev->struct_mutex);
 
-	/* TODO implement our own fb_mmap so we don't need this: */
-	msm_gem_get_iova_locked(fbdev->bo, 0, &paddr);
+	/*
+	 * NOTE: if we can be guaranteed to be able to map buffer
+	 * in panic (ie. lock-safe, etc) we could avoid pinning the
+	 * buffer now:
+	 */
+	ret = msm_gem_get_iova_locked(fbdev->bo, 0, &paddr);
+	if (ret) {
+		dev_err(dev->dev, "failed to get buffer obj iova: %d\n", ret);
+		goto fail_unlock;
+	}
 
-	fbi = framebuffer_alloc(0, dev->dev);
-	if (!fbi) {
+	fbi = drm_fb_helper_alloc_fbi(helper);
+	if (IS_ERR(fbi)) {
 		dev_err(dev->dev, "failed to allocate fb info\n");
-		ret = -ENOMEM;
+		ret = PTR_ERR(fbi);
 		goto fail_unlock;
 	}
 
@@ -121,7 +146,6 @@ static int msm_fbdev_create(struct drm_fb_helper *helper,
 
 	fbdev->fb = fb;
 	helper->fb = fb;
-	helper->fbdev = fbi;
 
 	fbi->par = helper;
 	fbi->flags = FBINFO_DEFAULT;
@@ -129,18 +153,16 @@ static int msm_fbdev_create(struct drm_fb_helper *helper,
 
 	strcpy(fbi->fix.id, "msm");
 
-	ret = fb_alloc_cmap(&fbi->cmap, 256, 0);
-	if (ret) {
-		ret = -ENOMEM;
-		goto fail_unlock;
-	}
-
 	drm_fb_helper_fill_fix(fbi, fb->pitches[0], fb->depth);
 	drm_fb_helper_fill_var(fbi, helper, sizes->fb_width, sizes->fb_height);
 
 	dev->mode_config.fb_base = paddr;
 
-	fbi->screen_base = msm_gem_vaddr_locked(fbdev->bo);
+	fbi->screen_base = msm_gem_get_vaddr_locked(fbdev->bo);
+	if (IS_ERR(fbi->screen_base)) {
+		ret = PTR_ERR(fbi->screen_base);
+		goto fail_unlock;
+	}
 	fbi->screen_size = fbdev->bo->size;
 	fbi->fix.smem_start = paddr;
 	fbi->fix.smem_len = fbdev->bo->size;
@@ -157,8 +179,6 @@ fail_unlock:
 fail:
 
 	if (ret) {
-		if (fbi)
-			framebuffer_release(fbi);
 		if (fb) {
 			drm_framebuffer_unregister_private(fb);
 			drm_framebuffer_remove(fb);
@@ -168,21 +188,7 @@ fail:
 	return ret;
 }
 
-static void msm_crtc_fb_gamma_set(struct drm_crtc *crtc,
-		u16 red, u16 green, u16 blue, int regno)
-{
-	DBG("fbdev: set gamma");
-}
-
-static void msm_crtc_fb_gamma_get(struct drm_crtc *crtc,
-		u16 *red, u16 *green, u16 *blue, int regno)
-{
-	DBG("fbdev: get gamma");
-}
-
-static struct drm_fb_helper_funcs msm_fb_helper_funcs = {
-	.gamma_set = msm_crtc_fb_gamma_set,
-	.gamma_get = msm_crtc_fb_gamma_get,
+static const struct drm_fb_helper_funcs msm_fb_helper_funcs = {
 	.fb_probe = msm_fbdev_create,
 };
 
@@ -192,7 +198,7 @@ struct drm_fb_helper *msm_fbdev_init(struct drm_device *dev)
 	struct msm_drm_private *priv = dev->dev_private;
 	struct msm_fbdev *fbdev = NULL;
 	struct drm_fb_helper *helper;
-	int ret = 0;
+	int ret;
 
 	fbdev = kzalloc(sizeof(*fbdev), GFP_KERNEL);
 	if (!fbdev)
@@ -200,7 +206,7 @@ struct drm_fb_helper *msm_fbdev_init(struct drm_device *dev)
 
 	helper = &fbdev->base;
 
-	helper->funcs = &msm_fb_helper_funcs;
+	drm_fb_helper_prepare(dev, helper, &msm_fb_helper_funcs);
 
 	ret = drm_fb_helper_init(dev, helper,
 			priv->num_crtcs, priv->num_connectors);
@@ -209,17 +215,20 @@ struct drm_fb_helper *msm_fbdev_init(struct drm_device *dev)
 		goto fail;
 	}
 
-	drm_fb_helper_single_add_all_connectors(helper);
+	ret = drm_fb_helper_single_add_all_connectors(helper);
+	if (ret)
+		goto fini;
 
-	/* disable all the possible outputs/crtcs before entering KMS mode */
-	drm_helper_disable_unused_functions(dev);
-
-	drm_fb_helper_initial_config(helper, 32);
+	ret = drm_fb_helper_initial_config(helper, 32);
+	if (ret)
+		goto fini;
 
 	priv->fbdev = helper;
 
 	return helper;
 
+fini:
+	drm_fb_helper_fini(helper);
 fail:
 	kfree(fbdev);
 	return NULL;
@@ -230,17 +239,11 @@ void msm_fbdev_free(struct drm_device *dev)
 	struct msm_drm_private *priv = dev->dev_private;
 	struct drm_fb_helper *helper = priv->fbdev;
 	struct msm_fbdev *fbdev;
-	struct fb_info *fbi;
 
 	DBG();
 
-	fbi = helper->fbdev;
-
-	/* only cleanup framebuffer if it is present */
-	if (fbi) {
-		unregister_framebuffer(fbi);
-		framebuffer_release(fbi);
-	}
+	drm_fb_helper_unregister_fbi(helper);
+	drm_fb_helper_release_fbi(helper);
 
 	drm_fb_helper_fini(helper);
 
@@ -248,6 +251,7 @@ void msm_fbdev_free(struct drm_device *dev)
 
 	/* this will free the backing object */
 	if (fbdev->fb) {
+		msm_gem_put_vaddr(fbdev->bo);
 		drm_framebuffer_unregister_private(fbdev->fb);
 		drm_framebuffer_remove(fbdev->fb);
 	}

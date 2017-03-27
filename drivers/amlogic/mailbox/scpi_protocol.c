@@ -1,19 +1,18 @@
 /*
- * System Control and Power Interface (SCPI) Message Protocol driver
+ * drivers/amlogic/mailbox/scpi_protocol.c
  *
- * Copyright (C) 2014 ARM Ltd.
+ * Copyright (C) 2017 Amlogic, Inc. All rights reserved.
  *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
- * This program is distributed in the hope it will be useful, but WITHOUT
+ * This program is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
- * You should have received a copy of the GNU General Public License along with
- * this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
 #include <linux/err.h>
@@ -85,7 +84,7 @@ static int high_priority_cmds[] = {
 	SCPI_CMD_SENSOR_CFG_BOUNDS,
 };
 
-static struct scpi_opp *scpi_opps[MAX_DVFS_DOMAINS];
+static struct scpi_dvfs_info *scpi_opps[MAX_DVFS_DOMAINS];
 
 static int scpi_linux_errmap[SCPI_ERR_MAX] = {
 	0, -EINVAL, -ENOEXEC, -EMSGSIZE,
@@ -103,6 +102,7 @@ static inline int scpi_to_linux_errno(int errno)
 static bool high_priority_chan_supported(int cmd)
 {
 	int idx;
+
 	for (idx = 0; idx < ARRAY_SIZE(high_priority_cmds); idx++)
 		if (cmd == high_priority_cmds[idx])
 			return true;
@@ -113,6 +113,7 @@ static void scpi_rx_callback(struct mbox_client *cl, void *msg)
 {
 	struct mhu_data_buf *data = (struct mhu_data_buf *)msg;
 	struct scpi_data_buf *scpi_buf = data->cl_data;
+
 	complete(&scpi_buf->complete);
 }
 
@@ -224,7 +225,7 @@ int scpi_clk_set_val(u16 clk_id, unsigned long rate)
 }
 EXPORT_SYMBOL_GPL(scpi_clk_set_val);
 
-struct scpi_opp *scpi_dvfs_get_opps(u8 domain)
+struct scpi_dvfs_info *scpi_dvfs_get_opps(u8 domain)
 {
 	struct scpi_data_buf sdata;
 	struct mhu_data_buf mdata;
@@ -233,7 +234,7 @@ struct scpi_opp *scpi_dvfs_get_opps(u8 domain)
 		u32 header;
 		struct scpi_opp_entry opp[MAX_DVFS_OPPS];
 	} buf;
-	struct scpi_opp *opps;
+	struct scpi_dvfs_info *opps;
 	size_t opps_sz;
 	int count, ret;
 
@@ -337,6 +338,7 @@ int scpi_get_sensor(char *name)
 	/* This should be handled by a generic macro */
 	do {
 		struct mhu_data_buf *pdata = &mdata;
+
 		pdata->cmd = SCPI_CMD_SENSOR_CAPABILITIES;
 		pdata->tx_size = 0;
 		pdata->rx_buf = &cap_buf;
@@ -387,12 +389,12 @@ int scpi_get_sensor_value(u16 sensor, u32 *val)
 EXPORT_SYMBOL_GPL(scpi_get_sensor_value);
 
 /****Send fail when data size > 0x1fd.      ***
-	Because of USER_LOW_TASK_SHARE_MEM_BASE ***
-	size limitation.
-	You can call scpi_send_usr_data()
-	multi-times when your data is bigger
-	than 0x1fe
-****/
+ * Because of USER_LOW_TASK_SHARE_MEM_BASE ***
+ * size limitation.
+ * You can call scpi_send_usr_data()
+ * multi-times when your data is bigger
+ * than 0x1fe
+ */
 int scpi_send_usr_data(u32 client_id, u32 *val, u32 size)
 {
 	struct scpi_data_buf sdata;
@@ -404,13 +406,15 @@ int scpi_send_usr_data(u32 client_id, u32 *val, u32 size)
 	int ret;
 
 	/*client_id bit map should locates @ 0xff.
-	  bl30 will send client_id via half-Word*/
+	 * bl30 will send client_id via half-Word
+	 */
 	if (client_id & ~0xff)
 		return -E2BIG;
 
 	/*Check size here because of USER_LOW_TASK_SHARE_MEM_BASE
-	  size limitation, and first Word is used as command,
-	  second word is used as tx_size.*/
+	 * size limitation, and first Word is used as command,
+	 * second word is used as tx_size.
+	 */
 	if (size > 0x1fd)
 		return -EPERM;
 

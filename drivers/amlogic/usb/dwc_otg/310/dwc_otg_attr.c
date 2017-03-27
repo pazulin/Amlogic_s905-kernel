@@ -1318,7 +1318,7 @@ DEVICE_ATTR(sleep_status, S_IRUGO | S_IWUSR, sleepstatus_show,
 /**
  * Global Debug Level Mask.
  */
-uint32_t g_dbg_lvl = 0;		/* OFF */
+uint32_t g_dbg_lvl;		/* OFF */
 
 /**
  * This function shows the Driver Version.

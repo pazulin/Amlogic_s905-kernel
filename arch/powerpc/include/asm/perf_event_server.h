@@ -14,9 +14,12 @@
 #include <linux/device.h>
 #include <uapi/asm/perf_event.h>
 
+/* Update perf_event_print_debug() if this changes */
 #define MAX_HWEVENTS		8
 #define MAX_EVENT_ALTERNATIVES	8
 #define MAX_LIMITED_HWCOUNTERS	2
+
+struct perf_event;
 
 /*
  * This struct provides the constants and functions needed to
@@ -29,7 +32,8 @@ struct power_pmu {
 	unsigned long	add_fields;
 	unsigned long	test_adder;
 	int		(*compute_mmcr)(u64 events[], int n_ev,
-				unsigned int hwc[], unsigned long mmcr[]);
+				unsigned int hwc[], unsigned long mmcr[],
+				struct perf_event *pevents[]);
 	int		(*get_constraint)(u64 event_id, unsigned long *mskp,
 				unsigned long *valp);
 	int		(*get_alternatives)(u64 event_id, unsigned int flags,
@@ -132,16 +136,24 @@ extern ssize_t power_events_sysfs_show(struct device *dev,
  * event 'cpu-cycles' can have two entries in sysfs: 'cpu-cycles' and
  * 'PM_CYC' where the latter is the name by which the event is known in
  * POWER CPU specification.
+ *
+ * Similarly, some hardware and cache events use the same event code. Eg.
+ * on POWER8, both "cache-references" and "L1-dcache-loads" events refer
+ * to the same event, PM_LD_REF_L1.  The suffix, allows us to have two
+ * sysfs objects for the same event and thus two entries/aliases in sysfs.
  */
 #define	EVENT_VAR(_id, _suffix)		event_attr_##_id##_suffix
 #define	EVENT_PTR(_id, _suffix)		&EVENT_VAR(_id, _suffix).attr.attr
 
 #define	EVENT_ATTR(_name, _id, _suffix)					\
-	PMU_EVENT_ATTR(_name, EVENT_VAR(_id, _suffix), PME_##_id,	\
+	PMU_EVENT_ATTR(_name, EVENT_VAR(_id, _suffix), _id,		\
 			power_events_sysfs_show)
 
 #define	GENERIC_EVENT_ATTR(_name, _id)	EVENT_ATTR(_name, _id, _g)
 #define	GENERIC_EVENT_PTR(_id)		EVENT_PTR(_id, _g)
+
+#define	CACHE_EVENT_ATTR(_name, _id)	EVENT_ATTR(_name, _id, _c)
+#define	CACHE_EVENT_PTR(_id)		EVENT_PTR(_id, _c)
 
 #define	POWER_EVENT_ATTR(_name, _id)	EVENT_ATTR(_name, _id, _p)
 #define	POWER_EVENT_PTR(_id)		EVENT_PTR(_id, _p)

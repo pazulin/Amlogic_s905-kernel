@@ -1,30 +1,18 @@
 /*
- * Driver for the Message Handling Unit (MHU) which is the peripheral in
- * the Compute SubSystem (CSS) providing a mechanism for inter-processor
- * communication between System Control Processor (SCP) with Cortex-M3
- * processor and Application Processors (AP).
+ * drivers/amlogic/mailbox/meson_mhu.c
  *
- * The MHU peripheral provides a mechanism to assert interrupt signals to
- * facilitate inter-processor message passing between the SCP and the AP.
- * The message payload can be deposited into main memory or on-chip memories.
- * The MHU supports three bi-directional channels - low priority, high
- * priority and secure(can't be used in non-secure execution modes)
+ * Copyright (C) 2017 Amlogic, Inc. All rights reserved.
  *
- * Copyright (C) 2014 ARM Ltd.
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
  *
- * Author: Sudeep Holla <sudeep.holla@arm.com>
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms and conditions of the GNU General Public License,
- * version 2, as published by the Free Software Foundation.
- *
- * This program is distributed in the hope it will be useful, but WITHOUT
+ * This program is distributed in the hope that it will be useful, but WITHOUT
  * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
- * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
- * You should have received a copy of the GNU General Public License along with
- * this program. If not, see <http://www.gnu.org/licenses/>.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -70,7 +58,7 @@ struct device *the_scpi_device;
  * |  CPU_INTR_H_SET    | 0x040 |  TX_SET(H)    |
  * |  CPU_INTR_H_CLEAR  | 0x048 |  TX_CLEAR(H)  |
  * +--------------------+-------+---------------+
-*/
+ */
 #define RX_OFFSET(chan)		(0x10 + (idx) * 0xc)
 #define RX_STATUS(chan)		(RX_OFFSET(chan) + 0x4)
 #define RX_SET(chan)			RX_OFFSET(chan)
@@ -91,7 +79,7 @@ struct device *the_scpi_device;
  * |  AP->SCP Low  | 0x200 |  TX_PAYLOAD(H) |
  * |  AP->SCP High | 0x600 |  TX_PAYLOAD(H) |
  * +---------------+-------+----------------+
-*/
+ */
 #define PAYLOAD_MAX_SIZE	0x200
 #define PAYLOAD_OFFSET		0x400
 #define RX_PAYLOAD(chan)	((chan) * PAYLOAD_OFFSET)
@@ -209,10 +197,8 @@ static int mhu_probe(struct platform_device *pdev)
 	};
 
 	ctlr = devm_kzalloc(dev, sizeof(*ctlr), GFP_KERNEL);
-	if (!ctlr) {
-		dev_err(dev, "failed to allocate memory\n");
+	if (!ctlr)
 		return -ENOMEM;
-	}
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	if (!res) {
@@ -220,11 +206,9 @@ static int mhu_probe(struct platform_device *pdev)
 		return -ENXIO;
 	}
 
-	ctlr->mbox_base = devm_request_and_ioremap(dev, res);
-	if (!ctlr->mbox_base) {
-		dev_err(dev, "failed to request or ioremap mailbox control\n");
-		return -EADDRNOTAVAIL;
-	}
+	ctlr->mbox_base = devm_ioremap_resource(dev, res);
+	if (IS_ERR(ctlr->mbox_base))
+		return PTR_ERR(ctlr->mbox_base);
 
 	res = platform_get_resource(pdev, IORESOURCE_MEM, 1);
 	if (!res) {
@@ -232,20 +216,16 @@ static int mhu_probe(struct platform_device *pdev)
 		return -ENXIO;
 	}
 
-	ctlr->payload_base = devm_request_and_ioremap(dev, res);
-	if (!ctlr->payload_base) {
-		dev_err(dev, "failed to request or ioremap mailbox payload\n");
-		return -EADDRNOTAVAIL;
-	}
+	ctlr->payload_base = devm_ioremap_resource(dev, res);
+	if (IS_ERR(ctlr->payload_base))
+		return PTR_ERR(ctlr->payload_base);
 
 	ctlr->dev = dev;
 	platform_set_drvdata(pdev, ctlr);
 
 	l = devm_kzalloc(dev, sizeof(*l) * CHANNEL_MAX, GFP_KERNEL);
-	if (!l) {
-		dev_err(dev, "failed to allocate memory\n");
+	if (!l)
 		return -ENOMEM;
-	}
 
 	ctlr->mbox_con.chans = l;
 	ctlr->mbox_con.num_chans = CHANNEL_MAX;
@@ -292,7 +272,7 @@ static int mhu_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static struct of_device_id mhu_of_match[] = {
+static const struct of_device_id mhu_of_match[] = {
 	{ .compatible = "amlogic, meson_mhu" },
 	{},
 };
@@ -319,6 +299,6 @@ static void __exit mhu_exit(void)
 }
 module_exit(mhu_exit);
 
-MODULE_AUTHOR("yan wang <yan.wang@arm.com>");
+MODULE_AUTHOR("yan wang <yan.wang@amlogic.com>");
 MODULE_DESCRIPTION("MESON MHU mailbox driver");
 MODULE_LICENSE("GPL");

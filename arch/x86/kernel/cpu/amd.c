@@ -5,10 +5,13 @@
 
 #include <linux/io.h>
 #include <linux/sched.h>
+#include <linux/random.h>
 #include <asm/processor.h>
 #include <asm/apic.h>
 #include <asm/cpu.h>
+#include <asm/smp.h>
 #include <asm/pci-direct.h>
+#include <asm/delay.h>
 
 #ifdef CONFIG_X86_64
 # include <asm/mmconfig.h>
@@ -16,6 +19,13 @@
 #endif
 
 #include "cpu.h"
+
+/*
+ * nodes_per_socket: Stores the number of nodes per socket.
+ * Refer to Fam15h Models 00-0fh BKDG - CPUID Fn8000_001E_ECX
+ * Node Identifiers[10:8]
+ */
+static u32 nodes_per_socket = 1;
 
 static inline int rdmsrl_amd_safe(unsigned msr, unsigned long long *p)
 {
@@ -50,7 +60,6 @@ static inline int wrmsrl_amd_safe(unsigned msr, unsigned long long val)
 	return wrmsr_safe_regs(gprs);
 }
 
-#ifdef CONFIG_X86_32
 /*
  *	B step AMD K6 before B 9730xxxx have hardware bugs that can cause
  *	misexecution of code under Linux. Owners of such processors should
@@ -66,13 +75,17 @@ static inline int wrmsrl_amd_safe(unsigned msr, unsigned long long val)
  */
 
 extern __visible void vide(void);
-__asm__(".globl vide\n\t.align 4\nvide: ret");
+__asm__(".globl vide\n"
+	".type vide, @function\n"
+	".align 4\n"
+	"vide: ret\n");
 
 static void init_amd_k5(struct cpuinfo_x86 *c)
 {
+#ifdef CONFIG_X86_32
 /*
  * General Systems BIOSen alias the cpu frequency registers
- * of the Elan at 0x000df000. Unfortuantly, one of the Linux
+ * of the Elan at 0x000df000. Unfortunately, one of the Linux
  * drivers subsequently pokes it, and changes the CPU speed.
  * Workaround : Remove the unneeded alias.
  */
@@ -83,11 +96,12 @@ static void init_amd_k5(struct cpuinfo_x86 *c)
 		if (inl(CBAR) & CBAR_ENB)
 			outl(0 | CBAR_KEY, CBAR);
 	}
+#endif
 }
-
 
 static void init_amd_k6(struct cpuinfo_x86 *c)
 {
+#ifdef CONFIG_X86_32
 	u32 l, h;
 	int mbytes = get_num_physpages() >> (20-PAGE_SHIFT);
 
@@ -104,9 +118,9 @@ static void init_amd_k6(struct cpuinfo_x86 *c)
 		const int K6_BUG_LOOP = 1000000;
 		int n;
 		void (*f_vide)(void);
-		unsigned long d, d2;
+		u64 d, d2;
 
-		printk(KERN_INFO "AMD K6 stepping B detected - ");
+		pr_info("AMD K6 stepping B detected - ");
 
 		/*
 		 * It looks like AMD fixed the 2.6.2 bug and improved indirect
@@ -115,17 +129,16 @@ static void init_amd_k6(struct cpuinfo_x86 *c)
 
 		n = K6_BUG_LOOP;
 		f_vide = vide;
-		rdtscl(d);
+		d = rdtsc();
 		while (n--)
 			f_vide();
-		rdtscl(d2);
+		d2 = rdtsc();
 		d = d2-d;
 
 		if (d > 20*K6_BUG_LOOP)
-			printk(KERN_CONT
-				"system stability may be impaired when more than 32 MB are used.\n");
+			pr_cont("system stability may be impaired when more than 32 MB are used.\n");
 		else
-			printk(KERN_CONT "probably OK (after B9730xxxx).\n");
+			pr_cont("probably OK (after B9730xxxx).\n");
 	}
 
 	/* K6 with old style WHCR */
@@ -143,7 +156,7 @@ static void init_amd_k6(struct cpuinfo_x86 *c)
 			wbinvd();
 			wrmsr(MSR_K6_WHCR, l, h);
 			local_irq_restore(flags);
-			printk(KERN_INFO "Enabling old style K6 write allocation for %d Mb\n",
+			pr_info("Enabling old style K6 write allocation for %d Mb\n",
 				mbytes);
 		}
 		return;
@@ -164,7 +177,7 @@ static void init_amd_k6(struct cpuinfo_x86 *c)
 			wbinvd();
 			wrmsr(MSR_K6_WHCR, l, h);
 			local_irq_restore(flags);
-			printk(KERN_INFO "Enabling new style K6 write allocation for %d Mb\n",
+			pr_info("Enabling new style K6 write allocation for %d Mb\n",
 				mbytes);
 		}
 
@@ -176,10 +189,43 @@ static void init_amd_k6(struct cpuinfo_x86 *c)
 		/* placeholder for any needed mods */
 		return;
 	}
+#endif
 }
 
-static void amd_k7_smp_check(struct cpuinfo_x86 *c)
+static void init_amd_k7(struct cpuinfo_x86 *c)
 {
+#ifdef CONFIG_X86_32
+	u32 l, h;
+
+	/*
+	 * Bit 15 of Athlon specific MSR 15, needs to be 0
+	 * to enable SSE on Palomino/Morgan/Barton CPU's.
+	 * If the BIOS didn't enable it already, enable it here.
+	 */
+	if (c->x86_model >= 6 && c->x86_model <= 10) {
+		if (!cpu_has(c, X86_FEATURE_XMM)) {
+			pr_info("Enabling disabled K7/SSE Support.\n");
+			msr_clear_bit(MSR_K7_HWCR, 15);
+			set_cpu_cap(c, X86_FEATURE_XMM);
+		}
+	}
+
+	/*
+	 * It's been determined by AMD that Athlons since model 8 stepping 1
+	 * are more robust with CLK_CTL set to 200xxxxx instead of 600xxxxx
+	 * As per AMD technical note 27212 0.2
+	 */
+	if ((c->x86_model == 8 && c->x86_mask >= 1) || (c->x86_model > 8)) {
+		rdmsr(MSR_K7_CLK_CTL, l, h);
+		if ((l & 0xfff00000) != 0x20000000) {
+			pr_info("CPU: CLK_CTL MSR was %x. Reprogramming to %x\n",
+				l, ((l & 0x000fffff)|0x20000000));
+			wrmsr(MSR_K7_CLK_CTL, (l & 0x000fffff)|0x20000000, h);
+		}
+	}
+
+	set_cpu_cap(c, X86_FEATURE_K7);
+
 	/* calling is from identify_secondary_cpu() ? */
 	if (!c->cpu_index)
 		return;
@@ -207,7 +253,7 @@ static void amd_k7_smp_check(struct cpuinfo_x86 *c)
 	if (((c->x86_model == 6) && (c->x86_mask >= 2)) ||
 	    ((c->x86_model == 7) && (c->x86_mask >= 1)) ||
 	     (c->x86_model > 7))
-		if (cpu_has_mp)
+		if (cpu_has(c, X86_FEATURE_MP))
 			return;
 
 	/* If we get here, not a certified SMP capable AMD system. */
@@ -218,48 +264,9 @@ static void amd_k7_smp_check(struct cpuinfo_x86 *c)
 	 */
 	WARN_ONCE(1, "WARNING: This combination of AMD"
 		" processors is not suitable for SMP.\n");
-	add_taint(TAINT_UNSAFE_SMP, LOCKDEP_NOW_UNRELIABLE);
-}
-
-static void init_amd_k7(struct cpuinfo_x86 *c)
-{
-	u32 l, h;
-
-	/*
-	 * Bit 15 of Athlon specific MSR 15, needs to be 0
-	 * to enable SSE on Palomino/Morgan/Barton CPU's.
-	 * If the BIOS didn't enable it already, enable it here.
-	 */
-	if (c->x86_model >= 6 && c->x86_model <= 10) {
-		if (!cpu_has(c, X86_FEATURE_XMM)) {
-			printk(KERN_INFO "Enabling disabled K7/SSE Support.\n");
-			rdmsr(MSR_K7_HWCR, l, h);
-			l &= ~0x00008000;
-			wrmsr(MSR_K7_HWCR, l, h);
-			set_cpu_cap(c, X86_FEATURE_XMM);
-		}
-	}
-
-	/*
-	 * It's been determined by AMD that Athlons since model 8 stepping 1
-	 * are more robust with CLK_CTL set to 200xxxxx instead of 600xxxxx
-	 * As per AMD technical note 27212 0.2
-	 */
-	if ((c->x86_model == 8 && c->x86_mask >= 1) || (c->x86_model > 8)) {
-		rdmsr(MSR_K7_CLK_CTL, l, h);
-		if ((l & 0xfff00000) != 0x20000000) {
-			printk(KERN_INFO
-			    "CPU: CLK_CTL MSR was %x. Reprogramming to %x\n",
-					l, ((l & 0x000fffff)|0x20000000));
-			wrmsr(MSR_K7_CLK_CTL, (l & 0x000fffff)|0x20000000, h);
-		}
-	}
-
-	set_cpu_cap(c, X86_FEATURE_K7);
-
-	amd_k7_smp_check(c);
-}
+	add_taint(TAINT_CPU_OUT_OF_SPEC, LOCKDEP_NOW_UNRELIABLE);
 #endif
+}
 
 #ifdef CONFIG_NUMA
 /*
@@ -290,49 +297,43 @@ static int nearby_node(int apicid)
  *     Assumption: Number of cores in each internal node is the same.
  * (2) AMD processors supporting compute units
  */
-#ifdef CONFIG_X86_HT
+#ifdef CONFIG_SMP
 static void amd_get_topology(struct cpuinfo_x86 *c)
 {
-	u32 nodes, cores_per_cu = 1;
 	u8 node_id;
 	int cpu = smp_processor_id();
 
 	/* get information required for multi-node processors */
-	if (cpu_has_topoext) {
+	if (boot_cpu_has(X86_FEATURE_TOPOEXT)) {
 		u32 eax, ebx, ecx, edx;
 
 		cpuid(0x8000001e, &eax, &ebx, &ecx, &edx);
-		nodes = ((ecx >> 8) & 7) + 1;
 		node_id = ecx & 7;
 
 		/* get compute unit information */
 		smp_num_siblings = ((ebx >> 8) & 3) + 1;
-		c->compute_unit_id = ebx & 0xff;
-		cores_per_cu += ((ebx >> 8) & 3);
+		c->x86_max_cores /= smp_num_siblings;
+		c->cpu_core_id = ebx & 0xff;
 	} else if (cpu_has(c, X86_FEATURE_NODEID_MSR)) {
 		u64 value;
 
 		rdmsrl(MSR_FAM10H_NODE_ID, value);
-		nodes = ((value >> 3) & 7) + 1;
 		node_id = value & 7;
 	} else
 		return;
 
 	/* fixup multi-node processor information */
-	if (nodes > 1) {
-		u32 cores_per_node;
+	if (nodes_per_socket > 1) {
 		u32 cus_per_node;
 
 		set_cpu_cap(c, X86_FEATURE_AMD_DCM);
-		cores_per_node = c->x86_max_cores / nodes;
-		cus_per_node = cores_per_node / cores_per_cu;
+		cus_per_node = c->x86_max_cores / nodes_per_socket;
 
 		/* store NodeID, use llc_shared_map to store sibling info */
 		per_cpu(cpu_llc_id, cpu) = node_id;
 
 		/* core id has to be in the [0 .. cores_per_node - 1] range */
-		c->cpu_core_id %= cores_per_node;
-		c->compute_unit_id %= cus_per_node;
+		c->cpu_core_id %= cus_per_node;
 	}
 }
 #endif
@@ -343,7 +344,7 @@ static void amd_get_topology(struct cpuinfo_x86 *c)
  */
 static void amd_detect_cmp(struct cpuinfo_x86 *c)
 {
-#ifdef CONFIG_X86_HT
+#ifdef CONFIG_SMP
 	unsigned bits;
 	int cpu = smp_processor_id();
 
@@ -355,6 +356,15 @@ static void amd_detect_cmp(struct cpuinfo_x86 *c)
 	/* use socket ID also for last level cache */
 	per_cpu(cpu_llc_id, cpu) = c->phys_proc_id;
 	amd_get_topology(c);
+
+	/*
+	 * Fix percpu cpu_llc_id here as LLC topology is different
+	 * for Fam17h systems.
+	 */
+	 if (c->x86 != 0x17 || !cpuid_edx(0x80000006))
+		return;
+
+	per_cpu(cpu_llc_id, cpu) = c->apicid >> 3;
 #endif
 }
 
@@ -367,6 +377,12 @@ u16 amd_get_nb_id(int cpu)
 	return id;
 }
 EXPORT_SYMBOL_GPL(amd_get_nb_id);
+
+u32 amd_get_nodes_per_socket(void)
+{
+	return nodes_per_socket;
+}
+EXPORT_SYMBOL_GPL(amd_get_nodes_per_socket);
 
 static void srat_detect_node(struct cpuinfo_x86 *c)
 {
@@ -409,8 +425,7 @@ static void srat_detect_node(struct cpuinfo_x86 *c)
 		 */
 		int ht_nodeid = c->initial_apicid;
 
-		if (ht_nodeid >= 0 &&
-		    __apicid_to_node[ht_nodeid] != NUMA_NO_NODE)
+		if (__apicid_to_node[ht_nodeid] != NUMA_NO_NODE)
 			node = __apicid_to_node[ht_nodeid];
 		/* Pick a nearby node */
 		if (!node_online(node))
@@ -422,7 +437,7 @@ static void srat_detect_node(struct cpuinfo_x86 *c)
 
 static void early_init_amd_mc(struct cpuinfo_x86 *c)
 {
-#ifdef CONFIG_X86_HT
+#ifdef CONFIG_SMP
 	unsigned bits, ecx;
 
 	/* Multi core CPU? */
@@ -448,6 +463,26 @@ static void early_init_amd_mc(struct cpuinfo_x86 *c)
 
 static void bsp_init_amd(struct cpuinfo_x86 *c)
 {
+
+#ifdef CONFIG_X86_64
+	if (c->x86 >= 0xf) {
+		unsigned long long tseg;
+
+		/*
+		 * Split up direct mapping around the TSEG SMM area.
+		 * Don't do it for gbpages because there seems very little
+		 * benefit in doing so.
+		 */
+		if (!rdmsrl_safe(MSR_K8_TSEG_ADDR, &tseg)) {
+			unsigned long pfn = tseg >> PAGE_SHIFT;
+
+			pr_debug("tseg: %010llx\n", tseg);
+			if (pfn_range_is_mapped(pfn, pfn + 1))
+				set_memory_4k((unsigned long)__va(tseg), 1);
+		}
+	}
+#endif
+
 	if (cpu_has(c, X86_FEATURE_CONSTANT_TSC)) {
 
 		if (c->x86 > 0x10 ||
@@ -456,8 +491,7 @@ static void bsp_init_amd(struct cpuinfo_x86 *c)
 
 			rdmsrl(MSR_K7_HWCR, val);
 			if (!(val & BIT(24)))
-				printk(KERN_WARNING FW_BUG "TSC doesn't count "
-					"with P0 frequency!\n");
+				pr_warn(FW_BUG "TSC doesn't count with P0 frequency!\n");
 		}
 	}
 
@@ -471,6 +505,24 @@ static void bsp_init_amd(struct cpuinfo_x86 *c)
 
 		va_align.mask	  = (upperbit - 1) & PAGE_MASK;
 		va_align.flags    = ALIGN_VA_32 | ALIGN_VA_64;
+
+		/* A random value per boot for bit slice [12:upper_bit) */
+		va_align.bits = get_random_int() & va_align.mask;
+	}
+
+	if (cpu_has(c, X86_FEATURE_MWAITX))
+		use_mwaitx_delay();
+
+	if (boot_cpu_has(X86_FEATURE_TOPOEXT)) {
+		u32 ecx;
+
+		ecx = cpuid_ecx(0x8000001e);
+		nodes_per_socket = ((ecx >> 8) & 7) + 1;
+	} else if (boot_cpu_has(X86_FEATURE_NODEID_MSR)) {
+		u64 value;
+
+		rdmsrl(MSR_FAM10H_NODE_ID, value);
+		nodes_per_socket = ((value >> 3) & 7) + 1;
 	}
 }
 
@@ -489,6 +541,10 @@ static void early_init_amd(struct cpuinfo_x86 *c)
 			set_sched_clock_stable();
 	}
 
+	/* Bit 12 of 8000_0007 edx is accumulated power mechanism. */
+	if (c->x86_power & BIT(12))
+		set_cpu_cap(c, X86_FEATURE_ACC_POWER);
+
 #ifdef CONFIG_X86_64
 	set_cpu_cap(c, X86_FEATURE_SYSCALL32);
 #else
@@ -499,12 +555,23 @@ static void early_init_amd(struct cpuinfo_x86 *c)
 			set_cpu_cap(c, X86_FEATURE_K6_MTRR);
 #endif
 #if defined(CONFIG_X86_LOCAL_APIC) && defined(CONFIG_PCI)
-	/* check CPU config space for extended APIC ID */
-	if (cpu_has_apic && c->x86 >= 0xf) {
-		unsigned int val;
-		val = read_pci_config(0, 24, 0, 0x68);
-		if ((val & ((1 << 17) | (1 << 18))) == ((1 << 17) | (1 << 18)))
+	/*
+	 * ApicID can always be treated as an 8-bit value for AMD APIC versions
+	 * >= 0x10, but even old K8s came out of reset with version 0x10. So, we
+	 * can safely set X86_FEATURE_EXTD_APICID unconditionally for families
+	 * after 16h.
+	 */
+	if (boot_cpu_has(X86_FEATURE_APIC)) {
+		if (c->x86 > 0x16)
 			set_cpu_cap(c, X86_FEATURE_EXTD_APICID);
+		else if (c->x86 >= 0xf) {
+			/* check CPU config space for extended APIC ID */
+			unsigned int val;
+
+			val = read_pci_config(0, 24, 0, 0x68);
+			if ((val >> 17 & 0x3) == 0x3)
+				set_cpu_cap(c, X86_FEATURE_EXTD_APICID);
+		}
 	}
 #endif
 
@@ -516,24 +583,39 @@ static void early_init_amd(struct cpuinfo_x86 *c)
 	set_cpu_cap(c, X86_FEATURE_VMMCALL);
 
 	/* F16h erratum 793, CVE-2013-6885 */
-	if (c->x86 == 0x16 && c->x86_model <= 0xf) {
-		u64 val;
-
-		rdmsrl(MSR_AMD64_LS_CFG, val);
-		if (!(val & BIT(15)))
-			wrmsrl(MSR_AMD64_LS_CFG, val | BIT(15));
-	}
-
+	if (c->x86 == 0x16 && c->x86_model <= 0xf)
+		msr_set_bit(MSR_AMD64_LS_CFG, 15);
 }
 
 static const int amd_erratum_383[];
 static const int amd_erratum_400[];
 static bool cpu_has_amd_erratum(struct cpuinfo_x86 *cpu, const int *erratum);
 
-static void init_amd(struct cpuinfo_x86 *c)
+static void init_amd_k8(struct cpuinfo_x86 *c)
 {
-	u32 dummy;
-	unsigned long long value;
+	u32 level;
+	u64 value;
+
+	/* On C+ stepping K8 rep microcode works well for copy/memset */
+	level = cpuid_eax(1);
+	if ((level >= 0x0f48 && level < 0x0f50) || level >= 0x0f58)
+		set_cpu_cap(c, X86_FEATURE_REP_GOOD);
+
+	/*
+	 * Some BIOSes incorrectly force this feature, but only K8 revision D
+	 * (model = 0x14) and later actually support it.
+	 * (AMD Erratum #110, docId: 25759).
+	 */
+	if (c->x86_model < 0x14 && cpu_has(c, X86_FEATURE_LAHF_LM)) {
+		clear_cpu_cap(c, X86_FEATURE_LAHF_LM);
+		if (!rdmsrl_amd_safe(0xc001100d, &value)) {
+			value &= ~BIT_64(32);
+			wrmsrl_amd_safe(0xc001100d, value);
+		}
+	}
+
+	if (!c->x86_model_id[0])
+		strcpy(c->x86_model_id, "Hammer");
 
 #ifdef CONFIG_SMP
 	/*
@@ -543,12 +625,89 @@ static void init_amd(struct cpuinfo_x86 *c)
 	 * Errata 63 for SH-B3 steppings
 	 * Errata 122 for all steppings (F+ have it disabled by default)
 	 */
-	if (c->x86 == 0xf) {
-		rdmsrl(MSR_K7_HWCR, value);
-		value |= 1 << 6;
-		wrmsrl(MSR_K7_HWCR, value);
-	}
+	msr_set_bit(MSR_K7_HWCR, 6);
 #endif
+	set_cpu_bug(c, X86_BUG_SWAPGS_FENCE);
+}
+
+static void init_amd_gh(struct cpuinfo_x86 *c)
+{
+#ifdef CONFIG_X86_64
+	/* do this for boot cpu */
+	if (c == &boot_cpu_data)
+		check_enable_amd_mmconf_dmi();
+
+	fam10h_check_enable_mmcfg();
+#endif
+
+	/*
+	 * Disable GART TLB Walk Errors on Fam10h. We do this here because this
+	 * is always needed when GART is enabled, even in a kernel which has no
+	 * MCE support built in. BIOS should disable GartTlbWlk Errors already.
+	 * If it doesn't, we do it here as suggested by the BKDG.
+	 *
+	 * Fixes: https://bugzilla.kernel.org/show_bug.cgi?id=33012
+	 */
+	msr_set_bit(MSR_AMD64_MCx_MASK(4), 10);
+
+	/*
+	 * On family 10h BIOS may not have properly enabled WC+ support, causing
+	 * it to be converted to CD memtype. This may result in performance
+	 * degradation for certain nested-paging guests. Prevent this conversion
+	 * by clearing bit 24 in MSR_AMD64_BU_CFG2.
+	 *
+	 * NOTE: we want to use the _safe accessors so as not to #GP kvm
+	 * guests on older kvm hosts.
+	 */
+	msr_clear_bit(MSR_AMD64_BU_CFG2, 24);
+
+	if (cpu_has_amd_erratum(c, amd_erratum_383))
+		set_cpu_bug(c, X86_BUG_AMD_TLB_MMATCH);
+}
+
+#define MSR_AMD64_DE_CFG	0xC0011029
+
+static void init_amd_ln(struct cpuinfo_x86 *c)
+{
+	/*
+	 * Apply erratum 665 fix unconditionally so machines without a BIOS
+	 * fix work.
+	 */
+	msr_set_bit(MSR_AMD64_DE_CFG, 31);
+}
+
+static void init_amd_bd(struct cpuinfo_x86 *c)
+{
+	u64 value;
+
+	/* re-enable TopologyExtensions if switched off by BIOS */
+	if ((c->x86_model >= 0x10) && (c->x86_model <= 0x6f) &&
+	    !cpu_has(c, X86_FEATURE_TOPOEXT)) {
+
+		if (msr_set_bit(0xc0011005, 54) > 0) {
+			rdmsrl(0xc0011005, value);
+			if (value & BIT_64(54)) {
+				set_cpu_cap(c, X86_FEATURE_TOPOEXT);
+				pr_info_once(FW_INFO "CPU: Re-enabling disabled Topology Extensions Support.\n");
+			}
+		}
+	}
+
+	/*
+	 * The way access filter has a performance penalty on some workloads.
+	 * Disable it on the affected CPUs.
+	 */
+	if ((c->x86_model >= 0x02) && (c->x86_model < 0x20)) {
+		if (!rdmsrl_safe(MSR_F15H_IC_CFG, &value) && !(value & 0x1E)) {
+			value |= 0x1E;
+			wrmsrl_safe(MSR_F15H_IC_CFG, value);
+		}
+	}
+}
+
+static void init_amd(struct cpuinfo_x86 *c)
+{
+	u32 dummy;
 
 	early_init_amd(c);
 
@@ -558,102 +717,29 @@ static void init_amd(struct cpuinfo_x86 *c)
 	 */
 	clear_cpu_cap(c, 0*32+31);
 
-#ifdef CONFIG_X86_64
-	/* On C+ stepping K8 rep microcode works well for copy/memset */
-	if (c->x86 == 0xf) {
-		u32 level;
-
-		level = cpuid_eax(1);
-		if ((level >= 0x0f48 && level < 0x0f50) || level >= 0x0f58)
-			set_cpu_cap(c, X86_FEATURE_REP_GOOD);
-
-		/*
-		 * Some BIOSes incorrectly force this feature, but only K8
-		 * revision D (model = 0x14) and later actually support it.
-		 * (AMD Erratum #110, docId: 25759).
-		 */
-		if (c->x86_model < 0x14 && cpu_has(c, X86_FEATURE_LAHF_LM)) {
-			clear_cpu_cap(c, X86_FEATURE_LAHF_LM);
-			if (!rdmsrl_amd_safe(0xc001100d, &value)) {
-				value &= ~(1ULL << 32);
-				wrmsrl_amd_safe(0xc001100d, value);
-			}
-		}
-
-	}
 	if (c->x86 >= 0x10)
 		set_cpu_cap(c, X86_FEATURE_REP_GOOD);
 
 	/* get apicid instead of initial apic id from cpuid */
 	c->apicid = hard_smp_processor_id();
-#else
-
-	/*
-	 *	FIXME: We should handle the K5 here. Set up the write
-	 *	range and also turn on MSR 83 bits 4 and 31 (write alloc,
-	 *	no bus pipeline)
-	 */
-
-	switch (c->x86) {
-	case 4:
-		init_amd_k5(c);
-		break;
-	case 5:
-		init_amd_k6(c);
-		break;
-	case 6: /* An Athlon/Duron */
-		init_amd_k7(c);
-		break;
-	}
 
 	/* K6s reports MCEs but don't actually have all the MSRs */
 	if (c->x86 < 6)
 		clear_cpu_cap(c, X86_FEATURE_MCE);
-#endif
+
+	switch (c->x86) {
+	case 4:    init_amd_k5(c); break;
+	case 5:    init_amd_k6(c); break;
+	case 6:	   init_amd_k7(c); break;
+	case 0xf:  init_amd_k8(c); break;
+	case 0x10: init_amd_gh(c); break;
+	case 0x12: init_amd_ln(c); break;
+	case 0x15: init_amd_bd(c); break;
+	}
 
 	/* Enable workaround for FXSAVE leak */
 	if (c->x86 >= 6)
-		set_cpu_cap(c, X86_FEATURE_FXSAVE_LEAK);
-
-	if (!c->x86_model_id[0]) {
-		switch (c->x86) {
-		case 0xf:
-			/* Should distinguish Models here, but this is only
-			   a fallback anyways. */
-			strcpy(c->x86_model_id, "Hammer");
-			break;
-		}
-	}
-
-	/* re-enable TopologyExtensions if switched off by BIOS */
-	if ((c->x86 == 0x15) &&
-	    (c->x86_model >= 0x10) && (c->x86_model <= 0x1f) &&
-	    !cpu_has(c, X86_FEATURE_TOPOEXT)) {
-
-		if (!rdmsrl_safe(0xc0011005, &value)) {
-			value |= 1ULL << 54;
-			wrmsrl_safe(0xc0011005, value);
-			rdmsrl(0xc0011005, value);
-			if (value & (1ULL << 54)) {
-				set_cpu_cap(c, X86_FEATURE_TOPOEXT);
-				printk(KERN_INFO FW_INFO "CPU: Re-enabling "
-				  "disabled Topology Extensions Support\n");
-			}
-		}
-	}
-
-	/*
-	 * The way access filter has a performance penalty on some workloads.
-	 * Disable it on the affected CPUs.
-	 */
-	if ((c->x86 == 0x15) &&
-	    (c->x86_model >= 0x02) && (c->x86_model < 0x20)) {
-
-		if (!rdmsrl_safe(0xc0011021, &value) && !(value & 0x1E)) {
-			value |= 0x1E;
-			wrmsrl_safe(0xc0011021, value);
-		}
-	}
+		set_cpu_bug(c, X86_BUG_FXSAVE_LEAK);
 
 	cpu_detect_cache_sizes(c);
 
@@ -672,37 +758,10 @@ static void init_amd(struct cpuinfo_x86 *c)
 	if (c->x86 >= 0xf)
 		set_cpu_cap(c, X86_FEATURE_K8);
 
-	if (cpu_has_xmm2) {
+	if (cpu_has(c, X86_FEATURE_XMM2)) {
 		/* MFENCE stops RDTSC speculation */
 		set_cpu_cap(c, X86_FEATURE_MFENCE_RDTSC);
 	}
-
-#ifdef CONFIG_X86_64
-	if (c->x86 == 0x10) {
-		/* do this for boot cpu */
-		if (c == &boot_cpu_data)
-			check_enable_amd_mmconf_dmi();
-
-		fam10h_check_enable_mmcfg();
-	}
-
-	if (c == &boot_cpu_data && c->x86 >= 0xf) {
-		unsigned long long tseg;
-
-		/*
-		 * Split up direct mapping around the TSEG SMM area.
-		 * Don't do it for gbpages because there seems very little
-		 * benefit in doing so.
-		 */
-		if (!rdmsrl_safe(MSR_K8_TSEG_ADDR, &tseg)) {
-			unsigned long pfn = tseg >> PAGE_SHIFT;
-
-			printk(KERN_DEBUG "tseg: %010llx\n", tseg);
-			if (pfn_range_is_mapped(pfn, pfn + 1))
-				set_memory_4k((unsigned long)__va(tseg), 1);
-		}
-	}
-#endif
 
 	/*
 	 * Family 0x12 and above processors have APIC timer
@@ -711,48 +770,18 @@ static void init_amd(struct cpuinfo_x86 *c)
 	if (c->x86 > 0x11)
 		set_cpu_cap(c, X86_FEATURE_ARAT);
 
-	if (c->x86 == 0x10) {
-		/*
-		 * Disable GART TLB Walk Errors on Fam10h. We do this here
-		 * because this is always needed when GART is enabled, even in a
-		 * kernel which has no MCE support built in.
-		 * BIOS should disable GartTlbWlk Errors themself. If
-		 * it doesn't do it here as suggested by the BKDG.
-		 *
-		 * Fixes: https://bugzilla.kernel.org/show_bug.cgi?id=33012
-		 */
-		u64 mask;
-		int err;
-
-		err = rdmsrl_safe(MSR_AMD64_MCx_MASK(4), &mask);
-		if (err == 0) {
-			mask |= (1 << 10);
-			wrmsrl_safe(MSR_AMD64_MCx_MASK(4), mask);
-		}
-
-		/*
-		 * On family 10h BIOS may not have properly enabled WC+ support,
-		 * causing it to be converted to CD memtype. This may result in
-		 * performance degradation for certain nested-paging guests.
-		 * Prevent this conversion by clearing bit 24 in
-		 * MSR_AMD64_BU_CFG2.
-		 *
-		 * NOTE: we want to use the _safe accessors so as not to #GP kvm
-		 * guests on older kvm hosts.
-		 */
-
-		rdmsrl_safe(MSR_AMD64_BU_CFG2, &value);
-		value &= ~(1ULL << 24);
-		wrmsrl_safe(MSR_AMD64_BU_CFG2, value);
-
-		if (cpu_has_amd_erratum(c, amd_erratum_383))
-			set_cpu_bug(c, X86_BUG_AMD_TLB_MMATCH);
-	}
-
 	if (cpu_has_amd_erratum(c, amd_erratum_400))
 		set_cpu_bug(c, X86_BUG_AMD_APIC_C1E);
 
 	rdmsr_safe(MSR_AMD64_PATCH_LEVEL, &c->microcode, &dummy);
+
+	/* 3DNow or LM implies PREFETCHW */
+	if (!cpu_has(c, X86_FEATURE_3DNOWPREFETCH))
+		if (cpu_has(c, X86_FEATURE_3DNOW) || cpu_has(c, X86_FEATURE_LM))
+			set_cpu_cap(c, X86_FEATURE_3DNOWPREFETCH);
+
+	/* AMD CPUs don't reset SS attributes on SYSRET */
+	set_cpu_bug(c, X86_BUG_SYSRET_SS_ATTRS);
 }
 
 #ifdef CONFIG_X86_32
@@ -771,11 +800,6 @@ static unsigned int amd_size_cache(struct cpuinfo_x86 *c, unsigned int size)
 	return size;
 }
 #endif
-
-static void cpu_set_tlb_flushall_shift(struct cpuinfo_x86 *c)
-{
-	tlb_flushall_shift = 6;
-}
 
 static void cpu_detect_tlb_amd(struct cpuinfo_x86 *c)
 {
@@ -824,8 +848,6 @@ static void cpu_detect_tlb_amd(struct cpuinfo_x86 *c)
 		tlb_lli_2m[ENTRIES] = eax & mask;
 
 	tlb_lli_4m[ENTRIES] = tlb_lli_2m[ENTRIES] >> 1;
-
-	cpu_set_tlb_flushall_shift(c);
 }
 
 static const struct cpu_dev amd_cpu_dev = {
@@ -917,4 +939,23 @@ static bool cpu_has_amd_erratum(struct cpuinfo_x86 *cpu, const int *erratum)
 			return true;
 
 	return false;
+}
+
+void set_dr_addr_mask(unsigned long mask, int dr)
+{
+	if (!boot_cpu_has(X86_FEATURE_BPEXT))
+		return;
+
+	switch (dr) {
+	case 0:
+		wrmsr(MSR_F16H_DR0_ADDR_MASK, mask, 0);
+		break;
+	case 1:
+	case 2:
+	case 3:
+		wrmsr(MSR_F16H_DR1_ADDR_MASK - 1 + dr, mask, 0);
+		break;
+	default:
+		break;
+	}
 }

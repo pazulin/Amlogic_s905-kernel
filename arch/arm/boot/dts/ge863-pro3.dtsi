@@ -11,12 +11,7 @@
 
 / {
 	clocks {
-		#address-cells = <1>;
-		#size-cells = <1>;
-		ranges;
-
-		main_clock: clock@0 {
-			compatible = "atmel,osc", "fixed-clock";
+		main_xtal {
 			clock-frequency = <6000000>;
 		};
 	};

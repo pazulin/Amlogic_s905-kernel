@@ -1,46 +1,60 @@
-#ifndef __ARCH_GXL_GPIO_H__
-#define __ARCH_GXL_GPIO_H__
-/*AO Bank*/
-#define	GPIOAO_0    0
-#define	GPIOAO_1    1
-#define	GPIOAO_2    2
-#define	GPIOAO_3    3
-#define	GPIOAO_4    4
-#define	GPIOAO_5    5
-#define	GPIOAO_6    6
-#define	GPIOAO_7    7
-#define	GPIOAO_8    8
-#define	GPIOAO_9    9
+/*
+ * include/dt-bindings/gpio/gxl.h
+ *
+ * Copyright (C) 2017 Amlogic, Inc. All rights reserved.
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful, but WITHOUT
+ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
+ * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
+ * more details.
+ *
+ */
 
-/*EE Bank*/
-#define	GPIOZ_0    0
-#define	GPIOZ_1    1
-#define	GPIOZ_2    2
-#define	GPIOZ_3    3
-#define	GPIOZ_4    4
-#define	GPIOZ_5    5
-#define	GPIOZ_6    6
-#define	GPIOZ_7    7
-#define	GPIOZ_8    8
-#define	GPIOZ_9    9
-#define	GPIOZ_10    10
-#define	GPIOZ_11    11
-#define	GPIOZ_12    12
-#define	GPIOZ_13    13
-#define	GPIOZ_14    14
-#define	GPIOZ_15    15
+#ifndef _DT_BINDINGS_MESON_GXM_GPIO_H
+#define _DT_BINDINGS_MESON_GXM_GPIO_H
 
-#define	GPIOH_0    16
-#define	GPIOH_1    17
-#define	GPIOH_2    18
-#define	GPIOH_3    19
+#define	GPIOAO_0	0
+#define	GPIOAO_1	1
+#define	GPIOAO_2	2
+#define	GPIOAO_3	3
+#define	GPIOAO_4	4
+#define	GPIOAO_5	5
+#define	GPIOAO_6	6
+#define	GPIOAO_7	7
+#define	GPIOAO_8	8
+#define	GPIOAO_9	9
+
+#define	GPIOZ_0		0
+#define	GPIOZ_1		1
+#define	GPIOZ_2		2
+#define	GPIOZ_3		3
+#define	GPIOZ_4		4
+#define	GPIOZ_5		5
+#define	GPIOZ_6		6
+#define	GPIOZ_7		7
+#define	GPIOZ_8		8
+#define	GPIOZ_9		9
+#define	GPIOZ_10	10
+#define	GPIOZ_11	11
+#define	GPIOZ_12	12
+#define	GPIOZ_13	13
+#define	GPIOZ_14	14
+#define	GPIOZ_15	15
+#define	GPIOH_0		16
+#define	GPIOH_1		17
+#define	GPIOH_2		18
+#define	GPIOH_3		19
 #define	GPIOH_4    20
 #define	GPIOH_5    21
 #define	GPIOH_6    22
 #define	GPIOH_7    23
 #define	GPIOH_8    24
 #define	GPIOH_9    25
-
 #define	BOOT_0    26
 #define	BOOT_1    27
 #define	BOOT_2    28
@@ -57,7 +71,6 @@
 #define	BOOT_13    39
 #define	BOOT_14    40
 #define	BOOT_15    41
-
 #define	CARD_0    42
 #define	CARD_1    43
 #define	CARD_2    44
@@ -65,7 +78,6 @@
 #define	CARD_4    46
 #define	CARD_5    47
 #define	CARD_6    48
-
 #define	GPIODV_0    49
 #define	GPIODV_1    50
 #define	GPIODV_2    51
@@ -96,7 +108,6 @@
 #define	GPIODV_27    76
 #define	GPIODV_28    77
 #define	GPIODV_29    78
-
 #define	GPIOX_0    79
 #define	GPIOX_1    80
 #define	GPIOX_2    81
@@ -116,14 +127,11 @@
 #define	GPIOX_16    95
 #define	GPIOX_17    96
 #define	GPIOX_18    97
-
 #define	GPIOCLK_0    98
 #define	GPIOCLK_1    99
-
 #define	GPIO_TEST_N    100
 
-
-/*AO REG */
 #define AO 0x10
 #define AO2 0x11
+
 #endif

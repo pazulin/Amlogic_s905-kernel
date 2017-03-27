@@ -1,7 +1,7 @@
 /*
  * include/linux/amlogic/saradc.h
  *
- * Copyright (C) 2015 Amlogic, Inc. All rights reserved.
+ * Copyright (C) 2017 Amlogic, Inc. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
-*/
+ */
 
 #ifndef __AML_SARADC_H__
 #define __AML_SARADC_H__
@@ -35,6 +35,7 @@ enum {
 };
 
 extern int get_adc_sample(int dev_id, int ch);
+extern int get_adc_sample_12bit(int dev_id, int ch);
 
 #define bits_desc(reg_offset, bits_offset, bits_len) \
 	(((bits_len)<<24)|((bits_offset)<<16)|(reg_offset))

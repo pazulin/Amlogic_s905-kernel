@@ -22,6 +22,18 @@ static inline int in_kernel_text(unsigned long addr)
 	return 0;
 }
 
+static inline unsigned long kernel_toc_addr(void)
+{
+	/* Defined by the linker, see vmlinux.lds.S */
+	extern unsigned long __toc_start;
+
+	/*
+	 * The TOC register (r2) points 32kB into the TOC, so that 64kB of
+	 * the TOC can be addressed using a single machine instruction.
+	 */
+	return (unsigned long)(&__toc_start) + 0x8000UL;
+}
+
 static inline int overlaps_interrupt_vector_text(unsigned long start,
 							unsigned long end)
 {
@@ -39,6 +51,18 @@ static inline int overlaps_kernel_text(unsigned long start, unsigned long end)
 		(unsigned long)_stext < end;
 }
 
+static inline int overlaps_kvm_tmp(unsigned long start, unsigned long end)
+{
+#ifdef CONFIG_KVM_GUEST
+	extern char kvm_tmp[];
+	return start < (unsigned long)kvm_tmp &&
+		(unsigned long)&kvm_tmp[1024 * 1024] < end;
+#else
+	return 0;
+#endif
+}
+
+#ifdef PPC64_ELF_ABI_v1
 #undef dereference_function_descriptor
 static inline void *dereference_function_descriptor(void *ptr)
 {
@@ -49,6 +73,7 @@ static inline void *dereference_function_descriptor(void *ptr)
 		ptr = p;
 	return ptr;
 }
+#endif /* PPC64_ELF_ABI_v1 */
 
 #endif
 

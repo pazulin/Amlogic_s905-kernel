@@ -68,6 +68,16 @@ struct iuu_private {
 	u32 clk;
 };
 
+static int iuu_attach(struct usb_serial *serial)
+{
+	unsigned char num_ports = serial->num_ports;
+
+	if (serial->num_bulk_in < num_ports || serial->num_bulk_out < num_ports)
+		return -ENODEV;
+
+	return 0;
+}
+
 static int iuu_port_probe(struct usb_serial_port *port)
 {
 	struct iuu_private *priv;
@@ -360,7 +370,7 @@ static void iuu_led_activity_on(struct urb *urb)
 	int result;
 	char *buf_ptr = port->write_urb->transfer_buffer;
 	*buf_ptr++ = IUU_SET_LED;
-	if (xmas == 1) {
+	if (xmas) {
 		get_random_bytes(buf_ptr, 6);
 		*(buf_ptr+7) = 1;
 	} else {
@@ -380,7 +390,7 @@ static void iuu_led_activity_off(struct urb *urb)
 	struct usb_serial_port *port = urb->context;
 	int result;
 	char *buf_ptr = port->write_urb->transfer_buffer;
-	if (xmas == 1) {
+	if (xmas) {
 		iuu_rxcmd(urb);
 		return;
 	} else {
@@ -1151,7 +1161,7 @@ static ssize_t vcc_mode_store(struct device *dev,
 		goto fail_store_vcc_mode;
 	}
 
-	dev_dbg(dev, "%s: setting vcc_mode = %ld", __func__, v);
+	dev_dbg(dev, "%s: setting vcc_mode = %ld\n", __func__, v);
 
 	if ((v != 3) && (v != 5)) {
 		dev_err(dev, "%s - vcc_mode %ld is invalid\n", __func__, v);
@@ -1196,6 +1206,7 @@ static struct usb_serial_driver iuu_device = {
 	.tiocmset = iuu_tiocmset,
 	.set_termios = iuu_set_termios,
 	.init_termios = iuu_init_termios,
+	.attach = iuu_attach,
 	.port_probe = iuu_port_probe,
 	.port_remove = iuu_port_remove,
 };

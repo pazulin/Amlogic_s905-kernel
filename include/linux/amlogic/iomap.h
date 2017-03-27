@@ -1,7 +1,7 @@
 /*
  * include/linux/amlogic/iomap.h
  *
- * Copyright (C) 2015 Amlogic, Inc. All rights reserved.
+ * Copyright (C) 2017 Amlogic, Inc. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,8 +13,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
-*/
-
+ */
 
 #ifndef __SOC_IO_H
 #define __SOC_IO_H
@@ -32,8 +31,8 @@ extern int aml_regmap_update_bits(u32 bus_type,
 			unsigned int reg, unsigned int mask,
 			unsigned int val);
 /*
-** CBUS REG Read Write and Update some bits
-*/
+ ** CBUS REG Read Write and Update some bits
+ */
 extern  int aml_read_cbus(unsigned int reg);
 
 
@@ -44,8 +43,8 @@ extern  void aml_cbus_update_bits(unsigned int reg,
 		unsigned int mask, unsigned int val);
 
 /*
-** AO REG Read Write and Update some bits
-*/
+ ** AO REG Read Write and Update some bits
+ */
 extern  int aml_read_aobus(unsigned int reg);
 
 
@@ -58,8 +57,8 @@ extern  void aml_aobus_update_bits(unsigned int reg,
 
 
 /*
-** VCBUS Bus REG Read Write and Update some bits
-*/
+ ** VCBUS Bus REG Read Write and Update some bits
+ */
 extern  int aml_read_vcbus(unsigned int reg);
 
 extern  void aml_write_vcbus(unsigned int reg, unsigned int val);
@@ -69,8 +68,8 @@ extern  void aml_vcbus_update_bits(unsigned int reg,
 
 
 /*
-** DOS BUS Bus REG Read Write and Update some bits
-*/
+ ** DOS BUS Bus REG Read Write and Update some bits
+ */
 extern  int aml_read_dosbus(unsigned int reg);
 
 extern  void aml_write_dosbus(unsigned int reg, unsigned int val);

@@ -2,6 +2,5 @@
 # Makefile for the amlogic i2c bus drivers.
 #
 
-obj-$(CONFIG_I2C_AML)		+= aml_i2c.o
-obj-$(CONFIG_I2C_SLAVE_AML)		+= aml_slave.o
-obj-$(CONFIG_I2C_SW_AML)	+= aml_sw_i2c.o
+obj-$(CONFIG_AMLOGIC_I2C_MASTER)	+= aml_master.o
+obj-$(CONFIG_AMLOGIC_I2C_SLAVE)		+= aml_slave.o

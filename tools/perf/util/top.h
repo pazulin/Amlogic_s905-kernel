@@ -2,7 +2,7 @@
 #define __PERF_TOP_H 1
 
 #include "tool.h"
-#include "types.h"
+#include <linux/types.h>
 #include <stddef.h>
 #include <stdbool.h>
 #include <termios.h>
@@ -27,7 +27,6 @@ struct perf_top {
 	int		   max_stack;
 	bool		   hide_kernel_symbols, hide_user_symbols, zero;
 	bool		   use_tui, use_stdio;
-	bool		   kptr_restrict_warned;
 	bool		   vmlinux_warned;
 	bool		   dump_symtab;
 	struct hist_entry  *sym_filter_entry;

@@ -1,7 +1,7 @@
 /*
  * drivers/amlogic/usb/phy/usbphy.c
  *
- * Copyright (C) 2015 Amlogic, Inc. All rights reserved.
+ * Copyright (C) 2017 Amlogic, Inc. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,7 +13,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
-*/
+ */
 
 #include <linux/kernel.h>
 #include <linux/module.h>
@@ -33,7 +33,7 @@
 #include <linux/amlogic/iomap.h>
 #include <linux/reset.h>
 #include <linux/platform_device.h>
-#include <linux/amlogic/usb-meson8.h>
+#include <linux/amlogic/usb-gxbb.h>
 #include <linux/amlogic/usb-gxbbtv.h>
 #include <linux/amlogic/cpu_version.h>
 
@@ -142,8 +142,10 @@ int clk_enable_usb_meson8(struct platform_device *pdev,
 
 	/* read back clock detected flag*/
 	control.d32 = peri->ctrl;
-
+#if 0
 	if (is_meson_m8m2_cpu() && (port_idx == USB_PORT_IDX_B)) {
+#endif
+	if ((port_idx == USB_PORT_IDX_B)) {
 		adp_bc.d32 = peri->adp_bc;
 		adp_bc.b.aca_enable = 1;
 		peri->adp_bc = adp_bc.d32;

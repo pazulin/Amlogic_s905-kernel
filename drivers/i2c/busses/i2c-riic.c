@@ -383,10 +383,8 @@ static int riic_i2c_probe(struct platform_device *pdev)
 
 
 	ret = i2c_add_adapter(adap);
-	if (ret) {
-		dev_err(&pdev->dev, "failed to add adapter\n");
+	if (ret)
 		return ret;
-	}
 
 	platform_set_drvdata(pdev, riic);
 
@@ -404,7 +402,7 @@ static int riic_i2c_remove(struct platform_device *pdev)
 	return 0;
 }
 
-static struct of_device_id riic_i2c_dt_ids[] = {
+static const struct of_device_id riic_i2c_dt_ids[] = {
 	{ .compatible = "renesas,riic-rz" },
 	{ /* Sentinel */ },
 };
@@ -414,7 +412,6 @@ static struct platform_driver riic_i2c_driver = {
 	.remove		= riic_i2c_remove,
 	.driver		= {
 		.name	= "i2c-riic",
-		.owner	= THIS_MODULE,
 		.of_match_table = riic_i2c_dt_ids,
 	},
 };

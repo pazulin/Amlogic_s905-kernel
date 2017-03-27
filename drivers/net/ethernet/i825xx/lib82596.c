@@ -960,7 +960,7 @@ static void i596_tx_timeout (struct net_device *dev)
 		lp->last_restart = dev->stats.tx_packets;
 	}
 
-	dev->trans_start = jiffies; /* prevent tx timeout */
+	netif_trans_update(dev); /* prevent tx timeout */
 	netif_wake_queue (dev);
 }
 
@@ -993,7 +993,7 @@ static int i596_start_xmit(struct sk_buff *skb, struct net_device *dev)
 				       dev->name));
 		dev->stats.tx_dropped++;
 
-		dev_kfree_skb(skb);
+		dev_kfree_skb_any(skb);
 	} else {
 		if (++lp->next_tx_cmd == TX_RING_SIZE)
 			lp->next_tx_cmd = 0;

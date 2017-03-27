@@ -12,10 +12,31 @@
 #include <linux/cpumask.h>
 #include <linux/nodemask.h>
 #include <linux/mm.h>
+#include <linux/jump_label.h>
 
 #ifdef CONFIG_CPUSETS
 
-extern int number_of_cpusets;	/* How many cpusets are defined in system? */
+extern struct static_key_false cpusets_enabled_key;
+static inline bool cpusets_enabled(void)
+{
+	return static_branch_unlikely(&cpusets_enabled_key);
+}
+
+static inline int nr_cpusets(void)
+{
+	/* jump label reference count + the top-level cpuset */
+	return static_key_count(&cpusets_enabled_key.key) + 1;
+}
+
+static inline void cpuset_inc(void)
+{
+	static_branch_inc(&cpusets_enabled_key);
+}
+
+static inline void cpuset_dec(void)
+{
+	static_branch_dec(&cpusets_enabled_key);
+}
 
 extern int cpuset_init(void);
 extern void cpuset_init_smp(void);
@@ -27,29 +48,25 @@ extern nodemask_t cpuset_mems_allowed(struct task_struct *p);
 void cpuset_init_current_mems_allowed(void);
 int cpuset_nodemask_valid_mems_allowed(nodemask_t *nodemask);
 
-extern int __cpuset_node_allowed_softwall(int node, gfp_t gfp_mask);
-extern int __cpuset_node_allowed_hardwall(int node, gfp_t gfp_mask);
+extern bool __cpuset_node_allowed(int node, gfp_t gfp_mask);
 
-static inline int cpuset_node_allowed_softwall(int node, gfp_t gfp_mask)
+static inline bool cpuset_node_allowed(int node, gfp_t gfp_mask)
 {
-	return number_of_cpusets <= 1 ||
-		__cpuset_node_allowed_softwall(node, gfp_mask);
+	if (cpusets_enabled())
+		return __cpuset_node_allowed(node, gfp_mask);
+	return true;
 }
 
-static inline int cpuset_node_allowed_hardwall(int node, gfp_t gfp_mask)
+static inline bool __cpuset_zone_allowed(struct zone *z, gfp_t gfp_mask)
 {
-	return number_of_cpusets <= 1 ||
-		__cpuset_node_allowed_hardwall(node, gfp_mask);
+	return __cpuset_node_allowed(zone_to_nid(z), gfp_mask);
 }
 
-static inline int cpuset_zone_allowed_softwall(struct zone *z, gfp_t gfp_mask)
+static inline bool cpuset_zone_allowed(struct zone *z, gfp_t gfp_mask)
 {
-	return cpuset_node_allowed_softwall(zone_to_nid(z), gfp_mask);
-}
-
-static inline int cpuset_zone_allowed_hardwall(struct zone *z, gfp_t gfp_mask)
-{
-	return cpuset_node_allowed_hardwall(zone_to_nid(z), gfp_mask);
+	if (cpusets_enabled())
+		return __cpuset_zone_allowed(z, gfp_mask);
+	return true;
 }
 
 extern int cpuset_mems_allowed_intersects(const struct task_struct *tsk1,
@@ -65,26 +82,27 @@ extern void __cpuset_memory_pressure_bump(void);
 
 extern void cpuset_task_status_allowed(struct seq_file *m,
 					struct task_struct *task);
-extern int proc_cpuset_show(struct seq_file *, void *);
+extern int proc_cpuset_show(struct seq_file *m, struct pid_namespace *ns,
+			    struct pid *pid, struct task_struct *tsk);
 
 extern int cpuset_mem_spread_node(void);
 extern int cpuset_slab_spread_node(void);
 
 static inline int cpuset_do_page_mem_spread(void)
 {
-	return current->flags & PF_SPREAD_PAGE;
+	return task_spread_page(current);
 }
 
 static inline int cpuset_do_slab_mem_spread(void)
 {
-	return current->flags & PF_SPREAD_SLAB;
+	return task_spread_slab(current);
 }
 
 extern int current_cpuset_is_being_rebound(void);
 
 extern void rebuild_sched_domains(void);
 
-extern void cpuset_print_task_mems_allowed(struct task_struct *p);
+extern void cpuset_print_current_mems_allowed(void);
 
 /*
  * read_mems_allowed_begin is required when making decisions involving
@@ -95,6 +113,9 @@ extern void cpuset_print_task_mems_allowed(struct task_struct *p);
  */
 static inline unsigned int read_mems_allowed_begin(void)
 {
+	if (!cpusets_enabled())
+		return 0;
+
 	return read_seqcount_begin(&current->mems_allowed_seq);
 }
 
@@ -106,6 +127,9 @@ static inline unsigned int read_mems_allowed_begin(void)
  */
 static inline bool read_mems_allowed_retry(unsigned int seq)
 {
+	if (!cpusets_enabled())
+		return false;
+
 	return read_seqcount_retry(&current->mems_allowed_seq, seq);
 }
 
@@ -123,6 +147,8 @@ static inline void set_mems_allowed(nodemask_t nodemask)
 }
 
 #else /* !CONFIG_CPUSETS */
+
+static inline bool cpusets_enabled(void) { return false; }
 
 static inline int cpuset_init(void) { return 0; }
 static inline void cpuset_init_smp(void) {}
@@ -155,24 +181,19 @@ static inline int cpuset_nodemask_valid_mems_allowed(nodemask_t *nodemask)
 	return 1;
 }
 
-static inline int cpuset_node_allowed_softwall(int node, gfp_t gfp_mask)
+static inline bool cpuset_node_allowed(int node, gfp_t gfp_mask)
 {
-	return 1;
+	return true;
 }
 
-static inline int cpuset_node_allowed_hardwall(int node, gfp_t gfp_mask)
+static inline bool __cpuset_zone_allowed(struct zone *z, gfp_t gfp_mask)
 {
-	return 1;
+	return true;
 }
 
-static inline int cpuset_zone_allowed_softwall(struct zone *z, gfp_t gfp_mask)
+static inline bool cpuset_zone_allowed(struct zone *z, gfp_t gfp_mask)
 {
-	return 1;
-}
-
-static inline int cpuset_zone_allowed_hardwall(struct zone *z, gfp_t gfp_mask)
-{
-	return 1;
+	return true;
 }
 
 static inline int cpuset_mems_allowed_intersects(const struct task_struct *tsk1,
@@ -218,7 +239,7 @@ static inline void rebuild_sched_domains(void)
 	partition_sched_domains(1, NULL, NULL);
 }
 
-static inline void cpuset_print_task_mems_allowed(struct task_struct *p)
+static inline void cpuset_print_current_mems_allowed(void)
 {
 }
 

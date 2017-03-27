@@ -37,12 +37,12 @@
 #include <asm/smp.h>
 #include <asm/mmu.h>
 #include <asm/pgtable.h>
-#include <asm/pci.h>
 #include <asm/iommu.h>
 #include <asm/btext.h>
 #include <asm/sections.h>
 #include <asm/machdep.h>
 #include <asm/opal.h>
+#include <asm/asm-prototypes.h>
 
 #include <linux/linux_logo.h>
 
@@ -390,6 +390,7 @@ static void __init prom_printf(const char *format, ...)
 			break;
 		}
 	}
+	va_end(args);
 }
 
 
@@ -642,26 +643,36 @@ static void __init early_cmdline_parse(void)
 #define W(x)	((x) >> 24) & 0xff, ((x) >> 16) & 0xff, \
 		((x) >> 8) & 0xff, (x) & 0xff
 
+/* Firmware expects the value to be n - 1, where n is the # of vectors */
+#define NUM_VECTORS(n)		((n) - 1)
+
+/*
+ * Firmware expects 1 + n - 2, where n is the length of the option vector in
+ * bytes. The 1 accounts for the length byte itself, the - 2 .. ?
+ */
+#define VECTOR_LENGTH(n)	(1 + (n) - 2)
+
 unsigned char ibm_architecture_vec[] = {
 	W(0xfffe0000), W(0x003a0000),	/* POWER5/POWER5+ */
 	W(0xffff0000), W(0x003e0000),	/* POWER6 */
 	W(0xffff0000), W(0x003f0000),	/* POWER7 */
 	W(0xffff0000), W(0x004b0000),	/* POWER8E */
+	W(0xffff0000), W(0x004c0000),   /* POWER8NVL */
 	W(0xffff0000), W(0x004d0000),	/* POWER8 */
 	W(0xffffffff), W(0x0f000004),	/* all 2.07-compliant */
 	W(0xffffffff), W(0x0f000003),	/* all 2.06-compliant */
 	W(0xffffffff), W(0x0f000002),	/* all 2.05-compliant */
 	W(0xfffffffe), W(0x0f000001),	/* all 2.04-compliant and earlier */
-	6 - 1,				/* 6 option vectors */
+	NUM_VECTORS(6),			/* 6 option vectors */
 
 	/* option vector 1: processor architectures supported */
-	3 - 2,				/* length */
+	VECTOR_LENGTH(2),		/* length */
 	0,				/* don't ignore, don't halt */
 	OV1_PPC_2_00 | OV1_PPC_2_01 | OV1_PPC_2_02 | OV1_PPC_2_03 |
 	OV1_PPC_2_04 | OV1_PPC_2_05 | OV1_PPC_2_06 | OV1_PPC_2_07,
 
 	/* option vector 2: Open Firmware options supported */
-	34 - 2,				/* length */
+	VECTOR_LENGTH(33),		/* length */
 	OV2_REAL_MODE,
 	0, 0,
 	W(0xffffffff),			/* real_base */
@@ -675,17 +686,17 @@ unsigned char ibm_architecture_vec[] = {
 	48,				/* max log_2(hash table size) */
 
 	/* option vector 3: processor options supported */
-	3 - 2,				/* length */
+	VECTOR_LENGTH(2),		/* length */
 	0,				/* don't ignore, don't halt */
 	OV3_FP | OV3_VMX | OV3_DFP,
 
 	/* option vector 4: IBM PAPR implementation */
-	3 - 2,				/* length */
+	VECTOR_LENGTH(2),		/* length */
 	0,				/* don't halt */
 	OV4_MIN_ENT_CAP,		/* minimum VP entitled capacity */
 
 	/* option vector 5: PAPR/OF options */
-	19 - 2,				/* length */
+	VECTOR_LENGTH(21),		/* length */
 	0,				/* don't ignore, don't halt */
 	OV5_FEAT(OV5_LPAR) | OV5_FEAT(OV5_SPLPAR) | OV5_FEAT(OV5_LARGE_PAGES) |
 	OV5_FEAT(OV5_DRCONF_MEMORY) | OV5_FEAT(OV5_DONATE_DEDICATE_CPU) |
@@ -709,21 +720,24 @@ unsigned char ibm_architecture_vec[] = {
 	 * must match by the macro below. Update the definition if
 	 * the structure layout changes.
 	 */
-#define IBM_ARCH_VEC_NRCORES_OFFSET	125
+#define IBM_ARCH_VEC_NRCORES_OFFSET	133
 	W(NR_CPUS),			/* number of cores supported */
 	0,
 	0,
 	0,
 	0,
 	OV5_FEAT(OV5_PFO_HW_RNG) | OV5_FEAT(OV5_PFO_HW_ENCR) |
-	OV5_FEAT(OV5_PFO_HW_842),
-	OV5_FEAT(OV5_SUB_PROCESSORS),
+	OV5_FEAT(OV5_PFO_HW_842),				/* Byte 17 */
+	0,							/* Byte 18 */
+	0,							/* Byte 19 */
+	0,							/* Byte 20 */
+	OV5_FEAT(OV5_SUB_PROCESSORS),				/* Byte 21 */
+
 	/* option vector 6: IBM PAPR hints */
-	4 - 2,				/* length */
+	VECTOR_LENGTH(3),		/* length */
 	0,
 	0,
 	OV6_LINUX,
-
 };
 
 /* Old method - ELF header with PT_NOTE sections only works on BE */
@@ -1268,201 +1282,6 @@ static u64 __initdata prom_opal_base;
 static u64 __initdata prom_opal_entry;
 #endif
 
-#ifdef __BIG_ENDIAN__
-/* XXX Don't change this structure without updating opal-takeover.S */
-static struct opal_secondary_data {
-	s64				ack;	/*  0 */
-	u64				go;	/*  8 */
-	struct opal_takeover_args	args;	/* 16 */
-} opal_secondary_data;
-
-static u64 __initdata prom_opal_align;
-static u64 __initdata prom_opal_size;
-static int __initdata prom_rtas_start_cpu;
-static u64 __initdata prom_rtas_data;
-static u64 __initdata prom_rtas_entry;
-
-extern char opal_secondary_entry;
-
-static void __init prom_query_opal(void)
-{
-	long rc;
-
-	/* We must not query for OPAL presence on a machine that
-	 * supports TNK takeover (970 blades), as this uses the same
-	 * h-call with different arguments and will crash
-	 */
-	if (PHANDLE_VALID(call_prom("finddevice", 1, 1,
-				    ADDR("/tnk-memory-map")))) {
-		prom_printf("TNK takeover detected, skipping OPAL check\n");
-		return;
-	}
-
-	prom_printf("Querying for OPAL presence... ");
-
-	rc = opal_query_takeover(&prom_opal_size,
-				 &prom_opal_align);
-	prom_debug("(rc = %ld) ", rc);
-	if (rc != 0) {
-		prom_printf("not there.\n");
-		return;
-	}
-	of_platform = PLATFORM_OPAL;
-	prom_printf(" there !\n");
-	prom_debug("  opal_size  = 0x%lx\n", prom_opal_size);
-	prom_debug("  opal_align = 0x%lx\n", prom_opal_align);
-	if (prom_opal_align < 0x10000)
-		prom_opal_align = 0x10000;
-}
-
-static int __init prom_rtas_call(int token, int nargs, int nret,
-				 int *outputs, ...)
-{
-	struct rtas_args rtas_args;
-	va_list list;
-	int i;
-
-	rtas_args.token = token;
-	rtas_args.nargs = nargs;
-	rtas_args.nret  = nret;
-	rtas_args.rets  = (rtas_arg_t *)&(rtas_args.args[nargs]);
-	va_start(list, outputs);
-	for (i = 0; i < nargs; ++i)
-		rtas_args.args[i] = va_arg(list, rtas_arg_t);
-	va_end(list);
-
-	for (i = 0; i < nret; ++i)
-		rtas_args.rets[i] = 0;
-
-	opal_enter_rtas(&rtas_args, prom_rtas_data,
-			prom_rtas_entry);
-
-	if (nret > 1 && outputs != NULL)
-		for (i = 0; i < nret-1; ++i)
-			outputs[i] = rtas_args.rets[i+1];
-	return (nret > 0)? rtas_args.rets[0]: 0;
-}
-
-static void __init prom_opal_hold_cpus(void)
-{
-	int i, cnt, cpu, rc;
-	long j;
-	phandle node;
-	char type[64];
-	u32 servers[8];
-	void *entry = (unsigned long *)&opal_secondary_entry;
-	struct opal_secondary_data *data = &opal_secondary_data;
-
-	prom_debug("prom_opal_hold_cpus: start...\n");
-	prom_debug("    - entry       = 0x%x\n", entry);
-	prom_debug("    - data        = 0x%x\n", data);
-
-	data->ack = -1;
-	data->go = 0;
-
-	/* look for cpus */
-	for (node = 0; prom_next_node(&node); ) {
-		type[0] = 0;
-		prom_getprop(node, "device_type", type, sizeof(type));
-		if (strcmp(type, "cpu") != 0)
-			continue;
-
-		/* Skip non-configured cpus. */
-		if (prom_getprop(node, "status", type, sizeof(type)) > 0)
-			if (strcmp(type, "okay") != 0)
-				continue;
-
-		cnt = prom_getprop(node, "ibm,ppc-interrupt-server#s", servers,
-			     sizeof(servers));
-		if (cnt == PROM_ERROR)
-			break;
-		cnt >>= 2;
-		for (i = 0; i < cnt; i++) {
-			cpu = servers[i];
-			prom_debug("CPU %d ... ", cpu);
-			if (cpu == prom.cpu) {
-				prom_debug("booted !\n");
-				continue;
-			}
-			prom_debug("starting ... ");
-
-			/* Init the acknowledge var which will be reset by
-			 * the secondary cpu when it awakens from its OF
-			 * spinloop.
-			 */
-			data->ack = -1;
-			rc = prom_rtas_call(prom_rtas_start_cpu, 3, 1,
-					    NULL, cpu, entry, data);
-			prom_debug("rtas rc=%d ...", rc);
-
-			for (j = 0; j < 100000000 && data->ack == -1; j++) {
-				HMT_low();
-				mb();
-			}
-			HMT_medium();
-			if (data->ack != -1)
-				prom_debug("done, PIR=0x%x\n", data->ack);
-			else
-				prom_debug("timeout !\n");
-		}
-	}
-	prom_debug("prom_opal_hold_cpus: end...\n");
-}
-
-static void __init prom_opal_takeover(void)
-{
-	struct opal_secondary_data *data = &opal_secondary_data;
-	struct opal_takeover_args *args = &data->args;
-	u64 align = prom_opal_align;
-	u64 top_addr, opal_addr;
-
-	args->k_image	= (u64)_stext;
-	args->k_size	= _end - _stext;
-	args->k_entry	= 0;
-	args->k_entry2	= 0x60;
-
-	top_addr = _ALIGN_UP(args->k_size, align);
-
-	if (prom_initrd_start != 0) {
-		args->rd_image = prom_initrd_start;
-		args->rd_size = prom_initrd_end - args->rd_image;
-		args->rd_loc = top_addr;
-		top_addr = _ALIGN_UP(args->rd_loc + args->rd_size, align);
-	}
-
-	/* Pickup an address for the HAL. We want to go really high
-	 * up to avoid problem with future kexecs. On the other hand
-	 * we don't want to be all over the TCEs on P5IOC2 machines
-	 * which are going to be up there too. We assume the machine
-	 * has plenty of memory, and we ask for the HAL for now to
-	 * be just below the 1G point, or above the initrd
-	 */
-	opal_addr = _ALIGN_DOWN(0x40000000 - prom_opal_size, align);
-	if (opal_addr < top_addr)
-		opal_addr = top_addr;
-	args->hal_addr = opal_addr;
-
-	/* Copy the command line to the kernel image */
-	strlcpy(boot_command_line, prom_cmd_line,
-		COMMAND_LINE_SIZE);
-
-	prom_debug("  k_image    = 0x%lx\n", args->k_image);
-	prom_debug("  k_size     = 0x%lx\n", args->k_size);
-	prom_debug("  k_entry    = 0x%lx\n", args->k_entry);
-	prom_debug("  k_entry2   = 0x%lx\n", args->k_entry2);
-	prom_debug("  hal_addr   = 0x%lx\n", args->hal_addr);
-	prom_debug("  rd_image   = 0x%lx\n", args->rd_image);
-	prom_debug("  rd_size    = 0x%lx\n", args->rd_size);
-	prom_debug("  rd_loc     = 0x%lx\n", args->rd_loc);
-	prom_printf("Performing OPAL takeover,this can take a few minutes..\n");
-	prom_close_stdin();
-	mb();
-	data->go = 1;
-	for (;;)
-		opal_do_takeover(args);
-}
-#endif /* __BIG_ENDIAN__ */
-
 /*
  * Allocate room for and instantiate OPAL
  */
@@ -1597,12 +1416,6 @@ static void __init prom_instantiate_rtas(void)
 			 &val, sizeof(val)) != PROM_ERROR)
 		rtas_has_query_cpu_stopped = true;
 
-#if defined(CONFIG_PPC_POWERNV) && defined(__BIG_ENDIAN__)
-	/* PowerVN takeover hack */
-	prom_rtas_data = base;
-	prom_rtas_entry = entry;
-	prom_getprop(rtas_node, "start-cpu", &prom_rtas_start_cpu, 4);
-#endif
 	prom_debug("rtas base     = 0x%x\n", base);
 	prom_debug("rtas entry    = 0x%x\n", entry);
 	prom_debug("rtas size     = 0x%x\n", (long)size);
@@ -1618,27 +1431,45 @@ static void __init prom_instantiate_sml(void)
 {
 	phandle ibmvtpm_node;
 	ihandle ibmvtpm_inst;
-	u32 entry = 0, size = 0;
+	u32 entry = 0, size = 0, succ = 0;
 	u64 base;
+	__be32 val;
 
 	prom_debug("prom_instantiate_sml: start...\n");
 
-	ibmvtpm_node = call_prom("finddevice", 1, 1, ADDR("/ibm,vtpm"));
+	ibmvtpm_node = call_prom("finddevice", 1, 1, ADDR("/vdevice/vtpm"));
 	prom_debug("ibmvtpm_node: %x\n", ibmvtpm_node);
 	if (!PHANDLE_VALID(ibmvtpm_node))
 		return;
 
-	ibmvtpm_inst = call_prom("open", 1, 1, ADDR("/ibm,vtpm"));
+	ibmvtpm_inst = call_prom("open", 1, 1, ADDR("/vdevice/vtpm"));
 	if (!IHANDLE_VALID(ibmvtpm_inst)) {
 		prom_printf("opening vtpm package failed (%x)\n", ibmvtpm_inst);
 		return;
 	}
 
-	if (call_prom_ret("call-method", 2, 2, &size,
-			  ADDR("sml-get-handover-size"),
-			  ibmvtpm_inst) != 0 || size == 0) {
-		prom_printf("SML get handover size failed\n");
-		return;
+	if (prom_getprop(ibmvtpm_node, "ibm,sml-efi-reformat-supported",
+			 &val, sizeof(val)) != PROM_ERROR) {
+		if (call_prom_ret("call-method", 2, 2, &succ,
+				  ADDR("reformat-sml-to-efi-alignment"),
+				  ibmvtpm_inst) != 0 || succ == 0) {
+			prom_printf("Reformat SML to EFI alignment failed\n");
+			return;
+		}
+
+		if (call_prom_ret("call-method", 2, 2, &size,
+				  ADDR("sml-get-allocated-size"),
+				  ibmvtpm_inst) != 0 || size == 0) {
+			prom_printf("SML get allocated size failed\n");
+			return;
+		}
+	} else {
+		if (call_prom_ret("call-method", 2, 2, &size,
+				  ADDR("sml-get-handover-size"),
+				  ibmvtpm_inst) != 0 || size == 0) {
+			prom_printf("SML get handover size failed\n");
+			return;
+		}
 	}
 
 	base = alloc_down(size, PAGE_SIZE, 0);
@@ -1646,6 +1477,8 @@ static void __init prom_instantiate_sml(void)
 		prom_panic("Could not allocate memory for sml\n");
 
 	prom_printf("instantiating sml at 0x%x...", base);
+
+	memset((void *)base, 0, size);
 
 	if (call_prom_ret("call-method", 4, 2, &entry,
 			  ADDR("sml-handover"),
@@ -1657,9 +1490,9 @@ static void __init prom_instantiate_sml(void)
 
 	reserve_mem(base, size);
 
-	prom_setprop(ibmvtpm_node, "/ibm,vtpm", "linux,sml-base",
+	prom_setprop(ibmvtpm_node, "/vdevice/vtpm", "linux,sml-base",
 		     &base, sizeof(base));
-	prom_setprop(ibmvtpm_node, "/ibm,vtpm", "linux,sml-size",
+	prom_setprop(ibmvtpm_node, "/vdevice/vtpm", "linux,sml-size",
 		     &size, sizeof(size));
 
 	prom_debug("sml base     = 0x%x\n", base);
@@ -2811,6 +2644,86 @@ static void __init fixup_device_tree_efika(void)
 #define fixup_device_tree_efika()
 #endif
 
+#ifdef CONFIG_PPC_PASEMI_NEMO
+/*
+ * CFE supplied on Nemo is broken in several ways, biggest
+ * problem is that it reassigns ISA interrupts to unused mpic ints.
+ * Add an interrupt-controller property for the io-bridge to use
+ * and correct the ints so we can attach them to an irq_domain
+ */
+static void __init fixup_device_tree_pasemi(void)
+{
+	u32 interrupts[2], parent, rval, val = 0;
+	char *name, *pci_name;
+	phandle iob, node;
+
+	/* Find the root pci node */
+	name = "/pxp@0,e0000000";
+	iob = call_prom("finddevice", 1, 1, ADDR(name));
+	if (!PHANDLE_VALID(iob))
+		return;
+
+	/* check if interrupt-controller node set yet */
+	if (prom_getproplen(iob, "interrupt-controller") !=PROM_ERROR)
+		return;
+
+	prom_printf("adding interrupt-controller property for SB600...\n");
+
+	prom_setprop(iob, name, "interrupt-controller", &val, 0);
+
+	pci_name = "/pxp@0,e0000000/pci@11";
+	node = call_prom("finddevice", 1, 1, ADDR(pci_name));
+	parent = ADDR(iob);
+
+	for( ; prom_next_node(&node); ) {
+		/* scan each node for one with an interrupt */
+		if (!PHANDLE_VALID(node))
+			continue;
+
+		rval = prom_getproplen(node, "interrupts");
+		if (rval == 0 || rval == PROM_ERROR)
+			continue;
+
+		prom_getprop(node, "interrupts", &interrupts, sizeof(interrupts));
+		if ((interrupts[0] < 212) || (interrupts[0] > 222))
+			continue;
+
+		/* found a node, update both interrupts and interrupt-parent */
+		if ((interrupts[0] >= 212) && (interrupts[0] <= 215))
+			interrupts[0] -= 203;
+		if ((interrupts[0] >= 216) && (interrupts[0] <= 220))
+			interrupts[0] -= 213;
+		if (interrupts[0] == 221)
+			interrupts[0] = 14;
+		if (interrupts[0] == 222)
+			interrupts[0] = 8;
+
+		prom_setprop(node, pci_name, "interrupts", interrupts,
+					sizeof(interrupts));
+		prom_setprop(node, pci_name, "interrupt-parent", &parent,
+					sizeof(parent));
+	}
+
+	/*
+	 * The io-bridge has device_type set to 'io-bridge' change it to 'isa'
+	 * so that generic isa-bridge code can add the SB600 and its on-board
+	 * peripherals.
+	 */
+	name = "/pxp@0,e0000000/io-bridge@0";
+	iob = call_prom("finddevice", 1, 1, ADDR(name));
+	if (!PHANDLE_VALID(iob))
+		return;
+
+	/* device_type is already set, just change it. */
+
+	prom_printf("Changing device_type of SB600 node...\n");
+
+	prom_setprop(iob, name, "device_type", "isa", sizeof("isa"));
+}
+#else	/* !CONFIG_PPC_PASEMI_NEMO */
+static inline void fixup_device_tree_pasemi(void) { }
+#endif
+
 static void __init fixup_device_tree(void)
 {
 	fixup_device_tree_maple();
@@ -2818,6 +2731,7 @@ static void __init fixup_device_tree(void)
 	fixup_device_tree_chrp();
 	fixup_device_tree_pmac();
 	fixup_device_tree_efika();
+	fixup_device_tree_pasemi();
 }
 
 static void __init prom_find_boot_cpu(void)
@@ -3027,16 +2941,6 @@ unsigned long __init prom_init(unsigned long r3, unsigned long r4,
 		prom_instantiate_rtas();
 
 #ifdef CONFIG_PPC_POWERNV
-#ifdef __BIG_ENDIAN__
-	/* Detect HAL and try instanciating it & doing takeover */
-	if (of_platform == PLATFORM_PSERIES_LPAR) {
-		prom_query_opal();
-		if (of_platform == PLATFORM_OPAL) {
-			prom_opal_hold_cpus();
-			prom_opal_takeover();
-		}
-	} else
-#endif /* __BIG_ENDIAN__ */
 	if (of_platform == PLATFORM_OPAL)
 		prom_instantiate_opal();
 #endif /* CONFIG_PPC_POWERNV */
@@ -3109,7 +3013,7 @@ unsigned long __init prom_init(unsigned long r3, unsigned long r4,
 	 * Call OF "quiesce" method to shut down pending DMA's from
 	 * devices etc...
 	 */
-	prom_printf("Calling quiesce...\n");
+	prom_printf("Quiescing Open Firmware ...\n");
 	call_prom("quiesce", 0, 0);
 
 	/*
@@ -3121,7 +3025,7 @@ unsigned long __init prom_init(unsigned long r3, unsigned long r4,
 
 	/* Don't print anything after quiesce under OPAL, it crashes OFW */
 	if (of_platform != PLATFORM_OPAL) {
-		prom_printf("returning from prom_init\n");
+		prom_printf("Booting Linux via __start() @ 0x%lx ...\n", kbase);
 		prom_debug("->dt_header_start=0x%x\n", hdr);
 	}
 

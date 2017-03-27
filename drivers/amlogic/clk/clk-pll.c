@@ -1,7 +1,7 @@
 /*
  * drivers/amlogic/clk/clk-pll.c
  *
- * Copyright (C) 2015 Amlogic, Inc. All rights reserved.
+ * Copyright (C) 2017 Amlogic, Inc. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,346 +13,234 @@
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
-*/
+ */
 
+/*
+ * In the most basic form, a Meson PLL is composed as follows:
+ *
+ *                     PLL
+ *      +------------------------------+
+ *      |                              |
+ * in -----[ /N ]---[ *M ]---[ >>OD ]----->> out
+ *      |         ^        ^           |
+ *      +------------------------------+
+ *                |        |
+ *               FREF     VCO
+ *
+ * out = (in * M / N) >> OD
+ */
 
-#include <linux/errno.h>
-#include <linux/hrtimer.h>
+#include <linux/clk-provider.h>
 #include <linux/delay.h>
-#include <linux/clk-private.h>
-#include "clk.h"
-#include "clk-pll.h"
+#include <linux/err.h>
+#include <linux/io.h>
+#include <linux/module.h>
+#include <linux/of_address.h>
+#include <linux/slab.h>
+#include <linux/string.h>
+#include <linux/amlogic/cpu_version.h>
 
-#define to_clk_pll(_hw) container_of(_hw, struct amlogic_clk_pll, hw)
-#define to_clk(_hw) container_of(_hw, struct clk, hw)
-#define to_aml_pll(_hw) container_of(_hw, struct amlogic_pll_clock, hw)
+#include "clkc.h"
 
-static struct amlogic_pll_rate_table *aml_get_pll_settings(
-		struct amlogic_pll_clock *pll, unsigned long rate)
+#define MESON_PLL_RESET				BIT(29)
+#define MESON_PLL_ENABLE			BIT(30)
+#define MESON_PLL_LOCK				BIT(31)
+
+/* GXBB GXTVBB */
+#define GXBB_GP0_CNTL2 0x69c80000
+#define GXBB_GP0_CNTL3 0x0a674a21
+#define GXBB_GP0_CNTL4 0xc000000d
+
+/* GXL TXL */
+#define GXL_GP0_CNTL1 0xc084a000
+#define GXL_GP0_CNTL2 0xb75020be
+#define GXL_GP0_CNTL3 0x0a59a288
+#define GXL_GP0_CNTL4 0xc000004d
+#define GXL_GP0_CNTL5 0x00078000
+
+#define to_meson_clk_pll(_hw) container_of(_hw, struct meson_clk_pll, hw)
+
+static unsigned long meson_clk_pll_recalc_rate(struct clk_hw *hw,
+						unsigned long parent_rate)
 {
-	struct amlogic_pll_rate_table  *rate_table = pll->rate_table;
+	struct meson_clk_pll *pll = to_meson_clk_pll(hw);
+	struct parm *p;
+	unsigned long parent_rate_mhz = parent_rate / 1000000;
+	unsigned long rate_mhz;
+	u16 n, m, frac = 0, od, od2 = 0;
+	u32 reg;
+
+	p = &pll->n;
+	reg = readl(pll->base + p->reg_off);
+	n = PARM_GET(p->width, p->shift, reg);
+
+	p = &pll->m;
+	reg = readl(pll->base + p->reg_off);
+	m = PARM_GET(p->width, p->shift, reg);
+
+	p = &pll->od;
+	reg = readl(pll->base + p->reg_off);
+	od = PARM_GET(p->width, p->shift, reg);
+
+	p = &pll->od2;
+	if (p->width) {
+		reg = readl(pll->base + p->reg_off);
+		od2 = PARM_GET(p->width, p->shift, reg);
+	}
+
+	p = &pll->frac;
+	if (p->width) {
+		reg = readl(pll->base + p->reg_off);
+		frac = PARM_GET(p->width, p->shift, reg);
+		rate_mhz = (parent_rate_mhz * m +
+				(parent_rate_mhz * frac >> 12)) * 2 / n;
+		rate_mhz = rate_mhz >> od >> od2;
+	} else
+		rate_mhz = (parent_rate_mhz * m / n) >> od >> od2;
+
+	return rate_mhz * 1000000;
+}
+
+static long meson_clk_pll_round_rate(struct clk_hw *hw, unsigned long rate,
+				     unsigned long *parent_rate)
+{
+	struct meson_clk_pll *pll = to_meson_clk_pll(hw);
+	const struct pll_rate_table *rate_table = pll->rate_table;
 	int i;
 
-	for (i = 0; i < pll->rate_table_cnt; i++) {
+	for (i = 0; i < pll->rate_count; i++) {
+		if (rate <= rate_table[i].rate)
+			return rate_table[i].rate;
+	}
+
+	/* else return the smallest value */
+	return rate_table[0].rate;
+}
+
+static const struct pll_rate_table *meson_clk_get_pll_settings
+	(struct meson_clk_pll *pll, unsigned long rate)
+{
+	const struct pll_rate_table *rate_table = pll->rate_table;
+	int i;
+
+	for (i = 0; i < pll->rate_count; i++) {
 		if (rate == rate_table[i].rate)
 			return &rate_table[i];
 	}
-
 	return NULL;
 }
 
-static long amlogic_pll_round_rate(struct clk_hw *hw,
-	    unsigned long drate, unsigned long *prate)
+static int meson_clk_pll_wait_lock(struct meson_clk_pll *pll,
+				   struct parm *p_n)
 {
-	struct amlogic_clk_pll *pll = to_clk_pll(hw);
-	const struct amlogic_pll_rate_table *rate_table = pll->rate_table;
-	int i;
-	if (drate < rate_table[0].rate)
-		return rate_table[0].rate;
+	int delay = 24000000;
+	u32 reg;
 
-	/* Assumming rate_table is in descending order */
-	for (i = 1; i < pll->rate_count; i++) {
-		if (drate <= rate_table[i].rate)
-			return rate_table[i-1].rate;
+	while (delay > 0) {
+		reg = readl(pll->base + p_n->reg_off);
+
+		if (reg & MESON_PLL_LOCK)
+			return 0;
+		delay--;
 	}
-
-	/* return maximum supported value */
-	return rate_table[i-1].rate;
-}
-static long aml_pll_round_rate(struct clk_hw *hw,
-	    unsigned long drate, unsigned long *prate)
-{
-	struct amlogic_pll_clock *aml_pll = to_aml_pll(hw);
-	const struct amlogic_pll_rate_table *rate_table = aml_pll->rate_table;
-	int i;
-	/* Assumming rate_table is in descending order */
-	for (i = 0; i < aml_pll->rate_table_cnt; i++) {
-		if (drate >= rate_table[i].rate)
-			return rate_table[i].rate;
-	}
-	*prate = clk_get_parent(hw->clk)->rate;
-	/* return minimum supported value */
-	return rate_table[i - 1].rate;
+	return -ETIMEDOUT;
 }
 
-/*
- * PLL1500 Clock Type
- */
-static unsigned long amlogic_pll1500_recalc_rate(struct clk_hw *hw,
-		unsigned long parent_rate)
+static int meson_clk_pll_set_rate(struct clk_hw *hw, unsigned long rate,
+				  unsigned long parent_rate)
 {
-	pr_debug("%s %s %d\n", __FILE__, __func__, __LINE__);
-	pr_debug("To Do!!!!\n");
-	return 1;
-}
+	struct meson_clk_pll *pll = to_meson_clk_pll(hw);
+	struct parm *p;
+	const struct pll_rate_table *rate_set;
+	unsigned long old_rate;
+	int ret = 0;
+	u32 reg;
 
-static int amlogic_pll1500_set_rate(struct clk_hw *hw, unsigned long drate,
-		unsigned long prate)
-{
-	pr_debug("%s %s %d\n", __FILE__, __func__, __LINE__);
-	pr_debug("To Do!!!!\n");
-	return 1;
-}
-
-static const struct clk_ops amlogic_pll1500_clk_ops = {
-	.recalc_rate = amlogic_pll1500_recalc_rate,
-	.round_rate = amlogic_pll_round_rate,
-	.set_rate = amlogic_pll1500_set_rate,
-};
-
-static const struct clk_ops amlogic_pll1500_clk_min_ops = {
-	.recalc_rate = amlogic_pll1500_recalc_rate,
-};
-
-
-
-/*
- * PLL2550 Clock Type
- */
-#define PLL2550_OD_SHIFT 0xf
-#define PLL2550_OD_MASK 0x3
-#define PLL2550_M_SHIFT 0x0
-#define PLL2550_M_MASK 0x1ff
-#define PLL2550_N_SHIFT 0x9
-#define PLL2550_N_MASK 0x1f
-
-static unsigned long amlogic_pll2550_recalc_rate(struct clk_hw *hw,
-		unsigned long parent_rate)
-{
-	struct amlogic_clk_pll *pll = to_clk_pll(hw);
-	u32 od, M, N, pll_con;
-	u32 fvco = parent_rate;
-
-	pll_con = readl(pll->con_reg);
-
-	od = (pll_con >> PLL2550_OD_SHIFT) & PLL2550_OD_MASK;
-	M = (pll_con >> PLL2550_M_SHIFT) & PLL2550_M_MASK;
-	N = (pll_con >> PLL2550_N_SHIFT) & PLL2550_N_MASK;
-	/*pr_debug("od: %d  M: %d  N  %d\n", od, M, N);*/
-
-	fvco /= 1000000;
-	fvco = fvco * M / N;
-	fvco = (fvco >> od);
-	fvco *= 1000000;
- /* pr_debug("%s: fvco is %u\n", __func__, fvco);*/
-	return (unsigned long)fvco;
-}
-
-static int amlogic_pll2550_set_rate(struct clk_hw *hw, unsigned long drate,
-		unsigned long prate)
-{
-
-	struct amlogic_clk_pll *pll = to_clk_pll(hw);
-	if (drate == 2000000000) {
-		/*fixed pll = xtal * M(0:8) * OD_FB(4) /N(9:13) /OD(16:17)
-		//M: 0~511  OD_FB:0~1 + 1, N:0~32 + 1 OD:0~3 + 1
-		//recommend this pll is fixed as 2G. */
-		unsigned long xtal = 24000000;
-
-		unsigned cntl = readl(pll->con_reg);
-		unsigned m = cntl&0x1FF;
-		unsigned n = ((cntl>>9)&0x1F);
-		unsigned od = ((cntl >> 16)&3) + 1;
-		unsigned od_fb = ((readl(pll->con_reg + 4*4)>>4)&1) + 1;
-		unsigned long rate;
-		if (prate)
-			xtal = prate;
-		xtal /= 1000000;
-		rate = xtal * m * od_fb;
-		rate /= n;
-		rate /= od;
-		rate *= 1000000;
-		if (drate != rate) {
-			/*aml_set_reg32_mask(pll,(1<<29));*/
-			writel(((readl(pll->con_reg)) | (1<<29)), pll->con_reg);
-			writel(M8_MPLL_CNTL_2, pll->con_reg + 1*4);
-			writel(M8_MPLL_CNTL_3, pll->con_reg + 2*4);
-			writel(M8_MPLL_CNTL_4, pll->con_reg + 3*4);
-			writel(M8_MPLL_CNTL_5, pll->con_reg + 4*4);
-			writel(M8_MPLL_CNTL_6, pll->con_reg + 5*4);
-			writel(M8_MPLL_CNTL_7, pll->con_reg + 6*4);
-			writel(M8_MPLL_CNTL_8, pll->con_reg + 7*4);
-			writel(M8_MPLL_CNTL_9, pll->con_reg + 8*4);
-			writel(M8_MPLL_CNTL, pll->con_reg);
-			/*M8_PLL_WAIT_FOR_LOCK(P_HHI_MPLL_CNTL);*/
-			do {
-				udelay(1000);
-			} while ((readl(pll->con_reg)&0x80000000) == 0);
-		}
-	} else
-		return -1;
-	return 0;
-}
-
-static const struct clk_ops amlogic_pll2550_clk_ops = {
-	.recalc_rate = amlogic_pll2550_recalc_rate,
-	.round_rate = amlogic_pll_round_rate,
-	.set_rate = amlogic_pll2550_set_rate,
-};
-
-static const struct clk_ops amlogic_pll2550_clk_min_ops = {
-	.recalc_rate = amlogic_pll2550_recalc_rate,
-};
-
-
-/*
- * PLL3000 Clock Type
- */
-
-
-static unsigned long aml_pll_recalc_rate(struct clk_hw *hw,
-		unsigned long parent_rate)
-{
-	struct amlogic_pll_clock *aml_pll = to_aml_pll(hw);
-	u32 od, M, N, pll_con;
-	u32 fvco = parent_rate;
-	pll_con = readl(aml_pll->pll_ctrl->con_reg);
-	if (aml_pll->pll_recalc_rate)
-		return aml_pll->pll_recalc_rate(aml_pll, parent_rate);
-	od = (pll_con >> aml_pll->pll_conf->od_shift) &
-			aml_pll->pll_conf->od_mask;
-	M = (pll_con >> aml_pll->pll_conf->m_shift) &
-			aml_pll->pll_conf->m_mask;
-	N = (pll_con >> aml_pll->pll_conf->n_shift) &
-			aml_pll->pll_conf->n_mask;
-	pr_debug("od: %d  M: %d  N  %d\n", od, M, N);
-
-	fvco /= 1000000;
-	fvco = fvco * M / N;
-	fvco = (fvco >> od);
-	fvco *= 1000000;
-	pr_debug("%s: fvco is %u\n", __func__, fvco);
-	return (unsigned long)fvco;
-}
-
-static int aml_pll_set_rate(struct clk_hw *hw, unsigned long drate,
-		unsigned long prate)
-{
-	struct amlogic_pll_clock *aml_pll = to_aml_pll(hw);
-	struct amlogic_pll_rate_table *rate;
-	pr_info("drate=%lu,prate=%ld\n", drate, prate);
-	rate = aml_get_pll_settings(aml_pll, drate);
-	if (!rate) {
-		pr_err("%s: Invalid rate : %lu for pll clk %s\n", __func__,
-			drate, __clk_get_name(hw->clk));
+	if (parent_rate == 0 || rate == 0)
 		return -EINVAL;
+
+	old_rate = rate;
+
+	rate_set = meson_clk_get_pll_settings(pll, rate);
+	if (!rate_set)
+		return -EINVAL;
+
+	p = &pll->n;
+
+	if (!strcmp(clk_hw_get_name(hw), "gp0_pll")) {
+		if ((get_cpu_type() == MESON_CPU_MAJOR_ID_GXBB) ||
+			(get_cpu_type() == MESON_CPU_MAJOR_ID_GXTVBB)) {
+			writel(GXBB_GP0_CNTL2, pll->base + p->reg_off + 1*4);
+			writel(GXBB_GP0_CNTL3, pll->base + p->reg_off + 2*4);
+			writel(GXBB_GP0_CNTL4, pll->base + p->reg_off + 3*4);
+		}
+		if (get_cpu_type() >= MESON_CPU_MAJOR_ID_GXL) {
+			writel(GXL_GP0_CNTL1, pll->base + p->reg_off + 6*4);
+			writel(GXL_GP0_CNTL2, pll->base + p->reg_off + 1*4);
+			writel(GXL_GP0_CNTL3, pll->base + p->reg_off + 2*4);
+			writel(GXL_GP0_CNTL4, pll->base + p->reg_off + 3*4);
+			writel(GXL_GP0_CNTL5, pll->base + p->reg_off + 4*4);
+			reg = readl(pll->base + p->reg_off);
+			writel(((reg | (MESON_PLL_ENABLE)) &
+				(~MESON_PLL_RESET)), pll->base + p->reg_off);
+		}
 	}
 
-	aml_pll->waite_pll_lock(aml_pll, rate);
-	return 1;
+
+	reg = readl(pll->base + p->reg_off);
+
+	reg = PARM_SET(p->width, p->shift, reg, rate_set->n);
+	writel(reg, pll->base + p->reg_off);
+
+	p = &pll->m;
+	reg = readl(pll->base + p->reg_off);
+	reg = PARM_SET(p->width, p->shift, reg, rate_set->m);
+	writel(reg, pll->base + p->reg_off);
+
+	p = &pll->od;
+	reg = readl(pll->base + p->reg_off);
+	reg = PARM_SET(p->width, p->shift, reg, rate_set->od);
+	writel(reg, pll->base + p->reg_off);
+
+	p = &pll->od2;
+	if (p->width) {
+		reg = readl(pll->base + p->reg_off);
+		reg = PARM_SET(p->width, p->shift, reg, rate_set->od2);
+		writel(reg, pll->base + p->reg_off);
+	}
+
+	p = &pll->frac;
+	if (p->width) {
+		reg = readl(pll->base + p->reg_off);
+		reg = PARM_SET(p->width, p->shift, reg, rate_set->frac);
+		writel(reg, pll->base + p->reg_off);
+	}
+
+	p = &pll->n;
+
+	/* PLL reset */
+	reg = readl(pll->base + p->reg_off);
+
+	writel(reg | MESON_PLL_RESET, pll->base + p->reg_off);
+	udelay(10);
+	writel(reg & (~MESON_PLL_RESET), pll->base + p->reg_off);
+
+	ret = meson_clk_pll_wait_lock(pll, p);
+	if (ret) {
+		pr_warn("%s: pll did not lock, trying to restore old rate %lu\n",
+			__func__, old_rate);
+		meson_clk_pll_set_rate(hw, old_rate, parent_rate);
+	}
+
+	return ret;
 }
 
-static const struct clk_ops amlogic_pll3000_clk_ops = {
-	.recalc_rate = aml_pll_recalc_rate,
-	.round_rate = aml_pll_round_rate,
-	.set_rate = aml_pll_set_rate,
+const struct clk_ops meson_clk_pll_ops = {
+	.recalc_rate	= meson_clk_pll_recalc_rate,
+	.round_rate	= meson_clk_pll_round_rate,
+	.set_rate	= meson_clk_pll_set_rate,
 };
 
-static const struct clk_ops amlogic_pll3000_clk_min_ops = {
-	.recalc_rate = aml_pll_recalc_rate,
+const struct clk_ops meson_clk_pll_ro_ops = {
+	.recalc_rate	= meson_clk_pll_recalc_rate,
 };
-
-static void __init _amlogic_clk_register_pll(struct amlogic_pll_clock *pll_clk,
-						void __iomem *base)
-{
-	struct amlogic_clk_pll *pll;
-	struct clk *clk;
-	struct clk_init_data init;
-	int ret, len;
-
-	pll = kzalloc(sizeof(*pll), GFP_KERNEL);
-	if (!pll) {
-		pr_err("%s: could not allocate pll clk %s\n",
-			__func__, pll_clk->name);
-		return;
-	}
-
-	init.name = pll_clk->name;
-	init.flags = pll_clk->flags;
-	init.parent_names = &pll_clk->parent_name;
-	init.num_parents = 1;
-
-	if (pll_clk->rate_table) {
-		/* find count of rates in rate_table */
-		for (len = 0; pll_clk->rate_table[len].rate != 0; )
-			len++;
-
-		pll->rate_count = len;
-		pll->rate_table = kmemdup(pll_clk->rate_table,
-					pll->rate_count *
-					sizeof(struct amlogic_pll_rate_table),
-					GFP_KERNEL);
-		WARN(!pll->rate_table,
-			"%s: could not allocate rate table for %s\n",
-			__func__, pll_clk->name);
-		if (!pll->rate_table)
-			pr_debug("%s: could not allocate rate table for %s\n",
-			__func__, pll_clk->name);
-	}
-
-	switch (pll_clk->type) {
-	case pll_1500:
-		if (!pll->rate_table)
-			init.ops = &amlogic_pll1500_clk_min_ops;
-		else
-			init.ops = &amlogic_pll1500_clk_ops;
-		break;
-
-	case pll_2550:
-		if (!pll->rate_table)
-			init.ops = &amlogic_pll2550_clk_min_ops;
-		else
-			init.ops = &amlogic_pll2550_clk_ops;
-		break;
-
-	case pll_3000_lvds:
-			pll_clk->hw.init = &init;
-			pll_clk->pll_ctrl->con_reg =
-				base+pll_clk->pll_ctrl->con_reg_offset;
-			pll_clk->pll_ctrl->lock_reg =
-				base+pll_clk->pll_ctrl->lock_reg_offset;
-		if (!pll->rate_table)
-			init.ops = &amlogic_pll3000_clk_min_ops;
-		else
-			init.ops = &amlogic_pll3000_clk_ops;
-		break;
-
-	default:
-		pr_warn("%s: Unknown pll type for pll clk %s\n",
-			__func__, pll_clk->name);
-	}
-
-	pll->hw.init = &init;
-	pll->type = pll_clk->type;
-	pll->con_reg = base + pll_clk->con_offset;
-
-	if (pll_clk->type == pll_3000_lvds)
-		clk = clk_register(NULL, &pll_clk->hw);
-	else
-		clk = clk_register(NULL, &pll->hw);
-	if (IS_ERR(clk)) {
-		pr_err("%s: failed to register pll clock %s : %ld\n",
-			__func__, pll_clk->name, PTR_ERR(clk));
-		kfree(pll);
-		return;
-	}
-
-	amlogic_clk_add_lookup(clk, pll_clk->id);
-
-	if (!pll_clk->alias)
-		return;
-
-	ret = clk_register_clkdev(clk, pll_clk->alias, pll_clk->dev_name);
-	if (ret)
-		pr_err("%s: failed to register lookup for %s : %d",
-			__func__, pll_clk->name, ret);
-}
-
-void __init amlogic_clk_register_pll(struct amlogic_pll_clock *pll_list,
-				unsigned int nr_pll, void __iomem *base)
-{
-	int cnt;
-
-	for (cnt = 0; cnt < nr_pll; cnt++)
-		_amlogic_clk_register_pll(&pll_list[cnt], base);
-}

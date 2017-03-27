@@ -79,18 +79,20 @@ int davinci_gpio_register(struct resource *res, int size, void *pdata);
 #define DM646X_ASYNC_EMIF_CONTROL_BASE	0x20008000
 #define DM646X_ASYNC_EMIF_CS2_SPACE_BASE 0x42000000
 
+int davinci_init_wdt(void);
+
 /* DM355 function declarations */
 void dm355_init(void);
 void dm355_init_spi0(unsigned chipselect_mask,
 		const struct spi_board_info *info, unsigned len);
-void dm355_init_asp1(u32 evt_enable, struct snd_platform_data *pdata);
+void dm355_init_asp1(u32 evt_enable);
 int dm355_init_video(struct vpfe_config *, struct vpbe_config *);
 int dm355_gpio_register(void);
 
 /* DM365 function declarations */
 void dm365_init(void);
-void dm365_init_asp(struct snd_platform_data *pdata);
-void dm365_init_vc(struct snd_platform_data *pdata);
+void dm365_init_asp(void);
+void dm365_init_vc(void);
 void dm365_init_ks(struct davinci_ks_platform_data *pdata);
 void dm365_init_rtc(void);
 void dm365_init_spi0(unsigned chipselect_mask,
@@ -100,7 +102,7 @@ int dm365_gpio_register(void);
 
 /* DM644x function declarations */
 void dm644x_init(void);
-void dm644x_init_asp(struct snd_platform_data *pdata);
+void dm644x_init_asp(void);
 int dm644x_init_video(struct vpfe_config *, struct vpbe_config *);
 int dm644x_gpio_register(void);
 

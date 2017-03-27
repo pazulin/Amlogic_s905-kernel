@@ -24,7 +24,6 @@
 #ifndef __REALTEK_RTSX_CARD_H
 #define __REALTEK_RTSX_CARD_H
 
-#include "debug.h"
 #include "rtsx.h"
 #include "rtsx_chip.h"
 #include "rtsx_transport.h"
@@ -1025,8 +1024,6 @@ int detect_card_cd(struct rtsx_chip *chip, int card);
 int check_card_exist(struct rtsx_chip *chip, unsigned int lun);
 int check_card_ready(struct rtsx_chip *chip, unsigned int lun);
 int check_card_wp(struct rtsx_chip *chip, unsigned int lun);
-int check_card_fail(struct rtsx_chip *chip, unsigned int lun);
-int check_card_ejected(struct rtsx_chip *chip, unsigned int lun);
 void eject_card(struct rtsx_chip *chip, unsigned int lun);
 u8 get_lun_card(struct rtsx_chip *chip, unsigned int lun);
 
@@ -1038,8 +1035,8 @@ static inline u32 get_card_size(struct rtsx_chip *chip, unsigned int lun)
 	if ((get_lun_card(chip, lun) == SD_CARD) &&
 		(sd_card->sd_lock_status & SD_LOCKED))
 		return 0;
-	else
-		return chip->capacity[lun];
+
+	return chip->capacity[lun];
 #else
 	return chip->capacity[lun];
 #endif
@@ -1062,7 +1059,13 @@ int card_power_off(struct rtsx_chip *chip, u8 card);
 
 static inline int card_power_off_all(struct rtsx_chip *chip)
 {
-	RTSX_WRITE_REG(chip, CARD_PWR_CTL, 0x0F, 0x0F);
+	int retval;
+
+	retval = rtsx_write_register(chip, CARD_PWR_CTL, 0x0F, 0x0F);
+	if (retval) {
+		rtsx_trace(chip);
+		return retval;
+	}
 
 	return STATUS_SUCCESS;
 }

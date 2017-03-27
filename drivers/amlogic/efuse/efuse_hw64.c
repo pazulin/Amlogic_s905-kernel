@@ -1,7 +1,7 @@
 /*
  * drivers/amlogic/efuse/efuse_hw64.c
  *
- * Copyright (C) 2015 Amlogic, Inc. All rights reserved.
+ * Copyright (C) 2017 Amlogic, Inc. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,8 +13,7 @@
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
-*/
-
+ */
 
 #include <linux/cdev.h>
 #include <linux/types.h>
@@ -29,30 +28,29 @@
 #ifndef CONFIG_ARM64
 #include <asm/opcodes-sec.h>
 #endif
-#include "efuse_regs.h"
 #include "efuse.h"
 #ifdef CONFIG_ARM64
-#include <linux/amlogic/efuse-amlogic.h>
+#include <linux/amlogic/efuse.h>
 #endif
 #include <linux/amlogic/secmon.h>
 
 static long meson_efuse_fn_smc(struct efuse_hal_api_arg *arg)
 {
 	long ret;
-	unsigned cmd, offset, size;
+	unsigned int cmd, offset, size;
 	unsigned long *retcnt = (unsigned long *)(arg->retcnt);
 
-	register unsigned x0 asm("x0");
-	register unsigned x1 asm("x1");
-	register unsigned x2 asm("x2");
+	register unsigned int x0 asm("x0");
+	register unsigned int x1 asm("x1");
+	register unsigned int x2 asm("x2");
 
 	if (!sharemem_input_base || !sharemem_output_base)
 		return -1;
 
 	if (arg->cmd == EFUSE_HAL_API_READ)
-			cmd = efuse_read_cmd;
+		cmd = efuse_read_cmd;
 	else
-			cmd = efuse_write_cmd;
+		cmd = efuse_write_cmd;
 	offset = arg->offset;
 	size = arg->size;
 	sharemem_mutex_lock();
@@ -90,6 +88,7 @@ static long meson_efuse_fn_smc(struct efuse_hal_api_arg *arg)
 int meson_trustzone_efuse(struct efuse_hal_api_arg *arg)
 {
 	int ret;
+
 	if (!arg)
 		return -1;
 
@@ -102,7 +101,8 @@ int meson_trustzone_efuse(struct efuse_hal_api_arg *arg)
 ssize_t meson_trustzone_efuse_get_max(struct efuse_hal_api_arg *arg)
 {
 	ssize_t ret;
-	unsigned cmd;
+	unsigned int cmd;
+
 	register uint64_t x0 asm("x0");
 
 	if (arg->cmd == EFUSE_HAL_API_USER_MAX) {
@@ -135,6 +135,7 @@ ssize_t efuse_get_max(void)
 {
 	struct efuse_hal_api_arg arg;
 	int ret;
+
 	arg.cmd = EFUSE_HAL_API_USER_MAX;
 
 	set_cpus_allowed_ptr(current, cpumask_of(0));
@@ -150,11 +151,12 @@ ssize_t efuse_get_max(void)
 
 ssize_t _efuse_read(char *buf, size_t count, loff_t *ppos)
 {
-	unsigned pos = *ppos;
+	unsigned int pos = *ppos;
 
 	struct efuse_hal_api_arg arg;
 	unsigned int retcnt;
 	int ret;
+
 	arg.cmd = EFUSE_HAL_API_READ;
 	arg.offset = pos;
 	arg.size = count;
@@ -164,19 +166,20 @@ ssize_t _efuse_read(char *buf, size_t count, loff_t *ppos)
 	if (ret == 0) {
 		*ppos += retcnt;
 		return retcnt;
-	} else {
-	  pr_err("%s:%s:%d: read error!!!\n", __FILE__, __func__, __LINE__);
-		return ret;
 	}
+	pr_err("%s:%s:%d: read error!!!\n",
+			   __FILE__, __func__, __LINE__);
+	return ret;
 }
 
 ssize_t _efuse_write(const char *buf, size_t count, loff_t *ppos)
 {
-	unsigned pos = *ppos;
+	unsigned int pos = *ppos;
 
 	struct efuse_hal_api_arg arg;
 	unsigned int retcnt;
 	int ret;
+
 	arg.cmd = EFUSE_HAL_API_WRITE;
 	arg.offset = pos;
 	arg.size = count;
@@ -187,10 +190,10 @@ ssize_t _efuse_write(const char *buf, size_t count, loff_t *ppos)
 	if (ret == 0) {
 		*ppos = retcnt;
 		return retcnt;
-	} else {
-	  pr_err("%s:%s:%d: write error!!!\n", __FILE__, __func__, __LINE__);
-		return ret;
 	}
+	pr_err("%s:%s:%d: write error!!!\n",
+			   __FILE__, __func__, __LINE__);
+	return ret;
 }
 
 ssize_t efuse_read_usr(char *buf, size_t count, loff_t *ppos)

@@ -1058,7 +1058,7 @@ static void dwc_otg_pcd_reinit(dwc_otg_pcd_t *pcd)
 			 * of HWCFG1.  Need a copy of HWCFG1 in pcd structure?
 			 * sprintf(";r
 			 */
-			dwc_otg_pcd_init_ep(pcd, ep, 1 /* IN */ , i);
+			dwc_otg_pcd_init_ep(pcd, ep, 1 /* IN */, i);
 
 			DWC_CIRCLEQ_INIT(&ep->queue);
 		}
@@ -1076,7 +1076,7 @@ static void dwc_otg_pcd_reinit(dwc_otg_pcd_t *pcd)
 			 * of HWCFG1.  Need a copy of HWCFG1 in pcd structure?
 			 * sprintf(";r
 			 */
-			dwc_otg_pcd_init_ep(pcd, ep, 0 /* OUT */ , i);
+			dwc_otg_pcd_init_ep(pcd, ep, 0 /* OUT */, i);
 			DWC_CIRCLEQ_INIT(&ep->queue);
 		}
 		hwcfg1 >>= 2;

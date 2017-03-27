@@ -4,7 +4,7 @@
  * Copyright (C) 2001, 2002, 2003, 2004 David S. Miller (davem@redhat.com)
  * Copyright (C) 2001 Jeff Garzik (jgarzik@pobox.com)
  * Copyright (C) 2004 Sun Microsystems Inc.
- * Copyright (C) 2007-2013 Broadcom Corporation.
+ * Copyright (C) 2007-2014 Broadcom Corporation.
  */
 
 #ifndef _T3_H
@@ -3254,7 +3254,6 @@ struct tg3 {
 	int				pcie_readrq;
 
 	struct mii_bus			*mdio_bus;
-	int				mdio_irq[PHY_MAX_ADDR];
 	int				old_link;
 
 	u8				phy_addr;
@@ -3407,6 +3406,7 @@ struct tg3 {
 
 	struct device			*hwmon_dev;
 	bool				link_up;
+	bool				pcierr_recovery;
 };
 
 /* Accessor macros for chip and asic attributes

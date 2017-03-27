@@ -83,6 +83,7 @@ enum da9052_chip_id {
 	DA9053_AA,
 	DA9053_BA,
 	DA9053_BB,
+	DA9053_BC,
 };
 
 struct da9052_pdata;
@@ -170,7 +171,7 @@ static inline int da9052_group_read(struct da9052 *da9052, unsigned char reg,
 static inline int da9052_group_write(struct da9052 *da9052, unsigned char reg,
 				      unsigned reg_cnt, unsigned char *val)
 {
-	int ret;
+	int ret = 0;
 	int i;
 
 	for (i = 0; i < reg_cnt; i++) {
@@ -210,7 +211,7 @@ static inline int da9052_reg_update(struct da9052 *da9052, unsigned char reg,
 int da9052_device_init(struct da9052 *da9052, u8 chip_id);
 void da9052_device_exit(struct da9052 *da9052);
 
-extern struct regmap_config da9052_regmap_config;
+extern const struct regmap_config da9052_regmap_config;
 
 int da9052_irq_init(struct da9052 *da9052);
 int da9052_irq_exit(struct da9052 *da9052);

@@ -25,13 +25,13 @@
 #include "ion.h"
 #include "ion_priv.h"
 
-struct ion_device *idev;
-struct ion_heap **heaps;
+static struct ion_device *idev;
+static struct ion_heap **heaps;
 
-void *carveout_ptr;
-void *chunk_ptr;
+static void *carveout_ptr;
+static void *chunk_ptr;
 
-struct ion_platform_heap dummy_heaps[] = {
+static struct ion_platform_heap dummy_heaps[] = {
 		{
 			.id	= ION_HEAP_TYPE_SYSTEM,
 			.type	= ION_HEAP_TYPE_SYSTEM,
@@ -58,7 +58,7 @@ struct ion_platform_heap dummy_heaps[] = {
 		},
 };
 
-struct ion_platform_data dummy_ion_pdata = {
+static struct ion_platform_data dummy_ion_pdata = {
 	.nr = ARRAY_SIZE(dummy_heaps),
 	.heaps = dummy_heaps,
 };
@@ -68,7 +68,9 @@ static int __init ion_dummy_init(void)
 	int i, err;
 
 	idev = ion_device_create(NULL);
-	heaps = kzalloc(sizeof(struct ion_heap *) * dummy_ion_pdata.nr,
+	if (IS_ERR(idev))
+		return PTR_ERR(idev);
+	heaps = kcalloc(dummy_ion_pdata.nr, sizeof(struct ion_heap *),
 			GFP_KERNEL);
 	if (!heaps)
 		return -ENOMEM;
@@ -97,7 +99,7 @@ static int __init ion_dummy_init(void)
 		struct ion_platform_heap *heap_data = &dummy_ion_pdata.heaps[i];
 
 		if (heap_data->type == ION_HEAP_TYPE_CARVEOUT &&
-							!heap_data->base)
+		    !heap_data->base)
 			continue;
 
 		if (heap_data->type == ION_HEAP_TYPE_CHUNK && !heap_data->base)
@@ -112,20 +114,18 @@ static int __init ion_dummy_init(void)
 	}
 	return 0;
 err:
-	for (i = 0; i < dummy_ion_pdata.nr; i++) {
-		if (heaps[i])
-			ion_heap_destroy(heaps[i]);
-	}
+	for (i = 0; i < dummy_ion_pdata.nr; ++i)
+		ion_heap_destroy(heaps[i]);
 	kfree(heaps);
 
 	if (carveout_ptr) {
 		free_pages_exact(carveout_ptr,
-				dummy_heaps[ION_HEAP_TYPE_CARVEOUT].size);
+				 dummy_heaps[ION_HEAP_TYPE_CARVEOUT].size);
 		carveout_ptr = NULL;
 	}
 	if (chunk_ptr) {
 		free_pages_exact(chunk_ptr,
-				dummy_heaps[ION_HEAP_TYPE_CHUNK].size);
+				 dummy_heaps[ION_HEAP_TYPE_CHUNK].size);
 		chunk_ptr = NULL;
 	}
 	return err;
@@ -144,15 +144,13 @@ static void __exit ion_dummy_exit(void)
 
 	if (carveout_ptr) {
 		free_pages_exact(carveout_ptr,
-				dummy_heaps[ION_HEAP_TYPE_CARVEOUT].size);
+				 dummy_heaps[ION_HEAP_TYPE_CARVEOUT].size);
 		carveout_ptr = NULL;
 	}
 	if (chunk_ptr) {
 		free_pages_exact(chunk_ptr,
-				dummy_heaps[ION_HEAP_TYPE_CHUNK].size);
+				 dummy_heaps[ION_HEAP_TYPE_CHUNK].size);
 		chunk_ptr = NULL;
 	}
-
-	return;
 }
 __exitcall(ion_dummy_exit);

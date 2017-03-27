@@ -70,7 +70,7 @@ static const struct file_operations sis_driver_fops = {
 	.open = drm_open,
 	.release = drm_release,
 	.unlocked_ioctl = drm_ioctl,
-	.mmap = drm_mmap,
+	.mmap = drm_legacy_mmap,
 	.poll = drm_poll,
 #ifdef CONFIG_COMPAT
 	.compat_ioctl = drm_compat_ioctl,
@@ -102,12 +102,13 @@ static void sis_driver_postclose(struct drm_device *dev, struct drm_file *file)
 }
 
 static struct drm_driver driver = {
-	.driver_features = DRIVER_USE_AGP,
+	.driver_features = DRIVER_USE_AGP | DRIVER_LEGACY,
 	.load = sis_driver_load,
 	.unload = sis_driver_unload,
 	.open = sis_driver_open,
 	.preclose = sis_reclaim_buffers_locked,
 	.postclose = sis_driver_postclose,
+	.set_busid = drm_pci_set_busid,
 	.dma_quiescent = sis_idle,
 	.lastclose = sis_lastclose,
 	.ioctls = sis_ioctls,

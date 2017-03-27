@@ -27,7 +27,6 @@
 #include <asm/insn.h>
 
 #define  __ARCH_WANT_KPROBES_INSN_SLOT
-#define  ARCH_SUPPORTS_KPROBES_ON_FTRACE
 
 struct pt_regs;
 struct kprobe;
@@ -39,12 +38,11 @@ typedef u8 kprobe_opcode_t;
 #define RELATIVECALL_OPCODE 0xe8
 #define RELATIVE_ADDR_SIZE 4
 #define MAX_STACK_SIZE 64
-#define MIN_STACK_SIZE(ADDR)					       \
-	(((MAX_STACK_SIZE) < (((unsigned long)current_thread_info()) + \
-			      THREAD_SIZE - (unsigned long)(ADDR)))    \
-	 ? (MAX_STACK_SIZE)					       \
-	 : (((unsigned long)current_thread_info()) +		       \
-	    THREAD_SIZE - (unsigned long)(ADDR)))
+#define CUR_STACK_SIZE(ADDR) \
+	(current_top_of_stack() - (unsigned long)(ADDR))
+#define MIN_STACK_SIZE(ADDR)				\
+	(MAX_STACK_SIZE < CUR_STACK_SIZE(ADDR) ?	\
+	 MAX_STACK_SIZE : CUR_STACK_SIZE(ADDR))
 
 #define flush_insn_slot(p)	do { } while (0)
 
@@ -116,4 +114,6 @@ struct kprobe_ctlblk {
 extern int kprobe_fault_handler(struct pt_regs *regs, int trapnr);
 extern int kprobe_exceptions_notify(struct notifier_block *self,
 				    unsigned long val, void *data);
+extern int kprobe_int3_handler(struct pt_regs *regs);
+extern int kprobe_debug_handler(struct pt_regs *regs);
 #endif /* _ASM_X86_KPROBES_H */

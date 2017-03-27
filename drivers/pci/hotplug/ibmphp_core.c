@@ -36,13 +36,14 @@
 #include <linux/wait.h>
 #include "../pci.h"
 #include <asm/pci_x86.h>		/* for struct irq_routing_table */
+#include <asm/io_apic.h>
 #include "ibmphp.h"
 
-#define attn_on(sl)  ibmphp_hpc_writeslot (sl, HPC_SLOT_ATTNON)
-#define attn_off(sl) ibmphp_hpc_writeslot (sl, HPC_SLOT_ATTNOFF)
-#define attn_LED_blink(sl) ibmphp_hpc_writeslot (sl, HPC_SLOT_BLINKLED)
-#define get_ctrl_revision(sl, rev) ibmphp_hpc_readslot (sl, READ_REVLEVEL, rev)
-#define get_hpc_options(sl, opt) ibmphp_hpc_readslot (sl, READ_HPCOPTIONS, opt)
+#define attn_on(sl)  ibmphp_hpc_writeslot(sl, HPC_SLOT_ATTNON)
+#define attn_off(sl) ibmphp_hpc_writeslot(sl, HPC_SLOT_ATTNOFF)
+#define attn_LED_blink(sl) ibmphp_hpc_writeslot(sl, HPC_SLOT_BLINKLED)
+#define get_ctrl_revision(sl, rev) ibmphp_hpc_readslot(sl, READ_REVLEVEL, rev)
+#define get_hpc_options(sl, opt) ibmphp_hpc_readslot(sl, READ_HPCOPTIONS, opt)
 
 #define DRIVER_VERSION	"0.6"
 #define DRIVER_DESC	"IBM Hot Plug PCI Controller Driver"
@@ -51,9 +52,9 @@ int ibmphp_debug;
 
 static bool debug;
 module_param(debug, bool, S_IRUGO | S_IWUSR);
-MODULE_PARM_DESC (debug, "Debugging mode enabled or not");
-MODULE_LICENSE ("GPL");
-MODULE_DESCRIPTION (DRIVER_DESC);
+MODULE_PARM_DESC(debug, "Debugging mode enabled or not");
+MODULE_LICENSE("GPL");
+MODULE_DESCRIPTION(DRIVER_DESC);
 
 struct pci_bus *ibmphp_pci_bus;
 static int max_slots;
@@ -74,7 +75,7 @@ static inline int get_max_adapter_speed (struct hotplug_slot *hs, u8 *value)
 static inline int get_cur_bus_info(struct slot **sl)
 {
 	int rc = 1;
-	struct slot * slot_cur = *sl;
+	struct slot *slot_cur = *sl;
 
 	debug("options = %x\n", slot_cur->ctrl->options);
 	debug("revision = %x\n", slot_cur->ctrl->revision);
@@ -112,14 +113,12 @@ static inline int slot_update(struct slot **sl)
 	return rc;
 }
 
-static int __init get_max_slots (void)
+static int __init get_max_slots(void)
 {
-	struct slot * slot_cur;
-	struct list_head * tmp;
+	struct slot *slot_cur;
 	u8 slot_count = 0;
 
-	list_for_each(tmp, &ibmphp_slot_head) {
-		slot_cur = list_entry(tmp, struct slot, ibm_slot_list);
+	list_for_each_entry(slot_cur, &ibmphp_slot_head, ibm_slot_list) {
 		/* sometimes the hot-pluggable slots start with 4 (not always from 1) */
 		slot_count = max(slot_count, slot_cur->number);
 	}
@@ -155,13 +154,10 @@ int ibmphp_init_devno(struct slot **cur_slot)
 	for (loop = 0; loop < len; loop++) {
 		if ((*cur_slot)->number == rtable->slots[loop].slot &&
 		    (*cur_slot)->bus == rtable->slots[loop].bus) {
-			struct io_apic_irq_attr irq_attr;
-
 			(*cur_slot)->device = PCI_SLOT(rtable->slots[loop].devfn);
 			for (i = 0; i < 4; i++)
 				(*cur_slot)->irq[i] = IO_APIC_get_PCI_irq_vector((int) (*cur_slot)->bus,
-						(int) (*cur_slot)->device, i,
-						&irq_attr);
+						(int) (*cur_slot)->device, i);
 
 			debug("(*cur_slot)->irq[0] = %x\n",
 					(*cur_slot)->irq[0]);
@@ -280,7 +276,7 @@ static int set_attention_status(struct hotplug_slot *hotplug_slot, u8 value)
 	return rc;
 }
 
-static int get_attention_status(struct hotplug_slot *hotplug_slot, u8 * value)
+static int get_attention_status(struct hotplug_slot *hotplug_slot, u8 *value)
 {
 	int rc = -ENODEV;
 	struct slot *pslot;
@@ -311,7 +307,7 @@ static int get_attention_status(struct hotplug_slot *hotplug_slot, u8 * value)
 	return rc;
 }
 
-static int get_latch_status(struct hotplug_slot *hotplug_slot, u8 * value)
+static int get_latch_status(struct hotplug_slot *hotplug_slot, u8 *value)
 {
 	int rc = -ENODEV;
 	struct slot *pslot;
@@ -338,7 +334,7 @@ static int get_latch_status(struct hotplug_slot *hotplug_slot, u8 * value)
 }
 
 
-static int get_power_status(struct hotplug_slot *hotplug_slot, u8 * value)
+static int get_power_status(struct hotplug_slot *hotplug_slot, u8 *value)
 {
 	int rc = -ENODEV;
 	struct slot *pslot;
@@ -364,7 +360,7 @@ static int get_power_status(struct hotplug_slot *hotplug_slot, u8 * value)
 	return rc;
 }
 
-static int get_adapter_present(struct hotplug_slot *hotplug_slot, u8 * value)
+static int get_adapter_present(struct hotplug_slot *hotplug_slot, u8 *value)
 {
 	int rc = -ENODEV;
 	struct slot *pslot;
@@ -433,7 +429,7 @@ static int get_max_bus_speed(struct slot *slot)
 }
 
 /*
-static int get_max_adapter_speed_1(struct hotplug_slot *hotplug_slot, u8 * value, u8 flag)
+static int get_max_adapter_speed_1(struct hotplug_slot *hotplug_slot, u8 *value, u8 flag)
 {
 	int rc = -ENODEV;
 	struct slot *pslot;
@@ -461,7 +457,7 @@ static int get_max_adapter_speed_1(struct hotplug_slot *hotplug_slot, u8 * value
 					*value = SLOT_SPEED(myslot.ext_status);
 			} else
 				*value = MAX_ADAPTER_NONE;
-                }
+		}
 	}
 
 	if (flag)
@@ -471,7 +467,7 @@ static int get_max_adapter_speed_1(struct hotplug_slot *hotplug_slot, u8 * value
 	return rc;
 }
 
-static int get_bus_name(struct hotplug_slot *hotplug_slot, char * value)
+static int get_bus_name(struct hotplug_slot *hotplug_slot, char *value)
 {
 	int rc = -ENODEV;
 	struct slot *pslot = NULL;
@@ -503,16 +499,10 @@ static int get_bus_name(struct hotplug_slot *hotplug_slot, char * value)
 static int __init init_ops(void)
 {
 	struct slot *slot_cur;
-	struct list_head *tmp;
 	int retval;
 	int rc;
 
-	list_for_each(tmp, &ibmphp_slot_head) {
-		slot_cur = list_entry(tmp, struct slot, ibm_slot_list);
-
-		if (!slot_cur)
-			return -ENODEV;
-
+	list_for_each_entry(slot_cur, &ibmphp_slot_head, ibm_slot_list) {
 		debug("BEFORE GETTING SLOT STATUS, slot # %x\n",
 							slot_cur->number);
 		if (slot_cur->ctrl->revision == 0xFF)
@@ -622,11 +612,11 @@ int ibmphp_update_slot_info(struct slot *slot_cur)
 	info->attention_status = SLOT_ATTN(slot_cur->status,
 						slot_cur->ext_status);
 	info->latch_status = SLOT_LATCH(slot_cur->status);
-        if (!SLOT_PRESENT(slot_cur->status)) {
-                info->adapter_status = 0;
+	if (!SLOT_PRESENT(slot_cur->status)) {
+		info->adapter_status = 0;
 /*		info->max_adapter_speed_status = MAX_ADAPTER_NONE; */
 	} else {
-                info->adapter_status = 1;
+		info->adapter_status = 1;
 /*		get_max_adapter_speed_1(slot_cur->hotplug_slot,
 					&info->max_adapter_speed_status, 0); */
 	}
@@ -671,9 +661,7 @@ static struct pci_func *ibm_slot_find(u8 busno, u8 device, u8 function)
 {
 	struct pci_func *func_cur;
 	struct slot *slot_cur;
-	struct list_head * tmp;
-	list_for_each(tmp, &ibmphp_slot_head) {
-		slot_cur = list_entry(tmp, struct slot, ibm_slot_list);
+	list_for_each_entry(slot_cur, &ibmphp_slot_head, ibm_slot_list) {
 		if (slot_cur->func) {
 			func_cur = slot_cur->func;
 			while (func_cur) {
@@ -695,14 +683,12 @@ static struct pci_func *ibm_slot_find(u8 busno, u8 device, u8 function)
  *************************************************************/
 static void free_slots(void)
 {
-	struct slot *slot_cur;
-	struct list_head * tmp;
-	struct list_head * next;
+	struct slot *slot_cur, *next;
 
 	debug("%s -- enter\n", __func__);
 
-	list_for_each_safe(tmp, next, &ibmphp_slot_head) {
-		slot_cur = list_entry(tmp, struct slot, ibm_slot_list);
+	list_for_each_entry_safe(slot_cur, next, &ibmphp_slot_head,
+				 ibm_slot_list) {
 		pci_hp_deregister(slot_cur->hotplug_slot);
 	}
 	debug("%s -- exit\n", __func__);
@@ -740,7 +726,7 @@ static void ibm_unconfigure_device(struct pci_func *func)
  */
 static u8 bus_structure_fixup(u8 busno)
 {
-	struct pci_bus *bus;
+	struct pci_bus *bus, *b;
 	struct pci_dev *dev;
 	u16 l;
 
@@ -767,7 +753,11 @@ static u8 bus_structure_fixup(u8 busno)
 					(l != 0x0000) && (l != 0xffff)) {
 			debug("%s - Inside bus_structure_fixup()\n",
 							__func__);
-			pci_scan_bus(busno, ibmphp_pci_bus->ops, NULL);
+			b = pci_scan_bus(busno, ibmphp_pci_bus->ops, NULL);
+			if (!b)
+				continue;
+
+			pci_bus_add_devices(b);
 			break;
 		}
 	}
@@ -825,10 +815,10 @@ static int ibm_configure_device(struct pci_func *func)
 /*******************************************************
  * Returns whether the bus is empty or not
  *******************************************************/
-static int is_bus_empty(struct slot * slot_cur)
+static int is_bus_empty(struct slot *slot_cur)
 {
 	int rc;
-	struct slot * tmp_slot;
+	struct slot *tmp_slot;
 	u8 i = slot_cur->bus_on->slot_min;
 
 	while (i <= slot_cur->bus_on->slot_max) {
@@ -856,7 +846,7 @@ static int is_bus_empty(struct slot * slot_cur)
  * Parameters: slot
  * Returns: bus is set (0) or error code
  ***********************************************************/
-static int set_bus(struct slot * slot_cur)
+static int set_bus(struct slot *slot_cur)
 {
 	int rc;
 	u8 speed;
@@ -864,7 +854,7 @@ static int set_bus(struct slot * slot_cur)
 	int retval;
 	static struct pci_device_id ciobx[] = {
 		{ PCI_DEVICE(PCI_VENDOR_ID_SERVERWORKS, 0x0101) },
-	        { },
+		{ },
 	};
 
 	debug("%s - entry slot # %d\n", __func__, slot_cur->number);
@@ -956,7 +946,7 @@ static int set_bus(struct slot * slot_cur)
 static int check_limitations(struct slot *slot_cur)
 {
 	u8 i;
-	struct slot * tmp_slot;
+	struct slot *tmp_slot;
 	u8 count = 0;
 	u8 limitation = 0;
 
@@ -1023,7 +1013,8 @@ static int enable_slot(struct hotplug_slot *hs)
 	debug("ENABLING SLOT........\n");
 	slot_cur = hs->private;
 
-	if ((rc = validate(slot_cur, ENABLE))) {
+	rc = validate(slot_cur, ENABLE);
+	if (rc) {
 		err("validate function failed\n");
 		goto error_nopower;
 	}
@@ -1045,8 +1036,7 @@ static int enable_slot(struct hotplug_slot *hs)
 	rc = check_limitations(slot_cur);
 	if (rc) {
 		err("Adding this card exceeds the limitations of this bus.\n");
-		err("(i.e., >1 133MHz cards running on same bus, or "
-		     ">2 66 PCI cards running on same bus.\n");
+		err("(i.e., >1 133MHz cards running on same bus, or >2 66 PCI cards running on same bus.\n");
 		err("Try hot-adding into another bus\n");
 		rc = -EINVAL;
 		goto error_nopower;
@@ -1070,12 +1060,10 @@ static int enable_slot(struct hotplug_slot *hs)
 					!(SLOT_PWRGD(slot_cur->status)))
 			err("power fault occurred trying to power up\n");
 		else if (SLOT_BUS_SPEED(slot_cur->status)) {
-			err("bus speed mismatch occurred.  please check "
-				"current bus speed and card capability\n");
+			err("bus speed mismatch occurred.  please check current bus speed and card capability\n");
 			print_card_capability(slot_cur);
 		} else if (SLOT_BUS_MODE(slot_cur->ext_status)) {
-			err("bus mode mismatch occurred.  please check "
-				"current bus mode and card capability\n");
+			err("bus mode mismatch occurred.  please check current bus mode and card capability\n");
 			print_card_capability(slot_cur);
 		}
 		ibmphp_update_slot_info(slot_cur);
@@ -1098,8 +1086,7 @@ static int enable_slot(struct hotplug_slot *hs)
 		goto error_power;
 	}
 	if (SLOT_POWER(slot_cur->status) && (SLOT_BUS_SPEED(slot_cur->status))) {
-		err("bus speed mismatch occurred.  please check current bus "
-					"speed and card capability\n");
+		err("bus speed mismatch occurred.  please check current bus speed and card capability\n");
 		print_card_capability(slot_cur);
 		goto error_power;
 	}
@@ -1183,7 +1170,7 @@ error_power:
 * HOT REMOVING ADAPTER CARD                                   *
 * INPUT: POINTER TO THE HOTPLUG SLOT STRUCTURE                *
 * OUTPUT: SUCCESS 0 ; FAILURE: UNCONFIGURE , VALIDATE         *
-          DISABLE POWER ,                                    *
+*		DISABLE POWER ,                               *
 **************************************************************/
 static int ibmphp_disable_slot(struct hotplug_slot *hotplug_slot)
 {
@@ -1203,9 +1190,8 @@ int ibmphp_do_disable_slot(struct slot *slot_cur)
 
 	debug("DISABLING SLOT...\n");
 
-	if ((slot_cur == NULL) || (slot_cur->ctrl == NULL)) {
+	if ((slot_cur == NULL) || (slot_cur->ctrl == NULL))
 		return -ENODEV;
-	}
 
 	flag = slot_cur->flag;
 	slot_cur->flag = 1;
@@ -1340,17 +1326,20 @@ static int __init ibmphp_init(void)
 	for (i = 0; i < 16; i++)
 		irqs[i] = 0;
 
-	if ((rc = ibmphp_access_ebda()))
+	rc = ibmphp_access_ebda();
+	if (rc)
 		goto error;
 	debug("after ibmphp_access_ebda()\n");
 
-	if ((rc = ibmphp_rsrc_init()))
+	rc = ibmphp_rsrc_init();
+	if (rc)
 		goto error;
 	debug("AFTER Resource & EBDA INITIALIZATIONS\n");
 
 	max_slots = get_max_slots();
 
-	if ((rc = ibmphp_register_pci()))
+	rc = ibmphp_register_pci();
+	if (rc)
 		goto error;
 
 	if (init_ops()) {
@@ -1359,9 +1348,9 @@ static int __init ibmphp_init(void)
 	}
 
 	ibmphp_print_test();
-	if ((rc = ibmphp_hpc_start_poll_thread())) {
+	rc = ibmphp_hpc_start_poll_thread();
+	if (rc)
 		goto error;
-	}
 
 exit:
 	return rc;

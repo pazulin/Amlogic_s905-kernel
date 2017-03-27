@@ -1,7 +1,7 @@
 /*
  * drivers/amlogic/secmon/secmon.c
  *
- * Copyright (C) 2015 Amlogic, Inc. All rights reserved.
+ * Copyright (C) 2017 Amlogic, Inc. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -13,11 +13,12 @@
  * FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public License for
  * more details.
  *
-*/
+ */
 
 #include <linux/errno.h>
 #include <linux/err.h>
 #include <linux/of.h>
+#include <linux/module.h>
 #include <linux/of_fdt.h>
 #include <linux/libfdt_env.h>
 #include <linux/of_reserved_mem.h>
@@ -42,7 +43,7 @@ static long phy_out_base;
  #define OUT_SIZE 0x1000
 static DEFINE_MUTEX(sharemem_mutex);
 #ifdef CONFIG_ARM64
-static long get_sharemem_info(unsigned function_id)
+static long get_sharemem_info(unsigned int function_id)
 {
 	asm volatile(
 		__asmeq("%0", "x0")
@@ -52,7 +53,7 @@ static long get_sharemem_info(unsigned function_id)
 	return function_id;
 }
 #else
-static long get_sharemem_info(unsigned function_id)
+static long get_sharemem_info(unsigned int function_id)
 {
 	register long r0 asm("r0") = function_id;
 	asm volatile(
@@ -68,8 +69,9 @@ static long get_sharemem_info(unsigned function_id)
 static int secmon_probe(struct platform_device *pdev)
 {
 	struct device_node *np = pdev->dev.of_node;
-	unsigned id;
+	unsigned int id;
 	int ret;
+
 	if (!of_property_read_u32(np, "in_base_func", &id))
 		phy_in_base = get_sharemem_info(id);
 

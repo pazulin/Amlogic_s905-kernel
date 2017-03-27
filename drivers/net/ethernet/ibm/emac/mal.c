@@ -597,9 +597,8 @@ static int mal_probe(struct platform_device *ofdev)
 		mal->rxde_irq = irq_of_parse_and_map(ofdev->dev.of_node, 4);
 	}
 
-	if (mal->txeob_irq == NO_IRQ || mal->rxeob_irq == NO_IRQ ||
-	    mal->serr_irq == NO_IRQ || mal->txde_irq == NO_IRQ ||
-	    mal->rxde_irq == NO_IRQ) {
+	if (!mal->txeob_irq || !mal->rxeob_irq || !mal->serr_irq ||
+	    !mal->txde_irq  || !mal->rxde_irq) {
 		printk(KERN_ERR
 		       "mal%d: failed to map interrupts !\n", index);
 		err = -ENODEV;
@@ -682,10 +681,7 @@ static int mal_probe(struct platform_device *ofdev)
 		goto fail6;
 
 	/* Enable all MAL SERR interrupt sources */
-	if (mal->version == 2)
-		set_mal_dcrn(mal, MAL_IER, MAL2_IER_EVENTS);
-	else
-		set_mal_dcrn(mal, MAL_IER, MAL1_IER_EVENTS);
+	set_mal_dcrn(mal, MAL_IER, MAL_IER_EVENTS);
 
 	/* Enable EOB interrupt */
 	mal_enable_eob_irq(mal);
@@ -756,7 +752,7 @@ static int mal_remove(struct platform_device *ofdev)
 	return 0;
 }
 
-static struct of_device_id mal_platform_match[] =
+static const struct of_device_id mal_platform_match[] =
 {
 	{
 		.compatible	= "ibm,mcmal",
@@ -779,7 +775,6 @@ static struct of_device_id mal_platform_match[] =
 static struct platform_driver mal_of_driver = {
 	.driver = {
 		.name = "mcmal",
-		.owner = THIS_MODULE,
 		.of_match_table = mal_platform_match,
 	},
 	.probe = mal_probe,

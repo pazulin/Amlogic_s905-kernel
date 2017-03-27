@@ -77,7 +77,7 @@ static int mpl3115_read_raw(struct iio_dev *indio_dev,
 			    int *val, int *val2, long mask)
 {
 	struct mpl3115_data *data = iio_priv(indio_dev);
-	s32 tmp = 0;
+	__be32 tmp = 0;
 	int ret;
 
 	switch (mask) {
@@ -171,7 +171,7 @@ static irqreturn_t mpl3115_trigger_handler(int irq, void *p)
 	mutex_unlock(&data->lock);
 
 	iio_push_to_buffers_with_timestamp(indio_dev, buffer,
-		iio_get_time_ns());
+		iio_get_time_ns(indio_dev));
 
 done:
 	iio_trigger_notify_done(indio_dev->trig);

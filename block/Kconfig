@@ -4,6 +4,7 @@
 menuconfig BLOCK
        bool "Enable the block layer" if EXPERT
        default y
+       select SBITMAP
        help
 	 Provide block layer support for the kernel.
 
@@ -77,6 +78,7 @@ config BLK_DEV_BSGLIB
 
 config BLK_DEV_INTEGRITY
 	bool "Block layer data integrity support"
+	select CRC_T10DIF if BLK_DEV_INTEGRITY
 	---help---
 	Some storage devices allow extra information to be
 	stored/retrieved to help protect the data.  The block layer
@@ -121,6 +123,11 @@ endif # BLOCK
 config BLOCK_COMPAT
 	bool
 	depends on BLOCK && COMPAT
+	default y
+
+config BLK_MQ_PCI
+	bool
+	depends on BLOCK && PCI
 	default y
 
 source block/Kconfig.iosched
