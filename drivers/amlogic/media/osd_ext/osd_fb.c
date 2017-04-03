@@ -40,7 +40,7 @@
 #include <linux/uaccess.h>
 
 /* Amlogic Headers */
-#include <linux/amlogic/display/vout_notify.h>
+#include <linux/amlogic/media/vout/vout_notify.h>
 
 /* Local Headers */
 #include <osd/osd.h>
