@@ -27,6 +27,7 @@
 #include <net/netns/nftables.h>
 #include <net/netns/xfrm.h>
 #include <net/netns/mpls.h>
+#include <net/netns/can.h>
 #include <linux/ns_common.h>
 #include <linux/idr.h>
 #include <linux/skbuff.h>
@@ -140,6 +141,9 @@ struct net {
 #endif
 #if IS_ENABLED(CONFIG_MPLS)
 	struct netns_mpls	mpls;
+#endif
+#if IS_ENABLED(CONFIG_CAN)
+	struct netns_can	can;
 #endif
 	struct sock		*diag_nlsk;
 	atomic_t		fnhe_genid;
@@ -291,7 +295,7 @@ struct pernet_operations {
 	int (*init)(struct net *net);
 	void (*exit)(struct net *net);
 	void (*exit_batch)(struct list_head *net_exit_list);
-	int *id;
+	unsigned int *id;
 	size_t size;
 };
 

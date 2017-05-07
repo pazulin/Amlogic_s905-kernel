@@ -393,7 +393,7 @@ static void *pnv_eeh_probe(struct pci_dn *pdn, void *data)
 	/* Create PE */
 	ret = eeh_add_to_parent_pe(edev);
 	if (ret) {
-		pr_warn("%s: Can't add PCI dev %04x:%02x:%02x.%01x to parent PE (%d)\n",
+		pr_warn("%s: Can't add PCI dev %04x:%02x:%02x.%01x to parent PE (%x)\n",
 			__func__, hose->global_number, pdn->busno,
 			PCI_SLOT(pdn->devfn), PCI_FUNC(pdn->devfn), ret);
 		return NULL;
@@ -1097,11 +1097,18 @@ static int pnv_eeh_reset(struct eeh_pe *pe, int option)
 
 	bus = eeh_pe_bus_get(pe);
 	if (!bus) {
-		pr_err("%s: Cannot find PCI bus for PHB#%d-PE#%x\n",
+		pr_err("%s: Cannot find PCI bus for PHB#%x-PE#%x\n",
 			__func__, pe->phb->global_number, pe->addr);
 		return -EIO;
 	}
 
+	/*
+	 * If dealing with the root bus (or the bus underneath the
+	 * root port), we reset the bus underneath the root port.
+	 *
+	 * The cxl driver depends on this behaviour for bi-modal card
+	 * switching.
+	 */
 	if (pci_is_root_bus(bus) ||
 	    pci_is_root_bus(bus->parent))
 		return pnv_eeh_root_reset(hose, option);

@@ -10,6 +10,7 @@
 #include <linux/seq_file.h>
 #include <linux/bootmem.h>
 #include <linux/debugfs.h>
+#include <linux/ioport.h>
 #include <linux/kernel.h>
 #include <linux/pfn_t.h>
 #include <linux/slab.h>
@@ -23,7 +24,7 @@
 #include <asm/x86_init.h>
 #include <asm/pgtable.h>
 #include <asm/fcntl.h>
-#include <asm/e820.h>
+#include <asm/e820/api.h>
 #include <asm/mtrr.h>
 #include <asm/page.h>
 #include <asm/msr.h>
@@ -986,20 +987,17 @@ int track_pfn_remap(struct vm_area_struct *vma, pgprot_t *prot,
 	return 0;
 }
 
-int track_pfn_insert(struct vm_area_struct *vma, pgprot_t *prot,
-		     pfn_t pfn)
+void track_pfn_insert(struct vm_area_struct *vma, pgprot_t *prot, pfn_t pfn)
 {
 	enum page_cache_mode pcm;
 
 	if (!pat_enabled())
-		return 0;
+		return;
 
 	/* Set prot based on lookup */
 	pcm = lookup_memtype(pfn_t_to_phys(pfn));
 	*prot = __pgprot((pgprot_val(*prot) & (~_PAGE_CACHE_MASK)) |
 			 cachemode2protval(pcm));
-
-	return 0;
 }
 
 /*

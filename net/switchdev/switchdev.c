@@ -624,13 +624,10 @@ EXPORT_SYMBOL_GPL(unregister_switchdev_notifier);
 int call_switchdev_notifiers(unsigned long val, struct net_device *dev,
 			     struct switchdev_notifier_info *info)
 {
-	int err;
-
 	ASSERT_RTNL();
 
 	info->dev = dev;
-	err = raw_notifier_call_chain(&switchdev_notif_chain, val, info);
-	return err;
+	return raw_notifier_call_chain(&switchdev_notif_chain, val, info);
 }
 EXPORT_SYMBOL_GPL(call_switchdev_notifiers);
 
@@ -829,7 +826,7 @@ static int switchdev_port_br_setlink_protinfo(struct net_device *dev,
 	int err;
 
 	err = nla_validate_nested(protinfo, IFLA_BRPORT_MAX,
-				  switchdev_port_bridge_policy);
+				  switchdev_port_bridge_policy, NULL);
 	if (err)
 		return err;
 

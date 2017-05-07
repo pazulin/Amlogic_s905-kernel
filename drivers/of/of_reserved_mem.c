@@ -197,7 +197,7 @@ static int __init __reserved_mem_init_node(struct reserved_mem *rmem)
 	const struct of_device_id *i;
 
 	for (i = __reservedmem_of_table; i < &__rmem_of_table_sentinel; i++) {
-		reservedmem_of_init_fn initfn = i->data;
+		int const (*initfn)(struct reserved_mem *rmem) = i->data;
 		const char *compat = i->compatible;
 
 		if (!of_flat_dt_is_compatible(rmem->fdt_node, compat))
@@ -354,6 +354,10 @@ int of_reserved_mem_device_init_by_idx(struct device *dev,
 		mutex_lock(&of_rmem_assigned_device_mutex);
 		list_add(&rd->list, &of_rmem_assigned_device_list);
 		mutex_unlock(&of_rmem_assigned_device_mutex);
+		/* ensure that dma_ops is set for virtual devices
+		 * using reserved memory
+		 */
+		of_dma_configure(dev, np);
 
 		dev_info(dev, "assigned reserved memory node %s\n", rmem->name);
 	} else {

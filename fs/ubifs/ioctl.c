@@ -126,7 +126,7 @@ static int setflags(struct inode *inode, int flags)
 
 	ui->flags = ioctl2ubifs(flags);
 	ubifs_set_inode_flags(inode);
-	inode->i_ctime = ubifs_current_time(inode);
+	inode->i_ctime = current_time(inode);
 	release = ui->dirty;
 	mark_inode_dirty_sync(inode);
 	mutex_unlock(&ui->ui_mutex);
@@ -181,6 +181,26 @@ long ubifs_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		mnt_drop_write_file(file);
 		return err;
 	}
+	case FS_IOC_SET_ENCRYPTION_POLICY: {
+#ifdef CONFIG_UBIFS_FS_ENCRYPTION
+		struct ubifs_info *c = inode->i_sb->s_fs_info;
+
+		err = ubifs_enable_encryption(c);
+		if (err)
+			return err;
+
+		return fscrypt_ioctl_set_policy(file, (const void __user *)arg);
+#else
+		return -EOPNOTSUPP;
+#endif
+	}
+	case FS_IOC_GET_ENCRYPTION_POLICY: {
+#ifdef CONFIG_UBIFS_FS_ENCRYPTION
+		return fscrypt_ioctl_get_policy(file, (void __user *)arg);
+#else
+		return -EOPNOTSUPP;
+#endif
+	}
 
 	default:
 		return -ENOTTY;
@@ -196,6 +216,9 @@ long ubifs_compat_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		break;
 	case FS_IOC32_SETFLAGS:
 		cmd = FS_IOC_SETFLAGS;
+		break;
+	case FS_IOC_SET_ENCRYPTION_POLICY:
+	case FS_IOC_GET_ENCRYPTION_POLICY:
 		break;
 	default:
 		return -ENOIOCTLCMD;

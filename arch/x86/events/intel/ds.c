@@ -391,7 +391,7 @@ void release_ds_buffers(void)
 	if (!x86_pmu.bts && !x86_pmu.pebs)
 		return;
 
-	get_online_cpus();
+	lockdep_assert_hotplug_held();
 	for_each_online_cpu(cpu)
 		fini_debug_store_on_cpu(cpu);
 
@@ -400,7 +400,6 @@ void release_ds_buffers(void)
 		release_bts_buffer(cpu);
 		release_ds_buffer(cpu);
 	}
-	put_online_cpus();
 }
 
 void reserve_ds_buffers(void)
@@ -420,7 +419,7 @@ void reserve_ds_buffers(void)
 	if (!x86_pmu.pebs)
 		pebs_err = 1;
 
-	get_online_cpus();
+	lockdep_assert_hotplug_held();
 
 	for_each_possible_cpu(cpu) {
 		if (alloc_ds_buffer(cpu)) {
@@ -461,8 +460,6 @@ void reserve_ds_buffers(void)
 		for_each_online_cpu(cpu)
 			init_debug_store_on_cpu(cpu);
 	}
-
-	put_online_cpus();
 }
 
 /*
@@ -1222,7 +1219,7 @@ get_next_pebs_record_by_bit(void *base, void *top, int bit)
 
 			/* clear non-PEBS bit and re-check */
 			pebs_status = p->status & cpuc->pebs_enabled;
-			pebs_status &= (1ULL << MAX_PEBS_EVENTS) - 1;
+			pebs_status &= PEBS_COUNTER_MASK;
 			if (pebs_status == (1 << bit))
 				return at;
 		}
@@ -1389,8 +1386,12 @@ static void intel_pmu_drain_pebs_nhm(struct pt_regs *iregs)
 			continue;
 
 		/* log dropped samples number */
-		if (error[bit])
+		if (error[bit]) {
 			perf_log_lost_samples(event, error[bit]);
+
+			if (perf_event_account_interrupt(event))
+				x86_pmu_stop(event, 0);
+		}
 
 		if (counts[bit]) {
 			__intel_pmu_pebs_event(event, iregs, base,

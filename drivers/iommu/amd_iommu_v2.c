@@ -22,6 +22,7 @@
 #include <linux/profile.h>
 #include <linux/module.h>
 #include <linux/sched.h>
+#include <linux/sched/mm.h>
 #include <linux/iommu.h>
 #include <linux/wait.h>
 #include <linux/pci.h>
@@ -695,9 +696,9 @@ out_clear_state:
 
 out_unregister:
 	mmu_notifier_unregister(&pasid_state->mn, mm);
+	mmput(mm);
 
 out_free:
-	mmput(mm);
 	free_pasid_state(pasid_state);
 
 out:

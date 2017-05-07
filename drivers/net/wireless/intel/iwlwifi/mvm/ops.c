@@ -302,10 +302,14 @@ static const struct iwl_rx_handlers iwl_mvm_rx_handlers[] = {
 		   RX_HANDLER_SYNC),
 	RX_HANDLER(TOF_NOTIFICATION, iwl_mvm_tof_resp_handler,
 		   RX_HANDLER_ASYNC_LOCKED),
+	RX_HANDLER_GRP(DEBUG_GROUP, MFU_ASSERT_DUMP_NTF,
+		       iwl_mvm_mfu_assert_dump_notif, RX_HANDLER_SYNC),
 	RX_HANDLER_GRP(PROT_OFFLOAD_GROUP, STORED_BEACON_NTF,
 		       iwl_mvm_rx_stored_beacon_notif, RX_HANDLER_SYNC),
 	RX_HANDLER_GRP(DATA_PATH_GROUP, MU_GROUP_MGMT_NOTIF,
 		       iwl_mvm_mu_mimo_grp_notif, RX_HANDLER_SYNC),
+	RX_HANDLER_GRP(DATA_PATH_GROUP, STA_PM_NOTIF,
+		       iwl_mvm_sta_pm_notif, RX_HANDLER_SYNC),
 };
 #undef RX_HANDLER
 #undef RX_HANDLER_GRP
@@ -424,6 +428,7 @@ static const struct iwl_hcmd_names iwl_mvm_legacy_names[] = {
  */
 static const struct iwl_hcmd_names iwl_mvm_system_names[] = {
 	HCMD_NAME(SHARED_MEM_CFG_CMD),
+	HCMD_NAME(INIT_EXTENDED_CFG_CMD),
 };
 
 /* Please keep this array *SORTED* by hex value.
@@ -442,6 +447,7 @@ static const struct iwl_hcmd_names iwl_mvm_phy_names[] = {
 	HCMD_NAME(CMD_DTS_MEASUREMENT_TRIGGER_WIDE),
 	HCMD_NAME(CTDP_CONFIG_CMD),
 	HCMD_NAME(TEMP_REPORTING_THRESHOLDS_CMD),
+	HCMD_NAME(GEO_TX_POWER_LIMIT),
 	HCMD_NAME(CT_KILL_NOTIFICATION),
 	HCMD_NAME(DTS_MEASUREMENT_NOTIF_WIDE),
 };
@@ -450,8 +456,10 @@ static const struct iwl_hcmd_names iwl_mvm_phy_names[] = {
  * Access is done through binary search
  */
 static const struct iwl_hcmd_names iwl_mvm_data_path_names[] = {
+	HCMD_NAME(DQA_ENABLE_CMD),
 	HCMD_NAME(UPDATE_MU_GROUPS_CMD),
 	HCMD_NAME(TRIGGER_RX_QUEUES_NOTIF_CMD),
+	HCMD_NAME(STA_PM_NOTIF),
 	HCMD_NAME(MU_GROUP_MGMT_NOTIF),
 	HCMD_NAME(RX_QUEUES_NOTIFICATION),
 };
@@ -459,8 +467,22 @@ static const struct iwl_hcmd_names iwl_mvm_data_path_names[] = {
 /* Please keep this array *SORTED* by hex value.
  * Access is done through binary search
  */
+static const struct iwl_hcmd_names iwl_mvm_debug_names[] = {
+	HCMD_NAME(MFU_ASSERT_DUMP_NTF),
+};
+
+/* Please keep this array *SORTED* by hex value.
+ * Access is done through binary search
+ */
 static const struct iwl_hcmd_names iwl_mvm_prot_offload_names[] = {
 	HCMD_NAME(STORED_BEACON_NTF),
+};
+
+/* Please keep this array *SORTED* by hex value.
+ * Access is done through binary search
+ */
+static const struct iwl_hcmd_names iwl_mvm_regulatory_and_nvm_names[] = {
+	HCMD_NAME(NVM_ACCESS_COMPLETE),
 };
 
 static const struct iwl_hcmd_arr iwl_mvm_groups[] = {
@@ -471,6 +493,8 @@ static const struct iwl_hcmd_arr iwl_mvm_groups[] = {
 	[PHY_OPS_GROUP] = HCMD_ARR(iwl_mvm_phy_names),
 	[DATA_PATH_GROUP] = HCMD_ARR(iwl_mvm_data_path_names),
 	[PROT_OFFLOAD_GROUP] = HCMD_ARR(iwl_mvm_prot_offload_names),
+	[REGULATORY_AND_NVM_GROUP] =
+		HCMD_ARR(iwl_mvm_regulatory_and_nvm_names),
 };
 
 /* this forward declaration can avoid to export the function */
@@ -590,11 +614,16 @@ iwl_op_mode_mvm_start(struct iwl_trans *trans, const struct iwl_cfg *cfg,
 		}
 	} else {
 		mvm->aux_queue = IWL_MVM_DQA_AUX_QUEUE;
+		mvm->probe_queue = IWL_MVM_DQA_AP_PROBE_RESP_QUEUE;
+		mvm->p2p_dev_queue = IWL_MVM_DQA_P2P_DEVICE_QUEUE;
 		mvm->first_agg_queue = IWL_MVM_DQA_MIN_DATA_QUEUE;
 		mvm->last_agg_queue = IWL_MVM_DQA_MAX_DATA_QUEUE;
 	}
 	mvm->sf_state = SF_UNINIT;
-	mvm->cur_ucode = IWL_UCODE_INIT;
+	if (iwl_mvm_has_new_tx_api(mvm))
+		mvm->cur_ucode = IWL_UCODE_REGULAR;
+	else
+		mvm->cur_ucode = IWL_UCODE_INIT;
 	mvm->drop_bcn_ap_mode = true;
 
 	mutex_init(&mvm->mutex);
@@ -740,6 +769,7 @@ iwl_op_mode_mvm_start(struct iwl_trans *trans, const struct iwl_cfg *cfg,
 	err = iwl_mvm_mac_setup_register(mvm);
 	if (err)
 		goto out_free;
+	mvm->hw_registered = true;
 
 	min_backoff = calc_min_backoff(trans, cfg);
 	iwl_mvm_thermal_initialize(mvm, min_backoff);
@@ -761,6 +791,7 @@ iwl_op_mode_mvm_start(struct iwl_trans *trans, const struct iwl_cfg *cfg,
 
  out_unregister:
 	ieee80211_unregister_hw(mvm->hw);
+	mvm->hw_registered = false;
 	iwl_mvm_leds_exit(mvm);
 	iwl_mvm_thermal_exit(mvm);
  out_free:
@@ -1013,7 +1044,7 @@ static void iwl_mvm_stop_sw_queue(struct iwl_op_mode *op_mode, int hw_queue)
 	unsigned long mq;
 
 	spin_lock_bh(&mvm->queue_info_lock);
-	mq = mvm->queue_info[hw_queue].hw_queue_to_mac80211;
+	mq = mvm->hw_queue_to_mac80211[hw_queue];
 	spin_unlock_bh(&mvm->queue_info_lock);
 
 	iwl_mvm_stop_mac_queues(mvm, mq);
@@ -1043,7 +1074,7 @@ static void iwl_mvm_wake_sw_queue(struct iwl_op_mode *op_mode, int hw_queue)
 	unsigned long mq;
 
 	spin_lock_bh(&mvm->queue_info_lock);
-	mq = mvm->queue_info[hw_queue].hw_queue_to_mac80211;
+	mq = mvm->hw_queue_to_mac80211[hw_queue];
 	spin_unlock_bh(&mvm->queue_info_lock);
 
 	iwl_mvm_start_mac_queues(mvm, mq);
@@ -1189,7 +1220,8 @@ void iwl_mvm_nic_restart(struct iwl_mvm *mvm, bool fw_error)
 		reprobe->dev = mvm->trans->dev;
 		INIT_WORK(&reprobe->work, iwl_mvm_reprobe_wk);
 		schedule_work(&reprobe->work);
-	} else if (mvm->cur_ucode == IWL_UCODE_REGULAR) {
+	} else if (mvm->cur_ucode == IWL_UCODE_REGULAR &&
+		   mvm->hw_registered) {
 		/* don't let the transport/FW power down */
 		iwl_mvm_ref(mvm, IWL_MVM_REF_UCODE_DOWN);
 
@@ -1235,7 +1267,7 @@ static bool iwl_mvm_disallow_offloading(struct iwl_mvm *mvm,
 	u8 tid;
 
 	if (WARN_ON(vif->type != NL80211_IFTYPE_STATION ||
-		    mvmvif->ap_sta_id == IWL_MVM_STATION_COUNT))
+		    mvmvif->ap_sta_id == IWL_MVM_INVALID_STA))
 		return false;
 
 	mvmsta = iwl_mvm_sta_from_staid_rcu(mvm, mvmvif->ap_sta_id);
@@ -1323,7 +1355,7 @@ static void iwl_mvm_set_wowlan_data(struct iwl_mvm *mvm,
 	struct ieee80211_sta *ap_sta;
 	struct iwl_mvm_sta *mvm_ap_sta;
 
-	if (iter_data->ap_sta_id == IWL_MVM_STATION_COUNT)
+	if (iter_data->ap_sta_id == IWL_MVM_INVALID_STA)
 		return;
 
 	rcu_read_lock();
@@ -1393,7 +1425,7 @@ int iwl_mvm_enter_d0i3(struct iwl_op_mode *op_mode)
 		mvm->d0i3_offloading = !d0i3_iter_data.disable_offloading;
 	} else {
 		WARN_ON_ONCE(d0i3_iter_data.vif_count > 1);
-		mvm->d0i3_ap_sta_id = IWL_MVM_STATION_COUNT;
+		mvm->d0i3_ap_sta_id = IWL_MVM_INVALID_STA;
 		mvm->d0i3_offloading = false;
 	}
 
@@ -1406,7 +1438,7 @@ int iwl_mvm_enter_d0i3(struct iwl_op_mode *op_mode)
 		return ret;
 
 	/* configure wowlan configuration only if needed */
-	if (mvm->d0i3_ap_sta_id != IWL_MVM_STATION_COUNT) {
+	if (mvm->d0i3_ap_sta_id != IWL_MVM_INVALID_STA) {
 		/* wake on beacons only if beacon storing isn't supported */
 		if (!fw_has_capa(&mvm->fw->ucode_capa,
 				 IWL_UCODE_TLV_CAPA_BEACON_STORING))
@@ -1483,7 +1515,7 @@ void iwl_mvm_d0i3_enable_tx(struct iwl_mvm *mvm, __le16 *qos_seq)
 
 	spin_lock_bh(&mvm->d0i3_tx_lock);
 
-	if (mvm->d0i3_ap_sta_id == IWL_MVM_STATION_COUNT)
+	if (mvm->d0i3_ap_sta_id == IWL_MVM_INVALID_STA)
 		goto out;
 
 	IWL_DEBUG_RPM(mvm, "re-enqueue packets\n");
@@ -1521,7 +1553,7 @@ out:
 	}
 	clear_bit(IWL_MVM_STATUS_IN_D0I3, &mvm->status);
 	wake_up(&mvm->d0i3_exit_waitq);
-	mvm->d0i3_ap_sta_id = IWL_MVM_STATION_COUNT;
+	mvm->d0i3_ap_sta_id = IWL_MVM_INVALID_STA;
 	if (wake_queues)
 		ieee80211_wake_queues(mvm->hw);
 

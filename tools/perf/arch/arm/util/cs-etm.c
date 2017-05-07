@@ -33,6 +33,7 @@
 #include "../../util/cs-etm.h"
 
 #include <stdlib.h>
+#include <sys/stat.h>
 
 #define ENABLE_SINK_MAX	128
 #define CS_BUS_DEVICE_PATH "/bus/coresight/devices/"
@@ -574,8 +575,6 @@ static FILE *cs_device__open_file(const char *name)
 
 	snprintf(path, PATH_MAX,
 		 "%s" CS_BUS_DEVICE_PATH "%s", sysfs, name);
-
-	printf("path: %s\n", path);
 
 	if (stat(path, &st) < 0)
 		return NULL;

@@ -40,6 +40,7 @@
 #include <net/netlink.h>
 #include <net/sch_generic.h>
 #include <net/pkt_sched.h>
+#include <net/pkt_cls.h>
 
 /* HTB algorithm.
     Author: devik@cdi.cz
@@ -111,7 +112,7 @@ struct htb_class {
 	unsigned int		children;
 	struct htb_class	*parent;	/* parent class */
 
-	struct gnet_stats_rate_est64 rate_est;
+	struct net_rate_estimator __rcu *rate_est;
 
 	/*
 	 * Written often fields
@@ -1016,7 +1017,7 @@ static int htb_init(struct Qdisc *sch, struct nlattr *opt)
 	if (!opt)
 		return -EINVAL;
 
-	err = nla_parse_nested(tb, TCA_HTB_MAX, opt, htb_policy);
+	err = nla_parse_nested(tb, TCA_HTB_MAX, opt, htb_policy, NULL);
 	if (err < 0)
 		return err;
 
@@ -1145,7 +1146,7 @@ htb_dump_class_stats(struct Qdisc *sch, unsigned long arg, struct gnet_dump *d)
 
 	if (gnet_stats_copy_basic(qdisc_root_sleeping_running(sch),
 				  d, NULL, &cl->bstats) < 0 ||
-	    gnet_stats_copy_rate_est(d, NULL, &cl->rate_est) < 0 ||
+	    gnet_stats_copy_rate_est(d, &cl->rate_est) < 0 ||
 	    gnet_stats_copy_queue(d, NULL, &qs, qlen) < 0)
 		return -1;
 
@@ -1228,7 +1229,7 @@ static void htb_destroy_class(struct Qdisc *sch, struct htb_class *cl)
 		WARN_ON(!cl->un.leaf.q);
 		qdisc_destroy(cl->un.leaf.q);
 	}
-	gen_kill_estimator(&cl->bstats, &cl->rate_est);
+	gen_kill_estimator(&cl->rate_est);
 	tcf_destroy_chain(&cl->filter_list);
 	kfree(cl);
 }
@@ -1341,7 +1342,7 @@ static int htb_change_class(struct Qdisc *sch, u32 classid,
 	if (!opt)
 		goto failure;
 
-	err = nla_parse_nested(tb, TCA_HTB_MAX, opt, htb_policy);
+	err = nla_parse_nested(tb, TCA_HTB_MAX, opt, htb_policy, NULL);
 	if (err < 0)
 		goto failure;
 
@@ -1459,6 +1460,8 @@ static int htb_change_class(struct Qdisc *sch, u32 classid,
 		qdisc_class_hash_insert(&q->clhash, &cl->common);
 		if (parent)
 			parent->children++;
+		if (cl->un.leaf.q != &noop_qdisc)
+			qdisc_hash_add(cl->un.leaf.q, true);
 	} else {
 		if (tca[TCA_RATE]) {
 			err = gen_replace_estimator(&cl->bstats, NULL,

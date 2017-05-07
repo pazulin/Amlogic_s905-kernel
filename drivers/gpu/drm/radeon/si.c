@@ -50,7 +50,6 @@ MODULE_FIRMWARE("radeon/tahiti_ce.bin");
 MODULE_FIRMWARE("radeon/tahiti_mc.bin");
 MODULE_FIRMWARE("radeon/tahiti_rlc.bin");
 MODULE_FIRMWARE("radeon/tahiti_smc.bin");
-MODULE_FIRMWARE("radeon/tahiti_k_smc.bin");
 
 MODULE_FIRMWARE("radeon/PITCAIRN_pfp.bin");
 MODULE_FIRMWARE("radeon/PITCAIRN_me.bin");
@@ -115,6 +114,9 @@ MODULE_FIRMWARE("radeon/hainan_mc.bin");
 MODULE_FIRMWARE("radeon/hainan_rlc.bin");
 MODULE_FIRMWARE("radeon/hainan_smc.bin");
 MODULE_FIRMWARE("radeon/hainan_k_smc.bin");
+MODULE_FIRMWARE("radeon/banks_k_2_smc.bin");
+
+MODULE_FIRMWARE("radeon/si58_mc.bin");
 
 static u32 si_get_cu_active_bitmap(struct radeon_device *rdev, u32 se, u32 sh);
 static void si_pcie_gen3_enable(struct radeon_device *rdev);
@@ -1651,15 +1653,14 @@ static int si_init_microcode(struct radeon_device *rdev)
 	int err;
 	int new_fw = 0;
 	bool new_smc = false;
+	bool si58_fw = false;
+	bool banks2_fw = false;
 
 	DRM_DEBUG("\n");
 
 	switch (rdev->family) {
 	case CHIP_TAHITI:
 		chip_name = "TAHITI";
-		/* XXX: figure out which Tahitis need the new ucode */
-		if (0)
-			new_smc = true;
 		new_chip_name = "tahiti";
 		pfp_req_size = SI_PFP_UCODE_SIZE * 4;
 		me_req_size = SI_PM4_UCODE_SIZE * 4;
@@ -1671,12 +1672,9 @@ static int si_init_microcode(struct radeon_device *rdev)
 		break;
 	case CHIP_PITCAIRN:
 		chip_name = "PITCAIRN";
-		if ((rdev->pdev->revision == 0x81) ||
-		    (rdev->pdev->device == 0x6810) ||
-		    (rdev->pdev->device == 0x6811) ||
-		    (rdev->pdev->device == 0x6816) ||
-		    (rdev->pdev->device == 0x6817) ||
-		    (rdev->pdev->device == 0x6806))
+		if ((rdev->pdev->revision == 0x81) &&
+		    ((rdev->pdev->device == 0x6810) ||
+		     (rdev->pdev->device == 0x6811)))
 			new_smc = true;
 		new_chip_name = "pitcairn";
 		pfp_req_size = SI_PFP_UCODE_SIZE * 4;
@@ -1689,15 +1687,15 @@ static int si_init_microcode(struct radeon_device *rdev)
 		break;
 	case CHIP_VERDE:
 		chip_name = "VERDE";
-		if ((rdev->pdev->revision == 0x81) ||
-		    (rdev->pdev->revision == 0x83) ||
-		    (rdev->pdev->revision == 0x87) ||
-		    (rdev->pdev->device == 0x6820) ||
-		    (rdev->pdev->device == 0x6821) ||
-		    (rdev->pdev->device == 0x6822) ||
-		    (rdev->pdev->device == 0x6823) ||
-		    (rdev->pdev->device == 0x682A) ||
-		    (rdev->pdev->device == 0x682B))
+		if (((rdev->pdev->device == 0x6820) &&
+		     ((rdev->pdev->revision == 0x81) ||
+		      (rdev->pdev->revision == 0x83))) ||
+		    ((rdev->pdev->device == 0x6821) &&
+		     ((rdev->pdev->revision == 0x83) ||
+		      (rdev->pdev->revision == 0x87))) ||
+		    ((rdev->pdev->revision == 0x87) &&
+		     ((rdev->pdev->device == 0x6823) ||
+		      (rdev->pdev->device == 0x682b))))
 			new_smc = true;
 		new_chip_name = "verde";
 		pfp_req_size = SI_PFP_UCODE_SIZE * 4;
@@ -1710,13 +1708,13 @@ static int si_init_microcode(struct radeon_device *rdev)
 		break;
 	case CHIP_OLAND:
 		chip_name = "OLAND";
-		if ((rdev->pdev->revision == 0xC7) ||
-		    (rdev->pdev->revision == 0x80) ||
-		    (rdev->pdev->revision == 0x81) ||
-		    (rdev->pdev->revision == 0x83) ||
-		    (rdev->pdev->revision == 0x87) ||
-		    (rdev->pdev->device == 0x6604) ||
-		    (rdev->pdev->device == 0x6605))
+		if (((rdev->pdev->revision == 0x81) &&
+		     ((rdev->pdev->device == 0x6600) ||
+		      (rdev->pdev->device == 0x6604) ||
+		      (rdev->pdev->device == 0x6605) ||
+		      (rdev->pdev->device == 0x6610))) ||
+		    ((rdev->pdev->revision == 0x83) &&
+		     (rdev->pdev->device == 0x6610)))
 			new_smc = true;
 		new_chip_name = "oland";
 		pfp_req_size = SI_PFP_UCODE_SIZE * 4;
@@ -1728,13 +1726,17 @@ static int si_init_microcode(struct radeon_device *rdev)
 		break;
 	case CHIP_HAINAN:
 		chip_name = "HAINAN";
-		if ((rdev->pdev->revision == 0x81) ||
-		    (rdev->pdev->revision == 0x83) ||
-		    (rdev->pdev->revision == 0xC3) ||
-		    (rdev->pdev->device == 0x6664) ||
-		    (rdev->pdev->device == 0x6665) ||
-		    (rdev->pdev->device == 0x6667))
+		if (((rdev->pdev->revision == 0x81) &&
+		     (rdev->pdev->device == 0x6660)) ||
+		    ((rdev->pdev->revision == 0x83) &&
+		     ((rdev->pdev->device == 0x6660) ||
+		      (rdev->pdev->device == 0x6663) ||
+		      (rdev->pdev->device == 0x6665) ||
+		      (rdev->pdev->device == 0x6667))))
 			new_smc = true;
+		else if ((rdev->pdev->revision == 0xc3) &&
+			 (rdev->pdev->device == 0x6665))
+			banks2_fw = true;
 		new_chip_name = "hainan";
 		pfp_req_size = SI_PFP_UCODE_SIZE * 4;
 		me_req_size = SI_PM4_UCODE_SIZE * 4;
@@ -1746,6 +1748,10 @@ static int si_init_microcode(struct radeon_device *rdev)
 	default: BUG();
 	}
 
+	/* this memory configuration requires special firmware */
+	if (((RREG32(MC_SEQ_MISC0) & 0xff000000) >> 24) == 0x58)
+		si58_fw = true;
+
 	DRM_INFO("Loading %s Microcode\n", new_chip_name);
 
 	snprintf(fw_name, sizeof(fw_name), "radeon/%s_pfp.bin", new_chip_name);
@@ -1756,8 +1762,7 @@ static int si_init_microcode(struct radeon_device *rdev)
 		if (err)
 			goto out;
 		if (rdev->pfp_fw->size != pfp_req_size) {
-			printk(KERN_ERR
-			       "si_cp: Bogus length %zu in firmware \"%s\"\n",
+			pr_err("si_cp: Bogus length %zu in firmware \"%s\"\n",
 			       rdev->pfp_fw->size, fw_name);
 			err = -EINVAL;
 			goto out;
@@ -1765,8 +1770,7 @@ static int si_init_microcode(struct radeon_device *rdev)
 	} else {
 		err = radeon_ucode_validate(rdev->pfp_fw);
 		if (err) {
-			printk(KERN_ERR
-			       "si_cp: validation failed for firmware \"%s\"\n",
+			pr_err("si_cp: validation failed for firmware \"%s\"\n",
 			       fw_name);
 			goto out;
 		} else {
@@ -1782,16 +1786,14 @@ static int si_init_microcode(struct radeon_device *rdev)
 		if (err)
 			goto out;
 		if (rdev->me_fw->size != me_req_size) {
-			printk(KERN_ERR
-			       "si_cp: Bogus length %zu in firmware \"%s\"\n",
+			pr_err("si_cp: Bogus length %zu in firmware \"%s\"\n",
 			       rdev->me_fw->size, fw_name);
 			err = -EINVAL;
 		}
 	} else {
 		err = radeon_ucode_validate(rdev->me_fw);
 		if (err) {
-			printk(KERN_ERR
-			       "si_cp: validation failed for firmware \"%s\"\n",
+			pr_err("si_cp: validation failed for firmware \"%s\"\n",
 			       fw_name);
 			goto out;
 		} else {
@@ -1807,16 +1809,14 @@ static int si_init_microcode(struct radeon_device *rdev)
 		if (err)
 			goto out;
 		if (rdev->ce_fw->size != ce_req_size) {
-			printk(KERN_ERR
-			       "si_cp: Bogus length %zu in firmware \"%s\"\n",
+			pr_err("si_cp: Bogus length %zu in firmware \"%s\"\n",
 			       rdev->ce_fw->size, fw_name);
 			err = -EINVAL;
 		}
 	} else {
 		err = radeon_ucode_validate(rdev->ce_fw);
 		if (err) {
-			printk(KERN_ERR
-			       "si_cp: validation failed for firmware \"%s\"\n",
+			pr_err("si_cp: validation failed for firmware \"%s\"\n",
 			       fw_name);
 			goto out;
 		} else {
@@ -1832,16 +1832,14 @@ static int si_init_microcode(struct radeon_device *rdev)
 		if (err)
 			goto out;
 		if (rdev->rlc_fw->size != rlc_req_size) {
-			printk(KERN_ERR
-			       "si_rlc: Bogus length %zu in firmware \"%s\"\n",
+			pr_err("si_rlc: Bogus length %zu in firmware \"%s\"\n",
 			       rdev->rlc_fw->size, fw_name);
 			err = -EINVAL;
 		}
 	} else {
 		err = radeon_ucode_validate(rdev->rlc_fw);
 		if (err) {
-			printk(KERN_ERR
-			       "si_cp: validation failed for firmware \"%s\"\n",
+			pr_err("si_cp: validation failed for firmware \"%s\"\n",
 			       fw_name);
 			goto out;
 		} else {
@@ -1849,7 +1847,10 @@ static int si_init_microcode(struct radeon_device *rdev)
 		}
 	}
 
-	snprintf(fw_name, sizeof(fw_name), "radeon/%s_mc.bin", new_chip_name);
+	if (si58_fw)
+		snprintf(fw_name, sizeof(fw_name), "radeon/si58_mc.bin");
+	else
+		snprintf(fw_name, sizeof(fw_name), "radeon/%s_mc.bin", new_chip_name);
 	err = request_firmware(&rdev->mc_fw, fw_name, rdev->dev);
 	if (err) {
 		snprintf(fw_name, sizeof(fw_name), "radeon/%s_mc2.bin", chip_name);
@@ -1862,8 +1863,7 @@ static int si_init_microcode(struct radeon_device *rdev)
 		}
 		if ((rdev->mc_fw->size != mc_req_size) &&
 		    (rdev->mc_fw->size != mc2_req_size)) {
-			printk(KERN_ERR
-			       "si_mc: Bogus length %zu in firmware \"%s\"\n",
+			pr_err("si_mc: Bogus length %zu in firmware \"%s\"\n",
 			       rdev->mc_fw->size, fw_name);
 			err = -EINVAL;
 		}
@@ -1871,8 +1871,7 @@ static int si_init_microcode(struct radeon_device *rdev)
 	} else {
 		err = radeon_ucode_validate(rdev->mc_fw);
 		if (err) {
-			printk(KERN_ERR
-			       "si_cp: validation failed for firmware \"%s\"\n",
+			pr_err("si_cp: validation failed for firmware \"%s\"\n",
 			       fw_name);
 			goto out;
 		} else {
@@ -1880,7 +1879,9 @@ static int si_init_microcode(struct radeon_device *rdev)
 		}
 	}
 
-	if (new_smc)
+	if (banks2_fw)
+		snprintf(fw_name, sizeof(fw_name), "radeon/banks_k_2_smc.bin");
+	else if (new_smc)
 		snprintf(fw_name, sizeof(fw_name), "radeon/%s_k_smc.bin", new_chip_name);
 	else
 		snprintf(fw_name, sizeof(fw_name), "radeon/%s_smc.bin", new_chip_name);
@@ -1889,23 +1890,19 @@ static int si_init_microcode(struct radeon_device *rdev)
 		snprintf(fw_name, sizeof(fw_name), "radeon/%s_smc.bin", chip_name);
 		err = request_firmware(&rdev->smc_fw, fw_name, rdev->dev);
 		if (err) {
-			printk(KERN_ERR
-			       "smc: error loading firmware \"%s\"\n",
-			       fw_name);
+			pr_err("smc: error loading firmware \"%s\"\n", fw_name);
 			release_firmware(rdev->smc_fw);
 			rdev->smc_fw = NULL;
 			err = 0;
 		} else if (rdev->smc_fw->size != smc_req_size) {
-			printk(KERN_ERR
-			       "si_smc: Bogus length %zu in firmware \"%s\"\n",
+			pr_err("si_smc: Bogus length %zu in firmware \"%s\"\n",
 			       rdev->smc_fw->size, fw_name);
 			err = -EINVAL;
 		}
 	} else {
 		err = radeon_ucode_validate(rdev->smc_fw);
 		if (err) {
-			printk(KERN_ERR
-			       "si_cp: validation failed for firmware \"%s\"\n",
+			pr_err("si_cp: validation failed for firmware \"%s\"\n",
 			       fw_name);
 			goto out;
 		} else {
@@ -1916,7 +1913,7 @@ static int si_init_microcode(struct radeon_device *rdev)
 	if (new_fw == 0) {
 		rdev->new_fw = false;
 	} else if (new_fw < 6) {
-		printk(KERN_ERR "si_fw: mixing new and old firmware!\n");
+		pr_err("si_fw: mixing new and old firmware!\n");
 		err = -EINVAL;
 	} else {
 		rdev->new_fw = true;
@@ -1924,8 +1921,7 @@ static int si_init_microcode(struct radeon_device *rdev)
 out:
 	if (err) {
 		if (err != -EINVAL)
-			printk(KERN_ERR
-			       "si_cp: Failed to load firmware \"%s\"\n",
+			pr_err("si_cp: Failed to load firmware \"%s\"\n",
 			       fw_name);
 		release_firmware(rdev->pfp_fw);
 		rdev->pfp_fw = NULL;
@@ -7859,7 +7855,7 @@ static void si_program_aspm(struct radeon_device *rdev)
 	}
 }
 
-int si_vce_send_vcepll_ctlreq(struct radeon_device *rdev)
+static int si_vce_send_vcepll_ctlreq(struct radeon_device *rdev)
 {
 	unsigned i;
 

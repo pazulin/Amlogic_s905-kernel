@@ -242,7 +242,7 @@ static int mwifiex_dnld_cmd_to_fw(struct mwifiex_private *priv,
 	mwifiex_dbg(adapter, CMD,
 		    "cmd: DNLD_CMD: %#x, act %#x, len %d, seqno %#x\n",
 		    cmd_code,
-		    le16_to_cpu(*(__le16 *)((u8 *)host_cmd + S_DS_GEN)),
+		    get_unaligned_le16((u8 *)host_cmd + S_DS_GEN),
 		    cmd_size, le16_to_cpu(host_cmd->seq_num));
 	mwifiex_dbg_dump(adapter, CMD_D, "cmd buffer:", host_cmd, cmd_size);
 
@@ -286,7 +286,7 @@ static int mwifiex_dnld_cmd_to_fw(struct mwifiex_private *priv,
 			(adapter->dbg.last_cmd_index + 1) % DBG_CMD_NUM;
 	adapter->dbg.last_cmd_id[adapter->dbg.last_cmd_index] = cmd_code;
 	adapter->dbg.last_cmd_act[adapter->dbg.last_cmd_index] =
-			le16_to_cpu(*(__le16 *) ((u8 *) host_cmd + S_DS_GEN));
+			get_unaligned_le16((u8 *)host_cmd + S_DS_GEN);
 
 	/* Clear BSS_NO_BITS from HostCmd */
 	cmd_code &= HostCmd_CMD_ID_MASK;
@@ -1118,13 +1118,14 @@ mwifiex_cancel_pending_ioctl(struct mwifiex_adapter *adapter)
 void
 mwifiex_check_ps_cond(struct mwifiex_adapter *adapter)
 {
-	if (!adapter->cmd_sent &&
+	if (!adapter->cmd_sent && !atomic_read(&adapter->tx_hw_pending) &&
 	    !adapter->curr_cmd && !IS_CARD_RX_RCVD(adapter))
 		mwifiex_dnld_sleep_confirm_cmd(adapter);
 	else
 		mwifiex_dbg(adapter, CMD,
-			    "cmd: Delay Sleep Confirm (%s%s%s)\n",
+			    "cmd: Delay Sleep Confirm (%s%s%s%s)\n",
 			    (adapter->cmd_sent) ? "D" : "",
+			    atomic_read(&adapter->tx_hw_pending) ? "T" : "",
 			    (adapter->curr_cmd) ? "C" : "",
 			    (IS_CARD_RX_RCVD(adapter)) ? "R" : "");
 }

@@ -20,6 +20,7 @@
 #ifndef _MWIFIEX_USB_H
 #define _MWIFIEX_USB_H
 
+#include <linux/completion.h>
 #include <linux/usb.h>
 
 #define USB8XXX_VID		0x1286
@@ -75,6 +76,7 @@ struct usb_card_rec {
 	struct mwifiex_adapter *adapter;
 	struct usb_device *udev;
 	struct usb_interface *intf;
+	struct completion fw_done;
 	u8 rx_cmd_ep;
 	struct urb_context rx_cmd;
 	atomic_t rx_cmd_urb_pending;
@@ -88,6 +90,10 @@ struct usb_card_rec {
 	struct urb_context tx_cmd;
 	u8 mc_resync_flag;
 	struct usb_tx_data_port port[MWIFIEX_TX_DATA_PORT];
+	int rx_cmd_ep_type;
+	u8 rx_cmd_interval;
+	int tx_cmd_ep_type;
+	u8 tx_cmd_interval;
 };
 
 struct fw_header {
@@ -100,12 +106,12 @@ struct fw_header {
 struct fw_sync_header {
 	__le32 cmd;
 	__le32 seq_num;
-};
+} __packed;
 
 struct fw_data {
 	struct fw_header fw_hdr;
 	__le32 seq_num;
 	u8 data[1];
-};
+} __packed;
 
 #endif /*_MWIFIEX_USB_H */

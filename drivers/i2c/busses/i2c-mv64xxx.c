@@ -823,13 +823,10 @@ mv64xxx_of_config(struct mv64xxx_i2c_data *drv_data,
 
 	drv_data->rstc = devm_reset_control_get_optional(dev, NULL);
 	if (IS_ERR(drv_data->rstc)) {
-		if (PTR_ERR(drv_data->rstc) == -EPROBE_DEFER) {
-			rc = -EPROBE_DEFER;
-			goto out;
-		}
-	} else {
-		reset_control_deassert(drv_data->rstc);
+		rc = PTR_ERR(drv_data->rstc);
+		goto out;
 	}
+	reset_control_deassert(drv_data->rstc);
 
 	/* Its not yet defined how timeouts will be specified in device tree.
 	 * So hard code the value to 1 second.
@@ -951,8 +948,7 @@ mv64xxx_i2c_probe(struct platform_device *pd)
 exit_free_irq:
 	free_irq(drv_data->irq, drv_data);
 exit_reset:
-	if (!IS_ERR_OR_NULL(drv_data->rstc))
-		reset_control_assert(drv_data->rstc);
+	reset_control_assert(drv_data->rstc);
 exit_clk:
 	/* Not all platforms have a clk */
 	if (!IS_ERR(drv_data->clk))
@@ -968,8 +964,7 @@ mv64xxx_i2c_remove(struct platform_device *dev)
 
 	i2c_del_adapter(&drv_data->adapter);
 	free_irq(drv_data->irq, drv_data);
-	if (!IS_ERR_OR_NULL(drv_data->rstc))
-		reset_control_assert(drv_data->rstc);
+	reset_control_assert(drv_data->rstc);
 	/* Not all platforms have a clk */
 	if (!IS_ERR(drv_data->clk))
 		clk_disable_unprepare(drv_data->clk);
@@ -977,11 +972,32 @@ mv64xxx_i2c_remove(struct platform_device *dev)
 	return 0;
 }
 
+#ifdef CONFIG_PM
+static int mv64xxx_i2c_resume(struct device *dev)
+{
+	struct platform_device *pdev = to_platform_device(dev);
+	struct mv64xxx_i2c_data *drv_data = platform_get_drvdata(pdev);
+
+	mv64xxx_i2c_hw_init(drv_data);
+
+	return 0;
+}
+
+static const struct dev_pm_ops mv64xxx_i2c_pm = {
+	.resume = mv64xxx_i2c_resume,
+};
+
+#define mv64xxx_i2c_pm_ops (&mv64xxx_i2c_pm)
+#else
+#define mv64xxx_i2c_pm_ops NULL
+#endif
+
 static struct platform_driver mv64xxx_i2c_driver = {
 	.probe	= mv64xxx_i2c_probe,
 	.remove	= mv64xxx_i2c_remove,
 	.driver	= {
 		.name	= MV64XXX_I2C_CTLR_NAME,
+		.pm     = mv64xxx_i2c_pm_ops,
 		.of_match_table = mv64xxx_i2c_of_match_table,
 	},
 };

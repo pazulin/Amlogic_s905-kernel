@@ -37,6 +37,7 @@ struct ipv6_devconf {
 	__s32		accept_ra_rtr_pref;
 	__s32		rtr_probe_interval;
 #ifdef CONFIG_IPV6_ROUTE_INFO
+	__s32		accept_ra_rt_info_min_plen;
 	__s32		accept_ra_rt_info_max_plen;
 #endif
 #endif
@@ -64,6 +65,13 @@ struct ipv6_devconf {
 	} stable_secret;
 	__s32		use_oif_addrs_only;
 	__s32		keep_addr_on_down;
+	__s32		seg6_enabled;
+#ifdef CONFIG_IPV6_SEG6_HMAC
+	__s32		seg6_require_hmac;
+#endif
+	__u32		enhanced_dad;
+	__u32		addr_gen_mode;
+	__s32		disable_policy;
 
 	struct ctl_table_header *sysctl_header;
 };
@@ -229,8 +237,9 @@ struct ipv6_pinfo {
                                 rxflow:1,
 				rxtclass:1,
 				rxpmtu:1,
-				rxorigdstaddr:1;
-				/* 2 bits hole */
+				rxorigdstaddr:1,
+				recvfragsize:1;
+				/* 1 bits hole */
 		} bits;
 		__u16		all;
 	} rxopt;

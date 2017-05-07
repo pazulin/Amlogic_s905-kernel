@@ -484,7 +484,7 @@ int nd_pfn_probe(struct device *dev, struct nd_namespace_common *ndns)
 	dev_dbg(dev, "%s: pfn: %s\n", __func__,
 			rc == 0 ? dev_name(pfn_dev) : "<none>");
 	if (rc < 0) {
-		__nd_detach_ndns(pfn_dev, &nd_pfn->ndns);
+		nd_detach_ndns(pfn_dev, &nd_pfn->ndns);
 		put_device(pfn_dev);
 	} else
 		__nd_device_register(pfn_dev);
@@ -627,15 +627,12 @@ static int nd_pfn_init(struct nd_pfn *nd_pfn)
 	size = resource_size(&nsio->res);
 	npfns = (size - start_pad - end_trunc - SZ_8K) / SZ_4K;
 	if (nd_pfn->mode == PFN_MODE_PMEM) {
-		unsigned long memmap_size;
-
 		/*
 		 * vmemmap_populate_hugepages() allocates the memmap array in
 		 * HPAGE_SIZE chunks.
 		 */
-		memmap_size = ALIGN(64 * npfns, HPAGE_SIZE);
-		offset = ALIGN(start + SZ_8K + memmap_size + dax_label_reserve,
-				nd_pfn->align) - start;
+		offset = ALIGN(start + SZ_8K + 64 * npfns + dax_label_reserve,
+				max(nd_pfn->align, HPAGE_SIZE)) - start;
 	} else if (nd_pfn->mode == PFN_MODE_RAM)
 		offset = ALIGN(start + SZ_8K + dax_label_reserve,
 				nd_pfn->align) - start;
