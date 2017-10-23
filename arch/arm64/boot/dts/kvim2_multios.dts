@@ -1241,7 +1241,7 @@
 	};
 
 	partitions {
-		parts = <0xc>;
+		parts = <0xd>;
 		part-0 = <0x2c>;
 		part-1 = <0x2d>;
 		part-2 = <0x2e>;
@@ -1254,6 +1254,7 @@
 		part-9 = <0x35>;
 		part-10 = <0x36>;
 		part-11 = <0x90>;
+		part-12 = <0x91>;
 
 		logo {
 			pname = "logo";
@@ -1263,92 +1264,100 @@
 			phandle = <0x2c>;
 		};
 
-		recovery {
-			pname = "recovery";
+		multiboot {
+			pname = "multiboot";
 			size = <0x0 0x2000000>;
 			mask = <0x1>;
 			linux,phandle = <0x2d>;
 			phandle = <0x2d>;
 		};
 
-		rsv {
-			pname = "rsv";
-			size = <0x0 0x800000>;
+		recovery {
+			pname = "recovery";
+			size = <0x0 0x2000000>;
 			mask = <0x1>;
 			linux,phandle = <0x2e>;
 			phandle = <0x2e>;
 		};
 
-		tee {
-			pname = "tee";
+		rsv {
+			pname = "rsv";
 			size = <0x0 0x800000>;
 			mask = <0x1>;
 			linux,phandle = <0x2f>;
 			phandle = <0x2f>;
 		};
 
-		crypt {
-			pname = "crypt";
-			size = <0x0 0x2000000>;
+		tee {
+			pname = "tee";
+			size = <0x0 0x800000>;
 			mask = <0x1>;
 			linux,phandle = <0x30>;
 			phandle = <0x30>;
 		};
 
-		misc {
-			pname = "misc";
+		crypt {
+			pname = "crypt";
 			size = <0x0 0x2000000>;
 			mask = <0x1>;
 			linux,phandle = <0x31>;
 			phandle = <0x31>;
 		};
 
-		boot {
-			pname = "boot";
+		misc {
+			pname = "misc";
 			size = <0x0 0x2000000>;
 			mask = <0x1>;
 			linux,phandle = <0x32>;
 			phandle = <0x32>;
 		};
 
+		boot {
+			pname = "boot";
+			size = <0x0 0x2000000>;
+			mask = <0x1>;
+			linux,phandle = <0x33>;
+			phandle = <0x33>;
+		};
+
 		system {
 			pname = "system";
 			size = <0x0 0x80000000>;
 			mask = <0x1>;
-			linux,phandle = <0x33>;
-			phandle = <0x33>;
+			linux,phandle = <0x34>;
+			phandle = <0x34>;
 		};
 
 		cache {
 			pname = "cache";
 			size = <0x0 0x20000000>;
 			mask = <0x2>;
-			linux,phandle = <0x34>;
-			phandle = <0x34>;
+			linux,phandle = <0x35>;
+			phandle = <0x35>;
 		};
 
 		libreelec {
 			pname = "libreelec";
 			size = <0x0 0x20000000>;
 			mask = <0x4>;
-			linux,phandle = <0x35>;
-			phandle = <0x35>;
+			linux,phandle = <0x36>;
+			phandle = <0x36>;
 		};
 
 		rootfs {
 			pname = "rootfs";
 			size = <0x0 0xfffffe00>;
 			mask = <0x4>;
-			linux,phandle = <0x36>;
-			phandle = <0x36>;
+			linux,phandle = <0x90>;
+			phandle = <0x90>;
 		};
 
 		data {
 			pname = "data";
 			size = <0xffffffff 0xffffffff>;
 			mask = <0x4>;
-			linux,phandle = <0x90>;
-			phandle = <0x90>;
+			linux,phandle = <0x91>;
+			phandle = <0x91>;
 		};
 
 	};
