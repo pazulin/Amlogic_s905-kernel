@@ -13,7 +13,8 @@ dtb-$(CONFIG_ARM64) += gxbb_p200.dtb gxbb_p200_2G.dtb \
 				kvim2_nougat.dtb \
 				kvim2_dualos.dtb \
 				kvim2_multios.dtb \
-				kvim2_libreelec.dtb
+				kvim2_libreelec.dtb \
+				kvim2_linux.dtb
 
 targets += dtbs
 

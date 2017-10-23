@@ -1241,105 +1241,15 @@
 	};
 
 	partitions {
-		parts = <0xb>;
+		parts = <0x1>;
 		part-0 = <0x2c>;
-		part-1 = <0x2d>;
-		part-2 = <0x2e>;
-		part-3 = <0x2f>;
-		part-4 = <0x30>;
-		part-5 = <0x31>;
-		part-6 = <0x32>;
-		part-7 = <0x33>;
-		part-8 = <0x34>;
-		part-9 = <0x35>;
-		part-10 = <0x36>;
-
-		recovery {
-			pname = "recovery";
-			size = <0x0 0x2000000>;
-			mask = <0x1>;
-			linux,phandle = <0x2c>;
-			phandle = <0x2c>;
-		};
-
-		rsv {
-			pname = "rsv";
-			size = <0x0 0x800000>;
-			mask = <0x1>;
-			linux,phandle = <0x2d>;
-			phandle = <0x2d>;
-		};
-
-		tee {
-			pname = "tee";
-			size = <0x0 0x800000>;
-			mask = <0x1>;
-			linux,phandle = <0x2e>;
-			phandle = <0x2e>;
-		};
-
-		crypt {
-			pname = "crypt";
-			size = <0x0 0x2000000>;
-			mask = <0x1>;
-			linux,phandle = <0x2f>;
-			phandle = <0x2f>;
-		};
-
-		misc {
-			pname = "misc";
-			size = <0x0 0x2000000>;
-			mask = <0x1>;
-			linux,phandle = <0x30>;
-			phandle = <0x30>;
-		};
-
-		boot {
-			pname = "boot";
-			size = <0x0 0x2000000>;
-			mask = <0x1>;
-			linux,phandle = <0x31>;
-			phandle = <0x31>;
-		};
-
-		system {
-			pname = "system";
-			size = <0x0 0x80000000>;
-			mask = <0x1>;
-			linux,phandle = <0x32>;
-			phandle = <0x32>;
-		};
-
-		cache {
-			pname = "cache";
-			size = <0x0 0x20000000>;
-			mask = <0x2>;
-			linux,phandle = <0x33>;
-			phandle = <0x33>;
-		};
-
-		libreelec {
-			pname = "libreelec";
-			size = <0x0 0x20000000>;
-			mask = <0x4>;
-			linux,phandle = <0x34>;
-			phandle = <0x34>;
-		};
 
 		linux {
 			pname = "linux";
-			size = <0x0 0xfffffe00>;
-			mask = <0x4>;
-			linux,phandle = <0x35>;
-			phandle = <0x35>;
-		};
-
-		data {
-			pname = "data";
 			size = <0xffffffff 0xffffffff>;
 			mask = <0x4>;
-			linux,phandle = <0x36>;
-			phandle = <0x36>;
+			linux,phandle = <0x2c>;
+			phandle = <0x2c>;
 		};
 
 	};
