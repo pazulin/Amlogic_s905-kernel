@@ -11,7 +11,6 @@
  * 2 of the Licence, or (at your option) any later version.
  */
 //#define DEBUG
-#include <linux/rcupdate.h>
 #include <linux/slab.h>
 #include <linux/err.h>
 #include <linux/assoc_array_priv.h>
@@ -524,9 +523,7 @@ static bool assoc_array_insert_into_terminal_node(struct assoc_array_edit *edit,
 			free_slot = i;
 			continue;
 		}
-		if (assoc_array_ptr_is_leaf(ptr) &&
-		    ops->compare_object(assoc_array_ptr_to_leaf(ptr),
-					index_key)) {
+		if (ops->compare_object(assoc_array_ptr_to_leaf(ptr), index_key)) {
 			pr_devel("replace in slot %d\n", i);
 			edit->leaf_p = &node->slots[i];
 			edit->dead_leaf = node->slots[i];

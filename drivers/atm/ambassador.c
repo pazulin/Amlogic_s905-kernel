@@ -1925,7 +1925,7 @@ static int ucode_init(loader_block *lb, amb_dev *dev)
   const struct firmware *fw;
   unsigned long start_address;
   const struct ihex_binrec *rec;
-  const char *errmsg = NULL;
+  const char *errmsg = 0;
   int res;
 
   res = request_ihex_firmware(&fw, "atmsar11.fw", &dev->pci_dev->dev);
@@ -2267,8 +2267,9 @@ static int amb_probe(struct pci_dev *pci_dev,
 	dev->atm_dev->ci_range.vpi_bits = NUM_VPI_BITS;
 	dev->atm_dev->ci_range.vci_bits = NUM_VCI_BITS;
 
-	setup_timer(&dev->housekeeping, do_housekeeping,
-		    (unsigned long)dev);
+	init_timer(&dev->housekeeping);
+	dev->housekeeping.function = do_housekeeping;
+	dev->housekeeping.data = (unsigned long) dev;
 	mod_timer(&dev->housekeeping, jiffies);
 
 	// enable host interrupts
@@ -2393,7 +2394,12 @@ static int __init amb_module_init (void)
 {
   PRINTD (DBG_FLOW|DBG_INIT, "init_module");
   
-  BUILD_BUG_ON(sizeof(amb_mem) != 4*16 + 4*12);
+  // sanity check - cast needed as printk does not support %Zu
+  if (sizeof(amb_mem) != 4*16 + 4*12) {
+    PRINTK (KERN_ERR, "Fix amb_mem (is %lu words).",
+	    (unsigned long) sizeof(amb_mem));
+    return -ENOMEM;
+  }
   
   show_version();
   

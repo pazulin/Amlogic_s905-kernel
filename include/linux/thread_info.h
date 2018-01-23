@@ -9,41 +9,59 @@
 
 #include <linux/types.h>
 #include <linux/bug.h>
-#include <linux/restart_block.h>
 
-#ifdef CONFIG_THREAD_INFO_IN_TASK
+struct timespec;
+struct compat_timespec;
+
 /*
- * For CONFIG_THREAD_INFO_IN_TASK kernels we need <asm/current.h> for the
- * definition of current, but for !CONFIG_THREAD_INFO_IN_TASK kernels,
- * including <asm/current.h> can cause a circular dependency on some platforms.
+ * System call restart block.
  */
-#include <asm/current.h>
-#define current_thread_info() ((struct thread_info *)current)
+struct restart_block {
+	long (*fn)(struct restart_block *);
+	union {
+		/* For futex_wait and futex_wait_requeue_pi */
+		struct {
+			u32 __user *uaddr;
+			u32 val;
+			u32 flags;
+			u32 bitset;
+			u64 time;
+			u32 __user *uaddr2;
+		} futex;
+		/* For nanosleep */
+		struct {
+			clockid_t clockid;
+			struct timespec __user *rmtp;
+#ifdef CONFIG_COMPAT
+			struct compat_timespec __user *compat_rmtp;
 #endif
-
-#include <linux/bitops.h>
-
-/*
- * For per-arch arch_within_stack_frames() implementations, defined in
- * asm/thread_info.h.
- */
-enum {
-	BAD_STACK = -1,
-	NOT_STACK = 0,
-	GOOD_FRAME,
-	GOOD_STACK,
+			u64 expires;
+		} nanosleep;
+		/* For poll */
+		struct {
+			struct pollfd __user *ufds;
+			int nfds;
+			int has_timeout;
+			unsigned long tv_sec;
+			unsigned long tv_nsec;
+		} poll;
+	};
 };
 
+extern long do_no_restart_syscall(struct restart_block *parm);
+
+#include <linux/bitops.h>
 #include <asm/thread_info.h>
 
 #ifdef __KERNEL__
 
 #ifdef CONFIG_DEBUG_STACK_USAGE
-# define THREADINFO_GFP		(GFP_KERNEL_ACCOUNT | __GFP_NOTRACK | \
-				 __GFP_ZERO)
+# define THREADINFO_GFP		(GFP_KERNEL | __GFP_NOTRACK | __GFP_ZERO)
 #else
-# define THREADINFO_GFP		(GFP_KERNEL_ACCOUNT | __GFP_NOTRACK)
+# define THREADINFO_GFP		(GFP_KERNEL | __GFP_NOTRACK)
 #endif
+
+#define THREADINFO_GFP_ACCOUNTED (THREADINFO_GFP | __GFP_KMEMCG)
 
 /*
  * flag set/clear/test wrappers
@@ -86,35 +104,59 @@ static inline int test_ti_thread_flag(struct thread_info *ti, int flag)
 #define test_thread_flag(flag) \
 	test_ti_thread_flag(current_thread_info(), flag)
 
-#define tif_need_resched() test_thread_flag(TIF_NEED_RESCHED)
-
-#ifndef CONFIG_HAVE_ARCH_WITHIN_STACK_FRAMES
-static inline int arch_within_stack_frames(const void * const stack,
-					   const void * const stackend,
-					   const void *obj, unsigned long len)
+static inline __deprecated void set_need_resched(void)
 {
-	return 0;
+	/*
+	 * Use of this function in deprecated.
+	 *
+	 * As of this writing there are only a few users in the DRM tree left
+	 * all of which are wrong and can be removed without causing too much
+	 * grief.
+	 *
+	 * The DRM people are aware and are working on removing the last few
+	 * instances.
+	 */
 }
-#endif
 
-#ifdef CONFIG_HARDENED_USERCOPY
-extern void __check_object_size(const void *ptr, unsigned long n,
-					bool to_user);
+#if defined TIF_RESTORE_SIGMASK && !defined HAVE_SET_RESTORE_SIGMASK
+/*
+ * An arch can define its own version of set_restore_sigmask() to get the
+ * job done however works, with or without TIF_RESTORE_SIGMASK.
+ */
+#define HAVE_SET_RESTORE_SIGMASK	1
 
-static __always_inline void check_object_size(const void *ptr, unsigned long n,
-					      bool to_user)
+/**
+ * set_restore_sigmask() - make sure saved_sigmask processing gets done
+ *
+ * This sets TIF_RESTORE_SIGMASK and ensures that the arch signal code
+ * will run before returning to user mode, to process the flag.  For
+ * all callers, TIF_SIGPENDING is already set or it's no harm to set
+ * it.  TIF_RESTORE_SIGMASK need not be in the set of bits that the
+ * arch code will notice on return to user mode, in case those bits
+ * are scarce.  We set TIF_SIGPENDING here to ensure that the arch
+ * signal code always gets run when TIF_RESTORE_SIGMASK is set.
+ */
+static inline void set_restore_sigmask(void)
 {
-	if (!__builtin_constant_p(n))
-		__check_object_size(ptr, n, to_user);
+	set_thread_flag(TIF_RESTORE_SIGMASK);
+	WARN_ON(!test_thread_flag(TIF_SIGPENDING));
 }
-#else
-static inline void check_object_size(const void *ptr, unsigned long n,
-				     bool to_user)
-{ }
-#endif /* CONFIG_HARDENED_USERCOPY */
+static inline void clear_restore_sigmask(void)
+{
+	clear_thread_flag(TIF_RESTORE_SIGMASK);
+}
+static inline bool test_restore_sigmask(void)
+{
+	return test_thread_flag(TIF_RESTORE_SIGMASK);
+}
+static inline bool test_and_clear_restore_sigmask(void)
+{
+	return test_and_clear_thread_flag(TIF_RESTORE_SIGMASK);
+}
+#endif	/* TIF_RESTORE_SIGMASK && !HAVE_SET_RESTORE_SIGMASK */
 
-#ifndef arch_setup_new_exec
-static inline void arch_setup_new_exec(void) { }
+#ifndef HAVE_SET_RESTORE_SIGMASK
+#error "no set_restore_sigmask() provided and default one won't work"
 #endif
 
 #endif	/* __KERNEL__ */

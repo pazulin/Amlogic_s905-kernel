@@ -14,6 +14,10 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
 
 #include <linux/kernel.h>
@@ -407,6 +411,7 @@ static int usb_ma901radio_probe(struct usb_interface *intf,
 	radio->vdev.ioctl_ops = &usb_ma901radio_ioctl_ops;
 	radio->vdev.release = video_device_release_empty;
 	radio->vdev.lock = &radio->lock;
+	set_bit(V4L2_FL_USE_FH_PRIO, &radio->vdev.flags);
 
 	radio->usbdev = interface_to_usbdev(intf);
 	radio->intf = intf;

@@ -15,7 +15,6 @@
 #include <linux/capability.h>
 #include <linux/errno.h>
 #include <linux/gfp.h>
-#include <linux/security.h>
 
 #include "include/apparmor.h"
 #include "include/capability.h"
@@ -56,7 +55,6 @@ static void audit_cb(struct audit_buffer *ab, void *va)
  * audit_caps - audit a capability
  * @profile: profile being tested for confinement (NOT NULL)
  * @cap: capability tested
- @audit: whether an audit record should be generated
  * @error: error code returned by test
  *
  * Do auditing of capability and handle, audit/complain/kill modes switching
@@ -64,16 +62,17 @@ static void audit_cb(struct audit_buffer *ab, void *va)
  *
  * Returns: 0 or sa->error on success,  error code on failure
  */
-static int audit_caps(struct aa_profile *profile, int cap, int audit,
-		      int error)
+static int audit_caps(struct aa_profile *profile, int cap, int error)
 {
 	struct audit_cache *ent;
 	int type = AUDIT_APPARMOR_AUTO;
-	DEFINE_AUDIT_DATA(sa, LSM_AUDIT_DATA_CAP, OP_CAPABLE);
+	struct common_audit_data sa;
+	struct apparmor_audit_data aad = {0,};
+	sa.type = LSM_AUDIT_DATA_CAP;
+	sa.aad = &aad;
 	sa.u.cap = cap;
-	aad(&sa)->error = error;
-	if (audit == SECURITY_CAP_NOAUDIT)
-		aad(&sa)->info = "optional: no audit";
+	sa.aad->op = OP_CAPABLE;
+	sa.aad->error = error;
 
 	if (likely(!error)) {
 		/* test if auditing is being forced */
@@ -105,7 +104,7 @@ static int audit_caps(struct aa_profile *profile, int cap, int audit,
 	}
 	put_cpu_var(audit_cache);
 
-	return aa_audit(type, profile, &sa, audit_cb);
+	return aa_audit(type, profile, GFP_ATOMIC, &sa, audit_cb);
 }
 
 /**
@@ -134,10 +133,11 @@ int aa_capable(struct aa_profile *profile, int cap, int audit)
 {
 	int error = profile_capable(profile, cap);
 
-	if (audit == SECURITY_CAP_NOAUDIT) {
-		if (!COMPLAIN_MODE(profile))
-			return error;
+	if (!audit) {
+		if (COMPLAIN_MODE(profile))
+			return complain_error(error);
+		return error;
 	}
 
-	return audit_caps(profile, cap, audit, error);
+	return audit_caps(profile, cap, error);
 }

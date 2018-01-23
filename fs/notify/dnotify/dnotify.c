@@ -52,7 +52,7 @@ struct dnotify_mark {
  */
 static void dnotify_recalc_inode_mask(struct fsnotify_mark *fsn_mark)
 {
-	__u32 new_mask = 0;
+	__u32 new_mask, old_mask;
 	struct dnotify_struct *dn;
 	struct dnotify_mark *dn_mark  = container_of(fsn_mark,
 						     struct dnotify_mark,
@@ -60,13 +60,17 @@ static void dnotify_recalc_inode_mask(struct fsnotify_mark *fsn_mark)
 
 	assert_spin_locked(&fsn_mark->lock);
 
+	old_mask = fsn_mark->mask;
+	new_mask = 0;
 	for (dn = dn_mark->dn; dn != NULL; dn = dn->dn_next)
 		new_mask |= (dn->dn_mask & ~FS_DN_MULTISHOT);
-	if (fsn_mark->mask == new_mask)
-		return;
-	fsn_mark->mask = new_mask;
+	fsnotify_set_mark_mask_locked(fsn_mark, new_mask);
 
-	fsnotify_recalc_mask(fsn_mark->connector);
+	if (old_mask == new_mask)
+		return;
+
+	if (fsn_mark->i.inode)
+		fsnotify_recalc_inode_mask(fsn_mark->i.inode);
 }
 
 /*
@@ -81,9 +85,8 @@ static int dnotify_handle_event(struct fsnotify_group *group,
 				struct inode *inode,
 				struct fsnotify_mark *inode_mark,
 				struct fsnotify_mark *vfsmount_mark,
-				u32 mask, const void *data, int data_type,
-				const unsigned char *file_name, u32 cookie,
-				struct fsnotify_iter_info *iter_info)
+				u32 mask, void *data, int data_type,
+				const unsigned char *file_name, u32 cookie)
 {
 	struct dnotify_mark *dn_mark;
 	struct dnotify_struct *dn;
@@ -135,7 +138,6 @@ static void dnotify_free_mark(struct fsnotify_mark *fsn_mark)
 
 static struct fsnotify_ops dnotify_fsnotify_ops = {
 	.handle_event = dnotify_handle_event,
-	.free_mark = dnotify_free_mark,
 };
 
 /*
@@ -152,13 +154,12 @@ void dnotify_flush(struct file *filp, fl_owner_t id)
 	struct dnotify_struct *dn;
 	struct dnotify_struct **prev;
 	struct inode *inode;
-	bool free = false;
 
 	inode = file_inode(filp);
 	if (!S_ISDIR(inode->i_mode))
 		return;
 
-	fsn_mark = fsnotify_find_mark(&inode->i_fsnotify_marks, dnotify_group);
+	fsn_mark = fsnotify_find_inode_mark(dnotify_group, inode);
 	if (!fsn_mark)
 		return;
 	dn_mark = container_of(fsn_mark, struct dnotify_mark, fsn_mark);
@@ -181,15 +182,11 @@ void dnotify_flush(struct file *filp, fl_owner_t id)
 
 	/* nothing else could have found us thanks to the dnotify_groups
 	   mark_mutex */
-	if (dn_mark->dn == NULL) {
-		fsnotify_detach_mark(fsn_mark);
-		free = true;
-	}
+	if (dn_mark->dn == NULL)
+		fsnotify_destroy_mark_locked(fsn_mark, dnotify_group);
 
 	mutex_unlock(&dnotify_group->mark_mutex);
 
-	if (free)
-		fsnotify_free_mark(fsn_mark);
 	fsnotify_put_mark(fsn_mark);
 }
 
@@ -306,7 +303,7 @@ int fcntl_dirnotify(int fd, struct file *filp, unsigned long arg)
 
 	/* set up the new_fsn_mark and new_dn_mark */
 	new_fsn_mark = &new_dn_mark->fsn_mark;
-	fsnotify_init_mark(new_fsn_mark, dnotify_group);
+	fsnotify_init_mark(new_fsn_mark, dnotify_free_mark);
 	new_fsn_mark->mask = mask;
 	new_dn_mark->dn = NULL;
 
@@ -314,12 +311,13 @@ int fcntl_dirnotify(int fd, struct file *filp, unsigned long arg)
 	mutex_lock(&dnotify_group->mark_mutex);
 
 	/* add the new_fsn_mark or find an old one. */
-	fsn_mark = fsnotify_find_mark(&inode->i_fsnotify_marks, dnotify_group);
+	fsn_mark = fsnotify_find_inode_mark(dnotify_group, inode);
 	if (fsn_mark) {
 		dn_mark = container_of(fsn_mark, struct dnotify_mark, fsn_mark);
 		spin_lock(&fsn_mark->lock);
 	} else {
-		fsnotify_add_mark_locked(new_fsn_mark, inode, NULL, 0);
+		fsnotify_add_mark_locked(new_fsn_mark, dnotify_group, inode,
+					 NULL, 0);
 		spin_lock(&new_fsn_mark->lock);
 		fsn_mark = new_fsn_mark;
 		dn_mark = new_dn_mark;
@@ -348,7 +346,13 @@ int fcntl_dirnotify(int fd, struct file *filp, unsigned long arg)
 		goto out;
 	}
 
-	__f_setown(filp, task_pid(current), PIDTYPE_PID, 0);
+	error = __f_setown(filp, task_pid(current), PIDTYPE_PID, 0);
+	if (error) {
+		/* if we added, we must shoot */
+		if (dn_mark == new_dn_mark)
+			destroy = 1;
+		goto out;
+	}
 
 	error = attach_dn(dn, dn_mark, id, fd, filp, mask);
 	/* !error means that we attached the dn to the dn_mark, so don't free it */
@@ -364,10 +368,9 @@ out:
 	spin_unlock(&fsn_mark->lock);
 
 	if (destroy)
-		fsnotify_detach_mark(fsn_mark);
+		fsnotify_destroy_mark_locked(fsn_mark, dnotify_group);
+
 	mutex_unlock(&dnotify_group->mark_mutex);
-	if (destroy)
-		fsnotify_free_mark(fsn_mark);
 	fsnotify_put_mark(fsn_mark);
 out_err:
 	if (new_fsn_mark)

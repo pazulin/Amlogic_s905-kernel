@@ -7,7 +7,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2017, Intel Corp.
+ * Copyright (C) 2000 - 2013, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -55,8 +55,7 @@ typedef enum {
 	OSL_GLOBAL_LOCK_HANDLER,
 	OSL_NOTIFY_HANDLER,
 	OSL_GPE_HANDLER,
-	OSL_DEBUGGER_MAIN_THREAD,
-	OSL_DEBUGGER_EXEC_THREAD,
+	OSL_DEBUGGER_THREAD,
 	OSL_EC_POLL_HANDLER,
 	OSL_EC_BURST_HANDLER
 } acpi_execute_type;
@@ -96,7 +95,7 @@ acpi_physical_address acpi_os_get_root_pointer(void);
 #ifndef ACPI_USE_ALTERNATE_PROTOTYPE_acpi_os_predefined_override
 acpi_status
 acpi_os_predefined_override(const struct acpi_predefined_names *init_val,
-			    acpi_string *new_val);
+			    acpi_string * new_val);
 #endif
 
 #ifndef ACPI_USE_ALTERNATE_PROTOTYPE_acpi_os_table_override
@@ -108,7 +107,7 @@ acpi_os_table_override(struct acpi_table_header *existing_table,
 #ifndef ACPI_USE_ALTERNATE_PROTOTYPE_acpi_os_physical_table_override
 acpi_status
 acpi_os_physical_table_override(struct acpi_table_header *existing_table,
-				acpi_physical_address *new_address,
+				acpi_physical_address * new_address,
 				u32 *new_table_length);
 #endif
 
@@ -203,7 +202,7 @@ void acpi_os_unmap_memory(void *logical_address, acpi_size size);
 #ifndef ACPI_USE_ALTERNATE_PROTOTYPE_acpi_os_get_physical_address
 acpi_status
 acpi_os_get_physical_address(void *logical_address,
-			     acpi_physical_address *physical_address);
+			     acpi_physical_address * physical_address);
 #endif
 
 /*
@@ -333,10 +332,6 @@ u64 acpi_os_get_timer(void);
 acpi_status acpi_os_signal(u32 function, void *info);
 #endif
 
-#ifndef ACPI_USE_ALTERNATE_PROTOTYPE_acpi_os_enter_sleep
-acpi_status acpi_os_enter_sleep(u8 sleep_state, u32 rega_value, u32 regb_value);
-#endif
-
 /*
  * Debug print routines
  */
@@ -353,32 +348,10 @@ void acpi_os_redirect_output(void *destination);
 #endif
 
 /*
- * Debug IO
+ * Debug input
  */
 #ifndef ACPI_USE_ALTERNATE_PROTOTYPE_acpi_os_get_line
 acpi_status acpi_os_get_line(char *buffer, u32 buffer_length, u32 *bytes_read);
-#endif
-
-#ifndef ACPI_USE_ALTERNATE_PROTOTYPE_acpi_os_initialize_debugger
-acpi_status acpi_os_initialize_debugger(void);
-#endif
-
-#ifndef ACPI_USE_ALTERNATE_PROTOTYPE_acpi_os_terminate_debugger
-void acpi_os_terminate_debugger(void);
-#endif
-
-#ifndef ACPI_USE_ALTERNATE_PROTOTYPE_acpi_os_wait_command_ready
-acpi_status acpi_os_wait_command_ready(void);
-#endif
-
-#ifndef ACPI_USE_ALTERNATE_PROTOTYPE_acpi_os_notify_command_complete
-acpi_status acpi_os_notify_command_complete(void);
-#endif
-
-#ifndef ACPI_USE_ALTERNATE_PROTOTYPE_acpi_os_trace_point
-void
-acpi_os_trace_point(acpi_trace_event_type type,
-		    u8 begin, u8 *aml, char *pathname);
 #endif
 
 /*
@@ -389,14 +362,14 @@ acpi_status
 acpi_os_get_table_by_name(char *signature,
 			  u32 instance,
 			  struct acpi_table_header **table,
-			  acpi_physical_address *address);
+			  acpi_physical_address * address);
 #endif
 
 #ifndef ACPI_USE_ALTERNATE_PROTOTYPE_acpi_os_get_table_by_index
 acpi_status
 acpi_os_get_table_by_index(u32 index,
 			   struct acpi_table_header **table,
-			   u32 *instance, acpi_physical_address *address);
+			   u32 *instance, acpi_physical_address * address);
 #endif
 
 #ifndef ACPI_USE_ALTERNATE_PROTOTYPE_acpi_os_get_table_by_address

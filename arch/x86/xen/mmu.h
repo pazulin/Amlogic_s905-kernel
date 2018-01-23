@@ -5,7 +5,6 @@
 
 enum pt_level {
 	PT_PGD,
-	PT_P4D,
 	PT_PUD,
 	PT_PMD,
 	PT_PTE

@@ -16,8 +16,6 @@
 #include <linux/stddef.h>
 #include <linux/kmod.h>
 #include <linux/spinlock.h>
-#include <linux/sched/signal.h>
-
 #define MIDIBUF_C
 
 #include "sound_config.h"

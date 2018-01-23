@@ -98,13 +98,11 @@ static void record_compound(struct string_list **keyw,
 %token VOID_KEYW
 %token VOLATILE_KEYW
 %token TYPEOF_KEYW
-%token VA_LIST_KEYW
 
 %token EXPORT_SYMBOL_KEYW
 
 %token ASM_PHRASE
 %token ATTRIBUTE_PHRASE
-%token TYPEOF_PHRASE
 %token BRACE_PHRASE
 %token BRACKET_PHRASE
 %token EXPRESSION_PHRASE
@@ -222,8 +220,8 @@ storage_class_specifier:
 type_specifier:
 	simple_type_specifier
 	| cvar_qualifier
-	| TYPEOF_KEYW '(' parameter_declaration ')'
-	| TYPEOF_PHRASE
+	| TYPEOF_KEYW '(' decl_specifier_seq '*' ')'
+	| TYPEOF_KEYW '(' decl_specifier_seq ')'
 
 	/* References to s/u/e's defined elsewhere.  Rearrange things
 	   so that it is easier to expand the definition fully later.  */
@@ -262,7 +260,6 @@ simple_type_specifier:
 	| DOUBLE_KEYW
 	| VOID_KEYW
 	| BOOL_KEYW
-	| VA_LIST_KEYW
 	| TYPE			{ (*$1)->tag = SYM_TYPEDEF; $$ = $1; }
 	;
 
@@ -305,15 +302,6 @@ direct_declarator:
 		    $$ = $1;
 		  }
 		}
-	| TYPE
-		{ if (current_name != NULL) {
-		    error_with_pos("unexpected second declaration name");
-		    YYERROR;
-		  } else {
-		    current_name = (*$1)->string;
-		    $$ = $1;
-		  }
-		}
 	| direct_declarator '(' parameter_declaration_clause ')'
 		{ $$ = $4; }
 	| direct_declarator '(' error ')'
@@ -321,6 +309,8 @@ direct_declarator:
 	| direct_declarator BRACKET_PHRASE
 		{ $$ = $2; }
 	| '(' declarator ')'
+		{ $$ = $3; }
+	| '(' error ')'
 		{ $$ = $3; }
 	;
 

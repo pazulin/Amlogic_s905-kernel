@@ -23,10 +23,10 @@
 #include <linux/parport.h>
 #include <linux/delay.h>
 #include <linux/slab.h>
-#include <linux/sched/signal.h>
+#include <linux/sched.h>
 
 #include <asm/current.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 #undef DEBUG
 

@@ -69,10 +69,10 @@ static ssize_t posix_clock_read(struct file *fp, char __user *buf,
 static unsigned int posix_clock_poll(struct file *fp, poll_table *wait)
 {
 	struct posix_clock *clk = get_posix_clock(fp);
-	unsigned int result = 0;
+	int result = 0;
 
 	if (!clk)
-		return POLLERR;
+		return -ENODEV;
 
 	if (clk->ops.poll)
 		result = clk->ops.poll(clk, fp, wait);
@@ -297,7 +297,7 @@ out:
 	return err;
 }
 
-static int pc_clock_gettime(clockid_t id, struct timespec64 *ts)
+static int pc_clock_gettime(clockid_t id, struct timespec *ts)
 {
 	struct posix_clock_desc cd;
 	int err;
@@ -316,7 +316,7 @@ static int pc_clock_gettime(clockid_t id, struct timespec64 *ts)
 	return err;
 }
 
-static int pc_clock_getres(clockid_t id, struct timespec64 *ts)
+static int pc_clock_getres(clockid_t id, struct timespec *ts)
 {
 	struct posix_clock_desc cd;
 	int err;
@@ -335,7 +335,7 @@ static int pc_clock_getres(clockid_t id, struct timespec64 *ts)
 	return err;
 }
 
-static int pc_clock_settime(clockid_t id, const struct timespec64 *ts)
+static int pc_clock_settime(clockid_t id, const struct timespec *ts)
 {
 	struct posix_clock_desc cd;
 	int err;
@@ -399,7 +399,7 @@ static int pc_timer_delete(struct k_itimer *kit)
 	return err;
 }
 
-static void pc_timer_gettime(struct k_itimer *kit, struct itimerspec64 *ts)
+static void pc_timer_gettime(struct k_itimer *kit, struct itimerspec *ts)
 {
 	clockid_t id = kit->it_clock;
 	struct posix_clock_desc cd;
@@ -414,7 +414,7 @@ static void pc_timer_gettime(struct k_itimer *kit, struct itimerspec64 *ts)
 }
 
 static int pc_timer_settime(struct k_itimer *kit, int flags,
-			    struct itimerspec64 *ts, struct itimerspec64 *old)
+			    struct itimerspec *ts, struct itimerspec *old)
 {
 	clockid_t id = kit->it_clock;
 	struct posix_clock_desc cd;

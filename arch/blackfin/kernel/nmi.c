@@ -17,7 +17,6 @@
 #include <linux/nmi.h>
 #include <linux/smp.h>
 #include <linux/timer.h>
-#include <linux/sched/debug.h>
 #include <asm/blackfin.h>
 #include <linux/atomic.h>
 #include <asm/cacheflush.h>

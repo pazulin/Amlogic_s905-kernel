@@ -143,6 +143,7 @@ static int pm80x_onkey_remove(struct platform_device *pdev)
 {
 	struct pm80x_onkey_info *info = platform_get_drvdata(pdev);
 
+	device_init_wakeup(&pdev->dev, 0);
 	pm80x_free_irq(info->pm80x, info->irq, info);
 	input_unregister_device(info->idev);
 	kfree(info);
@@ -152,6 +153,7 @@ static int pm80x_onkey_remove(struct platform_device *pdev)
 static struct platform_driver pm80x_onkey_driver = {
 	.driver = {
 		   .name = "88pm80x-onkey",
+		   .owner = THIS_MODULE,
 		   .pm = &pm80x_onkey_pm_ops,
 		   },
 	.probe = pm80x_onkey_probe,

@@ -8,7 +8,8 @@
 #define pr_fmt(fmt) "Nomadik SRC clocks: " fmt
 
 #include <linux/bitops.h>
-#include <linux/slab.h>
+#include <linux/clk.h>
+#include <linux/clkdev.h>
 #include <linux/err.h>
 #include <linux/io.h>
 #include <linux/clk-provider.h>
@@ -253,11 +254,11 @@ static const struct clk_ops pll_clk_ops = {
 	.recalc_rate = pll_clk_recalc_rate,
 };
 
-static struct clk_hw * __init
+static struct clk * __init
 pll_clk_register(struct device *dev, const char *name,
 		 const char *parent_name, u32 id)
 {
-	int ret;
+	struct clk *clk;
 	struct clk_pll *pll;
 	struct clk_init_data init;
 
@@ -267,8 +268,10 @@ pll_clk_register(struct device *dev, const char *name,
 	}
 
 	pll = kzalloc(sizeof(*pll), GFP_KERNEL);
-	if (!pll)
+	if (!pll) {
+		pr_err("%s: could not allocate PLL clk\n", __func__);
 		return ERR_PTR(-ENOMEM);
+	}
 
 	init.name = name;
 	init.ops = &pll_clk_ops;
@@ -279,13 +282,11 @@ pll_clk_register(struct device *dev, const char *name,
 
 	pr_debug("register PLL1 clock \"%s\"\n", name);
 
-	ret = clk_hw_register(dev, &pll->hw);
-	if (ret) {
+	clk = clk_register(dev, &pll->hw);
+	if (IS_ERR(clk))
 		kfree(pll);
-		return ERR_PTR(ret);
-	}
 
-	return &pll->hw;
+	return clk;
 }
 
 /*
@@ -345,18 +346,20 @@ static const struct clk_ops src_clk_ops = {
 	.recalc_rate = src_clk_recalc_rate,
 };
 
-static struct clk_hw * __init
+static struct clk * __init
 src_clk_register(struct device *dev, const char *name,
 		 const char *parent_name, u8 id)
 {
-	int ret;
+	struct clk *clk;
 	struct clk_src *sclk;
 	struct clk_init_data init;
 
 	sclk = kzalloc(sizeof(*sclk), GFP_KERNEL);
-	if (!sclk)
+	if (!sclk) {
+		pr_err("could not allocate SRC clock %s\n",
+			name);
 		return ERR_PTR(-ENOMEM);
-
+	}
 	init.name = name;
 	init.ops = &src_clk_ops;
 	/* Do not force-disable the static SDRAM controller */
@@ -374,13 +377,11 @@ src_clk_register(struct device *dev, const char *name,
 	pr_debug("register clock \"%s\" ID: %d group: %d bits: %08x\n",
 		 name, id, sclk->group1, sclk->clkbit);
 
-	ret = clk_hw_register(dev, &sclk->hw);
-	if (ret) {
+	clk = clk_register(dev, &sclk->hw);
+	if (IS_ERR(clk))
 		kfree(sclk);
-		return ERR_PTR(ret);
-	}
 
-	return &sclk->hw;
+	return clk;
 }
 
 #ifdef CONFIG_DEBUG_FS
@@ -463,7 +464,7 @@ static int nomadik_src_clk_show(struct seq_file *s, void *what)
 	u32 src_pckensr0 = readl(src_base + SRC_PCKENSR0);
 	u32 src_pckensr1 = readl(src_base + SRC_PCKENSR1);
 
-	seq_puts(s, "Clock:      Boot:   Now:    Request: ASKED:\n");
+	seq_printf(s, "Clock:      Boot:   Now:    Request: ASKED:\n");
 	for (i = 0; i < ARRAY_SIZE(src_clk_names); i++) {
 		u32 pcksrb = (i < 0x20) ? src_pcksr0_boot : src_pcksr1_boot;
 		u32 pcksr = (i < 0x20) ? src_pcksr0 : src_pcksr1;
@@ -502,13 +503,14 @@ static int __init nomadik_src_clk_init_debugfs(void)
 			    NULL, NULL, &nomadik_src_clk_debugfs_ops);
 	return 0;
 }
-device_initcall(nomadik_src_clk_init_debugfs);
+
+module_init(nomadik_src_clk_init_debugfs);
 
 #endif
 
 static void __init of_nomadik_pll_setup(struct device_node *np)
 {
-	struct clk_hw *hw;
+	struct clk *clk = ERR_PTR(-EINVAL);
 	const char *clk_name = np->name;
 	const char *parent_name;
 	u32 pll_id;
@@ -522,16 +524,16 @@ static void __init of_nomadik_pll_setup(struct device_node *np)
 		return;
 	}
 	parent_name = of_clk_get_parent_name(np, 0);
-	hw = pll_clk_register(NULL, clk_name, parent_name, pll_id);
-	if (!IS_ERR(hw))
-		of_clk_add_hw_provider(np, of_clk_hw_simple_get, hw);
+	clk = pll_clk_register(NULL, clk_name, parent_name, pll_id);
+	if (!IS_ERR(clk))
+		of_clk_add_provider(np, of_clk_src_simple_get, clk);
 }
 CLK_OF_DECLARE(nomadik_pll_clk,
 	"st,nomadik-pll-clock", of_nomadik_pll_setup);
 
 static void __init of_nomadik_hclk_setup(struct device_node *np)
 {
-	struct clk_hw *hw;
+	struct clk *clk = ERR_PTR(-EINVAL);
 	const char *clk_name = np->name;
 	const char *parent_name;
 
@@ -542,20 +544,20 @@ static void __init of_nomadik_hclk_setup(struct device_node *np)
 	/*
 	 * The HCLK divides PLL1 with 1 (passthru), 2, 3 or 4.
 	 */
-	hw = clk_hw_register_divider(NULL, clk_name, parent_name,
+	clk = clk_register_divider(NULL, clk_name, parent_name,
 			   0, src_base + SRC_CR,
 			   13, 2,
 			   CLK_DIVIDER_ONE_BASED | CLK_DIVIDER_ALLOW_ZERO,
 			   &src_lock);
-	if (!IS_ERR(hw))
-		of_clk_add_hw_provider(np, of_clk_hw_simple_get, hw);
+	if (!IS_ERR(clk))
+		of_clk_add_provider(np, of_clk_src_simple_get, clk);
 }
 CLK_OF_DECLARE(nomadik_hclk_clk,
 	"st,nomadik-hclk-clock", of_nomadik_hclk_setup);
 
 static void __init of_nomadik_src_clk_setup(struct device_node *np)
 {
-	struct clk_hw *hw;
+	struct clk *clk = ERR_PTR(-EINVAL);
 	const char *clk_name = np->name;
 	const char *parent_name;
 	u32 clk_id;
@@ -569,9 +571,9 @@ static void __init of_nomadik_src_clk_setup(struct device_node *np)
 		return;
 	}
 	parent_name = of_clk_get_parent_name(np, 0);
-	hw = src_clk_register(NULL, clk_name, parent_name, clk_id);
-	if (!IS_ERR(hw))
-		of_clk_add_hw_provider(np, of_clk_hw_simple_get, hw);
+	clk = src_clk_register(NULL, clk_name, parent_name, clk_id);
+	if (!IS_ERR(clk))
+		of_clk_add_provider(np, of_clk_src_simple_get, clk);
 }
 CLK_OF_DECLARE(nomadik_src_clk,
 	"st,nomadik-src-clock", of_nomadik_src_clk_setup);

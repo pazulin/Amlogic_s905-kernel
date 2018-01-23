@@ -16,7 +16,6 @@
 
 #include <linux/fs.h>
 #include <linux/sound.h>
-#include <linux/sched/signal.h>
 
 #include "os.h"
 #include "soundvers.h"
@@ -123,6 +122,10 @@ static inline int translate_mode(struct file *file)
 
 #include "sound_calls.h"
 #include "dev_table.h"
+
+#ifndef DEB
+#define DEB(x)
+#endif
 
 #ifndef DDB
 #define DDB(x) do {} while (0)

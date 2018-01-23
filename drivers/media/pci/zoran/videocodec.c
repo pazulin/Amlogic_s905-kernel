@@ -20,6 +20,10 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *
  * ------------------------------------------------------------------------
  */
 
@@ -36,7 +40,7 @@
 #ifdef CONFIG_PROC_FS
 #include <linux/proc_fs.h>
 #include <linux/seq_file.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #endif
 
 #include "videocodec.h"
@@ -112,9 +116,8 @@ videocodec_attach (struct videocodec_master *master)
 				goto out_module_put;
 			}
 
-			res = strlen(codec->name);
-			snprintf(codec->name + res, sizeof(codec->name) - res,
-				 "[%d]", h->attached);
+			snprintf(codec->name, sizeof(codec->name),
+				 "%s[%d]", codec->name, h->attached);
 			codec->master_data = master;
 			res = codec->setup(codec);
 			if (res == 0) {

@@ -4,7 +4,6 @@
  */
 
 #include <linux/sched.h>
-#include <linux/sched/task_stack.h>
 #include <linux/kernel.h>
 #include <linux/capability.h>
 #include <linux/errno.h>
@@ -17,7 +16,6 @@
 #include <linux/syscalls.h>
 #include <linux/bitmap.h>
 #include <asm/syscalls.h>
-#include <asm/desc.h>
 
 /*
  * this changes the io permissions bitmap in the current task.
@@ -47,16 +45,6 @@ asmlinkage long sys_ioperm(unsigned long from, unsigned long num, int turn_on)
 		memset(bitmap, 0xff, IO_BITMAP_BYTES);
 		t->io_bitmap_ptr = bitmap;
 		set_thread_flag(TIF_IO_BITMAP);
-
-		/*
-		 * Now that we have an IO bitmap, we need our TSS limit to be
-		 * correct.  It's fine if we are preempted after doing this:
-		 * with TIF_IO_BITMAP set, context switches will keep our TSS
-		 * limit correct.
-		 */
-		preempt_disable();
-		refresh_tss_limit();
-		preempt_enable();
 	}
 
 	/*
@@ -66,7 +54,7 @@ asmlinkage long sys_ioperm(unsigned long from, unsigned long num, int turn_on)
 	 * because the ->io_bitmap_max value must match the bitmap
 	 * contents:
 	 */
-	tss = &per_cpu(cpu_tss, get_cpu());
+	tss = &per_cpu(init_tss, get_cpu());
 
 	if (turn_on)
 		bitmap_clear(t->io_bitmap_ptr, from, num);
@@ -108,13 +96,8 @@ asmlinkage long sys_ioperm(unsigned long from, unsigned long num, int turn_on)
 SYSCALL_DEFINE1(iopl, unsigned int, level)
 {
 	struct pt_regs *regs = current_pt_regs();
+	unsigned int old = (regs->flags >> 12) & 3;
 	struct thread_struct *t = &current->thread;
-
-	/*
-	 * Careful: the IOPL bits in regs->flags are undefined under Xen PV
-	 * and changing them has no effect.
-	 */
-	unsigned int old = t->iopl >> X86_EFLAGS_IOPL_BIT;
 
 	if (level > 3)
 		return -EINVAL;
@@ -123,9 +106,8 @@ SYSCALL_DEFINE1(iopl, unsigned int, level)
 		if (!capable(CAP_SYS_RAWIO))
 			return -EPERM;
 	}
-	regs->flags = (regs->flags & ~X86_EFLAGS_IOPL) |
-		(level << X86_EFLAGS_IOPL_BIT);
-	t->iopl = level << X86_EFLAGS_IOPL_BIT;
+	regs->flags = (regs->flags & ~X86_EFLAGS_IOPL) | (level << 12);
+	t->iopl = level << 12;
 	set_iopl_mask(t->iopl);
 
 	return 0;

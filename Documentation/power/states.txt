@@ -1,103 +1,62 @@
-System Power Management Sleep States
 
-(C) 2014 Intel Corp., Rafael J. Wysocki <rafael.j.wysocki@intel.com>
-
-The kernel supports up to four system sleep states generically, although three
-of them depend on the platform support code to implement the low-level details
-for each state.
-
-The states are represented by strings that can be read or written to the
-/sys/power/state file.  Those strings may be "mem", "standby", "freeze" and
-"disk", where the last three always represent Power-On Suspend (if supported),
-Suspend-To-Idle and hibernation (Suspend-To-Disk), respectively.
-
-The meaning of the "mem" string is controlled by the /sys/power/mem_sleep file.
-It contains strings representing the available modes of system suspend that may
-be triggered by writing "mem" to /sys/power/state.  These modes are "s2idle"
-(Suspend-To-Idle), "shallow" (Power-On Suspend) and "deep" (Suspend-To-RAM).
-The "s2idle" mode is always available, while the other ones are only available
-if supported by the platform (if not supported, the strings representing them
-are not present in /sys/power/mem_sleep).  The string representing the suspend
-mode to be used subsequently is enclosed in square brackets.  Writing one of
-the other strings present in /sys/power/mem_sleep to it causes the suspend mode
-to be used subsequently to change to the one represented by that string.
-
-Consequently, there are two ways to cause the system to go into the
-Suspend-To-Idle sleep state.  The first one is to write "freeze" directly to
-/sys/power/state.  The second one is to write "s2idle" to /sys/power/mem_sleep
-and then to write "mem" to /sys/power/state.  Similarly, there are two ways
-to cause the system to go into the Power-On Suspend sleep state (the strings to
-write to the control files in that case are "standby" or "shallow" and "mem",
-respectively) if that state is supported by the platform.  In turn, there is
-only one way to cause the system to go into the Suspend-To-RAM state (write
-"deep" into /sys/power/mem_sleep and "mem" into /sys/power/state).
-
-The default suspend mode (ie. the one to be used without writing anything into
-/sys/power/mem_sleep) is either "deep" (if Suspend-To-RAM is supported) or
-"s2idle", but it can be overridden by the value of the "mem_sleep_default"
-parameter in the kernel command line.
-
-The properties of all of the sleep states are described below.
+System Power Management States
 
 
-State:		Suspend-To-Idle
+The kernel supports four power management states generically, though
+one is generic and the other three are dependent on platform support
+code to implement the low-level details for each state.
+This file describes each state, what they are
+commonly called, what ACPI state they map to, and what string to write
+to /sys/power/state to enter that state
+
+state:		Freeze / Low-Power Idle
 ACPI state:	S0
-Label:		"s2idle" ("freeze")
+String:		"freeze"
 
-This state is a generic, pure software, light-weight, system sleep state.
-It allows more energy to be saved relative to runtime idle by freezing user
+This state is a generic, pure software, light-weight, low-power state.
+It allows more energy to be saved relative to idle by freezing user
 space and putting all I/O devices into low-power states (possibly
 lower-power than available at run time), such that the processors can
 spend more time in their idle states.
-
-This state can be used for platforms without Power-On Suspend/Suspend-to-RAM
-support, or it can be used in addition to Suspend-to-RAM to provide reduced
-resume latency.  It is always supported.
+This state can be used for platforms without Standby/Suspend-to-RAM
+support, or it can be used in addition to Suspend-to-RAM (memory sleep)
+to provide reduced resume latency.
 
 
 State:		Standby / Power-On Suspend
 ACPI State:	S1
-Label:		"shallow" ("standby")
+String:		"standby"
 
-This state, if supported, offers moderate, though real, power savings, while
-providing a relatively low-latency transition back to a working system.  No
-operating state is lost (the CPU retains power), so the system easily starts up
+This state offers minimal, though real, power savings, while providing
+a very low-latency transition back to a working system. No operating
+state is lost (the CPU retains power), so the system easily starts up
 again where it left off. 
 
-In addition to freezing user space and putting all I/O devices into low-power
-states, which is done for Suspend-To-Idle too, nonboot CPUs are taken offline
-and all low-level system functions are suspended during transitions into this
-state.  For this reason, it should allow more energy to be saved relative to
-Suspend-To-Idle, but the resume latency will generally be greater than for that
-state.
+We try to put devices in a low-power state equivalent to D1, which
+also offers low power savings, but low resume latency. Not all devices
+support D1, and those that don't are left on. 
 
 
 State:		Suspend-to-RAM
 ACPI State:	S3
-Label:		"deep"
+String:		"mem"
 
-This state, if supported, offers significant power savings as everything in the
-system is put into a low-power state, except for memory, which should be placed
-into the self-refresh mode to retain its contents.  All of the steps carried out
-when entering Power-On Suspend are also carried out during transitions to STR.
-Additional operations may take place depending on the platform capabilities.  In
-particular, on ACPI systems the kernel passes control to the BIOS (platform
-firmware) as the last step during STR transitions and that usually results in
-powering down some more low-level components that aren't directly controlled by
-the kernel.
+This state offers significant power savings as everything in the
+system is put into a low-power state, except for memory, which is
+placed in self-refresh mode to retain its contents. 
 
-System and device state is saved and kept in memory.  All devices are suspended
-and put into low-power states.  In many cases, all peripheral buses lose power
-when entering STR, so devices must be able to handle the transition back to the
-"on" state.
+System and device state is saved and kept in memory. All devices are
+suspended and put into D3. In many cases, all peripheral buses lose
+power when entering STR, so devices must be able to handle the
+transition back to the On state. 
 
-For at least ACPI, STR requires some minimal boot-strapping code to resume the
-system from it.  This may be the case on other platforms too.
+For at least ACPI, STR requires some minimal boot-strapping code to
+resume the system from STR. This may be true on other platforms. 
 
 
 State:		Suspend-to-disk
 ACPI State:	S4
-Label:		"disk"
+String:		"disk"
 
 This state offers the greatest power savings, and can be used even in
 the absence of low-level platform support for power management. This

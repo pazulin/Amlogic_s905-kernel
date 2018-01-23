@@ -24,6 +24,9 @@
 
 #ifndef __ASSEMBLY__
 
+#define get_user_page(vaddr)		__get_free_page(GFP_KERNEL)
+#define free_user_page(page, addr)	free_page(addr)
+
 #define clear_page(page)	memset((page), 0, PAGE_SIZE)
 #define copy_page(to,from)	memcpy((to), (from), PAGE_SIZE)
 
@@ -92,7 +95,7 @@ extern unsigned long memory_end;
 #define	virt_addr_valid(kaddr)	(((void *)(kaddr) >= (void *)PAGE_OFFSET) && \
 				((void *)(kaddr) < (void *)memory_end))
 
-#endif /* !__ASSEMBLY__ */
+#endif /* __ASSEMBLY__ */
 
 #include <asm-generic/memory_model.h>
 #include <asm-generic/getorder.h>

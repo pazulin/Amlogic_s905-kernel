@@ -9,8 +9,7 @@
  * 2 of the License, or (at your option) any later version.
  */
 
-#include <linux/sched/signal.h>
-#include <linux/sched/debug.h>
+#include <linux/sched.h>
 #include <linux/signal.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
@@ -24,7 +23,7 @@
 #include <asm/asm-offsets.h>
 #include <asm/setup.h>
 #include <asm/fpu.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/pgtable.h>
 #include <asm/siginfo.h>
 #include <asm/unaligned.h>
@@ -360,8 +359,13 @@ asmlinkage void memory_access_exception(unsigned long esr0,
 	siginfo_t info;
 
 #ifdef CONFIG_MMU
-	if (fixup_exception(__frame))
+	unsigned long fixup;
+
+	fixup = search_exception_table(__frame->pc);
+	if (fixup) {
+		__frame->pc = fixup;
 		return;
+	}
 #endif
 
 	die_if_kernel("-- Memory Access Exception --\n"

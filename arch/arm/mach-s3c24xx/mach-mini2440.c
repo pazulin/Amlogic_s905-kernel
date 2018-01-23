@@ -23,7 +23,6 @@
 #include <linux/input.h>
 #include <linux/io.h>
 #include <linux/serial_core.h>
-#include <linux/serial_s3c.h>
 #include <linux/dm9000.h>
 #include <linux/platform_data/at24.h>
 #include <linux/platform_device.h>
@@ -38,6 +37,7 @@
 #include <mach/fb.h>
 #include <asm/mach-types.h>
 
+#include <plat/regs-serial.h>
 #include <mach/regs-gpio.h>
 #include <linux/platform_data/leds-s3c24xx.h>
 #include <mach/regs-lcd.h>
@@ -54,6 +54,7 @@
 #include <linux/mtd/partitions.h>
 
 #include <plat/gpio-cfg.h>
+#include <plat/clock.h>
 #include <plat/devs.h>
 #include <plat/cpu.h>
 #include <plat/samsung-time.h>
@@ -287,7 +288,6 @@ static struct s3c2410_platform_nand mini2440_nand_info __initdata = {
 	.nr_sets	= ARRAY_SIZE(mini2440_nand_sets),
 	.sets		= mini2440_nand_sets,
 	.ignore_unset_ecc = 1,
-	.ecc_mode       = NAND_ECC_SOFT,
 };
 
 /* DM9000AEP 10/100 ethernet controller */
@@ -498,28 +498,9 @@ static struct i2c_board_info mini2440_i2c_devs[] __initdata = {
 	},
 };
 
-static struct uda134x_platform_data s3c24xx_uda134x = {
-	.l3 = {
-		.gpio_clk = S3C2410_GPB(4),
-		.gpio_data = S3C2410_GPB(3),
-		.gpio_mode = S3C2410_GPB(2),
-		.use_gpios = 1,
-		.data_hold = 1,
-		.data_setup = 1,
-		.clock_high = 1,
-		.mode_hold = 1,
-		.mode = 1,
-		.mode_setup = 1,
-	},
-	.model = UDA134X_UDA1341,
-};
-
 static struct platform_device uda1340_codec = {
 		.name = "uda134x-codec",
 		.id = -1,
-		.dev = {
-			.platform_data	= &s3c24xx_uda134x,
-		},
 };
 
 static struct platform_device *mini2440_devices[] __initdata = {
@@ -536,7 +517,6 @@ static struct platform_device *mini2440_devices[] __initdata = {
 	&mini2440_button_device,
 	&s3c_device_nand,
 	&s3c_device_sdi,
-	&s3c2440_device_dma,
 	&s3c_device_iis,
 	&uda1340_codec,
 	&mini2440_audio,
@@ -545,14 +525,9 @@ static struct platform_device *mini2440_devices[] __initdata = {
 static void __init mini2440_map_io(void)
 {
 	s3c24xx_init_io(mini2440_iodesc, ARRAY_SIZE(mini2440_iodesc));
+	s3c24xx_init_clocks(12000000);
 	s3c24xx_init_uarts(mini2440_uartcfgs, ARRAY_SIZE(mini2440_uartcfgs));
 	samsung_set_timer_source(SAMSUNG_PWM3, SAMSUNG_PWM4);
-}
-
-static void __init mini2440_init_time(void)
-{
-	s3c2440_init_clocks(12000000);
-	samsung_timer_init();
 }
 
 /*
@@ -715,5 +690,6 @@ MACHINE_START(MINI2440, "MINI2440")
 	.map_io		= mini2440_map_io,
 	.init_machine	= mini2440_init,
 	.init_irq	= s3c2440_init_irq,
-	.init_time	= mini2440_init_time,
+	.init_time	= samsung_timer_init,
+	.restart	= s3c244x_restart,
 MACHINE_END

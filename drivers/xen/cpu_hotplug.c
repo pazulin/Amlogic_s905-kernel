@@ -11,20 +11,15 @@
 static void enable_hotplug_cpu(int cpu)
 {
 	if (!cpu_present(cpu))
-		xen_arch_register_cpu(cpu);
+		arch_register_cpu(cpu);
 
 	set_cpu_present(cpu, true);
 }
 
 static void disable_hotplug_cpu(int cpu)
 {
-	if (cpu_online(cpu)) {
-		lock_device_hotplug();
-		device_offline(get_cpu_device(cpu));
-		unlock_device_hotplug();
-	}
 	if (cpu_present(cpu))
-		xen_arch_unregister_cpu(cpu);
+		arch_unregister_cpu(cpu);
 
 	set_cpu_present(cpu, false);
 }
@@ -60,6 +55,7 @@ static void vcpu_hotplug(unsigned int cpu)
 		enable_hotplug_cpu(cpu);
 		break;
 	case 0:
+		(void)cpu_down(cpu);
 		disable_hotplug_cpu(cpu);
 		break;
 	default:
@@ -68,12 +64,13 @@ static void vcpu_hotplug(unsigned int cpu)
 }
 
 static void handle_vcpu_hotplug_event(struct xenbus_watch *watch,
-				      const char *path, const char *token)
+					const char **vec, unsigned int len)
 {
 	unsigned int cpu;
 	char *cpustr;
+	const char *node = vec[XS_WATCH_PATH];
 
-	cpustr = strstr(path, "cpu/");
+	cpustr = strstr(node, "cpu/");
 	if (cpustr != NULL) {
 		sscanf(cpustr, "cpu/%u", &cpu);
 		vcpu_hotplug(cpu);
@@ -105,11 +102,7 @@ static int __init setup_vcpu_hotplug_event(void)
 	static struct notifier_block xsn_cpu = {
 		.notifier_call = setup_cpu_watcher };
 
-#ifdef CONFIG_X86
-	if (!xen_pv_domain() && !xen_pvh_domain())
-#else
-	if (!xen_domain())
-#endif
+	if (!xen_pv_domain())
 		return -ENODEV;
 
 	register_xenstore_notifier(&xsn_cpu);

@@ -293,7 +293,6 @@ static ssize_t show_state_##_name(struct cpuidle_state *state, \
 }
 
 define_show_state_function(exit_latency)
-define_show_state_function(target_residency)
 define_show_state_function(power_usage)
 define_show_state_ull_function(usage)
 define_show_state_ull_function(time)
@@ -305,7 +304,6 @@ define_store_state_ull_function(disable)
 define_one_state_ro(name, show_state_name);
 define_one_state_ro(desc, show_state_desc);
 define_one_state_ro(latency, show_state_exit_latency);
-define_one_state_ro(residency, show_state_target_residency);
 define_one_state_ro(power, show_state_power_usage);
 define_one_state_ro(usage, show_state_usage);
 define_one_state_ro(time, show_state_time);
@@ -315,7 +313,6 @@ static struct attribute *cpuidle_state_default_attrs[] = {
 	&attr_name.attr,
 	&attr_desc.attr,
 	&attr_latency.attr,
-	&attr_residency.attr,
 	&attr_power.attr,
 	&attr_usage.attr,
 	&attr_time.attr,
@@ -401,12 +398,10 @@ static int cpuidle_add_state_sysfs(struct cpuidle_device *device)
 	struct cpuidle_driver *drv = cpuidle_get_cpu_driver(device);
 
 	/* state statistics */
-	for (i = 0; i < drv->state_count; i++) {
+	for (i = 0; i < device->state_count; i++) {
 		kobj = kzalloc(sizeof(struct cpuidle_state_kobj), GFP_KERNEL);
-		if (!kobj) {
-			ret = -ENOMEM;
+		if (!kobj)
 			goto error_state;
-		}
 		kobj->state = &drv->states[i];
 		kobj->state_usage = &device->states_usage[i];
 		init_completion(&kobj->kobj_unregister);
@@ -435,10 +430,9 @@ error_state:
  */
 static void cpuidle_remove_state_sysfs(struct cpuidle_device *device)
 {
-	struct cpuidle_driver *drv = cpuidle_get_cpu_driver(device);
 	int i;
 
-	for (i = 0; i < drv->state_count; i++)
+	for (i = 0; i < device->state_count; i++)
 		cpuidle_free_state_kobj(device, i);
 }
 
@@ -448,7 +442,7 @@ static void cpuidle_remove_state_sysfs(struct cpuidle_device *device)
 
 #define define_one_driver_ro(_name, show)                       \
 	static struct cpuidle_driver_attr attr_driver_##_name = \
-		__ATTR(_name, 0444, show, NULL)
+		__ATTR(_name, 0644, show, NULL)
 
 struct cpuidle_driver_kobj {
 	struct cpuidle_driver *drv;
@@ -614,18 +608,6 @@ int cpuidle_add_sysfs(struct cpuidle_device *dev)
 	struct cpuidle_device_kobj *kdev;
 	struct device *cpu_dev = get_cpu_device((unsigned long)dev->cpu);
 	int error;
-
-	/*
-	 * Return if cpu_device is not setup for this CPU.
-	 *
-	 * This could happen if the arch did not set up cpu_device
-	 * since this CPU is not in cpu_present mask and the
-	 * driver did not send a correct CPU mask during registration.
-	 * Without this check we would end up passing bogus
-	 * value for &cpu_dev->kobj in kobject_init_and_add()
-	 */
-	if (!cpu_dev)
-		return -ENODEV;
 
 	kdev = kzalloc(sizeof(*kdev), GFP_KERNEL);
 	if (!kdev)

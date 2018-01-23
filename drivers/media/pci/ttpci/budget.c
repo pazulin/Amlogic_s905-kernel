@@ -24,11 +24,14 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * To obtain the license, point your browser to
- * http://www.gnu.org/copyleft/gpl.html
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+ * Or, point your browser to http://www.gnu.org/copyleft/gpl.html
  *
  *
- * the project's page is at https://linuxtv.org
+ * the project's page is at http://www.linuxtv.org/ 
  */
 
 #include "budget.h"
@@ -129,8 +132,7 @@ static int SendDiSEqCMsg (struct budget *budget, int len, u8 *msg, unsigned long
  *   Voltage must be set here.
  *   GPIO 1: LNBP EN, GPIO 2: LNBP VSEL
  */
-static int SetVoltage_Activy(struct budget *budget,
-			     enum fe_sec_voltage voltage)
+static int SetVoltage_Activy (struct budget *budget, fe_sec_voltage_t voltage)
 {
 	struct saa7146_dev *dev=budget->dev;
 
@@ -155,16 +157,14 @@ static int SetVoltage_Activy(struct budget *budget,
 	return 0;
 }
 
-static int siemens_budget_set_voltage(struct dvb_frontend *fe,
-				      enum fe_sec_voltage voltage)
+static int siemens_budget_set_voltage(struct dvb_frontend* fe, fe_sec_voltage_t voltage)
 {
 	struct budget* budget = (struct budget*) fe->dvb->priv;
 
 	return SetVoltage_Activy (budget, voltage);
 }
 
-static int budget_set_tone(struct dvb_frontend *fe,
-			   enum fe_sec_tone_mode tone)
+static int budget_set_tone(struct dvb_frontend* fe, fe_sec_tone_mode_t tone)
 {
 	struct budget* budget = (struct budget*) fe->dvb->priv;
 
@@ -193,8 +193,7 @@ static int budget_diseqc_send_master_cmd(struct dvb_frontend* fe, struct dvb_dis
 	return 0;
 }
 
-static int budget_diseqc_send_burst(struct dvb_frontend *fe,
-				    enum fe_sec_mini_cmd minicmd)
+static int budget_diseqc_send_burst(struct dvb_frontend* fe, fe_sec_mini_cmd_t minicmd)
 {
 	struct budget* budget = (struct budget*) fe->dvb->priv;
 
@@ -397,7 +396,7 @@ static struct tda10086_config tda10086_config = {
 	.xtal_freq = TDA10086_XTAL_16M,
 };
 
-static const struct stv0299_config alps_bsru6_config_activy = {
+static struct stv0299_config alps_bsru6_config_activy = {
 	.demod_address = 0x68,
 	.inittab = alps_bsru6_inittab,
 	.mclk = 88000000UL,
@@ -407,7 +406,7 @@ static const struct stv0299_config alps_bsru6_config_activy = {
 	.set_symbol_rate = alps_bsru6_set_symbol_rate,
 };
 
-static const struct stv0299_config alps_bsbe1_config_activy = {
+static struct stv0299_config alps_bsbe1_config_activy = {
 	.demod_address = 0x68,
 	.inittab = alps_bsbe1_inittab,
 	.mclk = 88000000UL,
@@ -612,50 +611,36 @@ static void frontend_init(struct budget *budget)
 		break;
 
 	case 0x1016: // Hauppauge/TT Nova-S SE (samsung s5h1420/????(tda8260))
-	{
-		struct dvb_frontend *fe;
-
-		fe = dvb_attach(s5h1420_attach, &s5h1420_config, &budget->i2c_adap);
-		if (fe) {
-			fe->ops.tuner_ops.set_params = s5h1420_tuner_set_params;
-			budget->dvb_frontend = fe;
-			if (dvb_attach(lnbp21_attach, fe, &budget->i2c_adap,
-				       0, 0) == NULL) {
+		budget->dvb_frontend = dvb_attach(s5h1420_attach, &s5h1420_config, &budget->i2c_adap);
+		if (budget->dvb_frontend) {
+			budget->dvb_frontend->ops.tuner_ops.set_params = s5h1420_tuner_set_params;
+			if (dvb_attach(lnbp21_attach, budget->dvb_frontend, &budget->i2c_adap, 0, 0) == NULL) {
 				printk("%s: No LNBP21 found!\n", __func__);
 				goto error_out;
 			}
 			break;
 		}
-	}
-	/* fall through */
-	case 0x1018: // TT Budget-S-1401 (philips tda10086/philips tda8262)
-	{
-		struct dvb_frontend *fe;
 
+	case 0x1018: // TT Budget-S-1401 (philips tda10086/philips tda8262)
 		// gpio2 is connected to CLB - reset it + leave it high
 		saa7146_setgpio(budget->dev, 2, SAA7146_GPIO_OUTLO);
 		msleep(1);
 		saa7146_setgpio(budget->dev, 2, SAA7146_GPIO_OUTHI);
 		msleep(1);
 
-		fe = dvb_attach(tda10086_attach, &tda10086_config, &budget->i2c_adap);
-		if (fe) {
-			budget->dvb_frontend = fe;
-			if (dvb_attach(tda826x_attach, fe, 0x60,
-				       &budget->i2c_adap, 0) == NULL)
+		budget->dvb_frontend = dvb_attach(tda10086_attach, &tda10086_config, &budget->i2c_adap);
+		if (budget->dvb_frontend) {
+			if (dvb_attach(tda826x_attach, budget->dvb_frontend, 0x60, &budget->i2c_adap, 0) == NULL)
 				printk("%s: No tda826x found!\n", __func__);
-			if (dvb_attach(lnbp21_attach, fe,
-				       &budget->i2c_adap, 0, 0) == NULL) {
+			if (dvb_attach(lnbp21_attach, budget->dvb_frontend, &budget->i2c_adap, 0, 0) == NULL) {
 				printk("%s: No LNBP21 found!\n", __func__);
 				goto error_out;
 			}
 			break;
 		}
-	}
-	/* fall through */
 
 	case 0x101c: { /* TT S2-1600 */
-			const struct stv6110x_devctl *ctl;
+			struct stv6110x_devctl *ctl;
 			saa7146_setgpio(budget->dev, 2, SAA7146_GPIO_OUTLO);
 			msleep(50);
 			saa7146_setgpio(budget->dev, 2, SAA7146_GPIO_OUTHI);
@@ -708,7 +693,7 @@ static void frontend_init(struct budget *budget)
 		break;
 
 	case 0x1020: { /* Omicom S2 */
-			const struct stv6110x_devctl *ctl;
+			struct stv6110x_devctl *ctl;
 			saa7146_setgpio(budget->dev, 2, SAA7146_GPIO_OUTLO);
 			msleep(50);
 			saa7146_setgpio(budget->dev, 2, SAA7146_GPIO_OUTHI);
@@ -894,4 +879,5 @@ module_exit(budget_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Ralph Metzler, Marcus Metzler, Michael Hunold, others");
-MODULE_DESCRIPTION("driver for the SAA7146 based so-called budget PCI DVB cards by Siemens, Technotrend, Hauppauge");
+MODULE_DESCRIPTION("driver for the SAA7146 based so-called "
+		   "budget PCI DVB cards by Siemens, Technotrend, Hauppauge");

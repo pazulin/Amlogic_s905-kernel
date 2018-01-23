@@ -6,8 +6,7 @@
  *  1997-11-02  Modified for POSIX.1b signals by Richard Henderson
  */
 
-#include <linux/sched/signal.h>
-#include <linux/sched/task_stack.h>
+#include <linux/sched.h>
 #include <linux/kernel.h>
 #include <linux/signal.h>
 #include <linux/errno.h>
@@ -23,7 +22,7 @@
 #include <linux/syscalls.h>
 #include <linux/tracehook.h>
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/sigcontext.h>
 #include <asm/ucontext.h>
 
@@ -151,7 +150,7 @@ restore_sigcontext(struct sigcontext __user *sc, struct pt_regs *regs)
 	struct switch_stack *sw = (struct switch_stack *)regs - 1;
 	long i, err = __get_user(regs->pc, &sc->sc_pc);
 
-	current->restart_block.fn = do_no_restart_syscall;
+	current_thread_info()->restart_block.fn = do_no_restart_syscall;
 
 	sw->r26 = (unsigned long) ret_from_sys_call;
 

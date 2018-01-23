@@ -19,7 +19,6 @@
  */
 
 #include <linux/sched.h>
-#include <linux/sched/debug.h>
 #include <linux/signal.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
@@ -33,7 +32,7 @@
 
 #include <asm/setup.h>
 #include <asm/fpu.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/traps.h>
 #include <asm/pgalloc.h>
 #include <asm/machdep.h>
@@ -1016,13 +1015,8 @@ asmlinkage void trap_c(struct frame *fp)
 			/* traced a trapping instruction on a 68020/30,
 			 * real exception will be executed afterwards.
 			 */
-			return;
-		}
-#ifdef CONFIG_MMU
-		if (fixup_exception(&fp->ptregs))
-			return;
-#endif
-		bad_super_trap(fp);
+		} else if (!handle_kernel_fault(&fp->ptregs))
+			bad_super_trap(fp);
 		return;
 	}
 

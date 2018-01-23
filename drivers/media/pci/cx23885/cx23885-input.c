@@ -28,14 +28,19 @@
  *  but WITHOUT ANY WARRANTY; without even the implied warranty of
  *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ *  02110-1301, USA.
  */
-
-#include "cx23885.h"
-#include "cx23885-input.h"
 
 #include <linux/slab.h>
 #include <media/rc-core.h>
 #include <media/v4l2-subdev.h>
+
+#include "cx23885.h"
+#include "cx23885-input.h"
 
 #define MODULE_NAME "cx23885"
 
@@ -87,13 +92,6 @@ void cx23885_input_rx_work_handler(struct cx23885_dev *dev, u32 events)
 	case CX23885_BOARD_MYGICA_X8507:
 	case CX23885_BOARD_TBS_6980:
 	case CX23885_BOARD_TBS_6981:
-	case CX23885_BOARD_DVBSKY_T9580:
-	case CX23885_BOARD_DVBSKY_T980C:
-	case CX23885_BOARD_DVBSKY_S950C:
-	case CX23885_BOARD_TT_CT2_4500_CI:
-	case CX23885_BOARD_DVBSKY_S950:
-	case CX23885_BOARD_DVBSKY_S952:
-	case CX23885_BOARD_DVBSKY_T982:
 		/*
 		 * The only boards we handle right now.  However other boards
 		 * using the CX2388x integrated IR controller should be similar
@@ -146,13 +144,6 @@ static int cx23885_input_ir_start(struct cx23885_dev *dev)
 	case CX23885_BOARD_HAUPPAUGE_HVR1290:
 	case CX23885_BOARD_HAUPPAUGE_HVR1250:
 	case CX23885_BOARD_MYGICA_X8507:
-	case CX23885_BOARD_DVBSKY_T9580:
-	case CX23885_BOARD_DVBSKY_T980C:
-	case CX23885_BOARD_DVBSKY_S950C:
-	case CX23885_BOARD_TT_CT2_4500_CI:
-	case CX23885_BOARD_DVBSKY_S950:
-	case CX23885_BOARD_DVBSKY_S952:
-	case CX23885_BOARD_DVBSKY_T982:
 		/*
 		 * The IR controller on this board only returns pulse widths.
 		 * Any other mode setting will fail to set up the device.
@@ -267,7 +258,8 @@ int cx23885_input_init(struct cx23885_dev *dev)
 	struct cx23885_kernel_ir *kernel_ir;
 	struct rc_dev *rc;
 	char *rc_map;
-	u64 allowed_protos;
+	enum rc_driver_type driver_type;
+	unsigned long allowed_protos;
 
 	int ret;
 
@@ -284,49 +276,39 @@ int cx23885_input_init(struct cx23885_dev *dev)
 	case CX23885_BOARD_HAUPPAUGE_HVR1290:
 	case CX23885_BOARD_HAUPPAUGE_HVR1250:
 		/* Integrated CX2388[58] IR controller */
-		allowed_protos = RC_BIT_ALL_IR_DECODER;
+		driver_type = RC_DRIVER_IR_RAW;
+		allowed_protos = RC_BIT_ALL;
 		/* The grey Hauppauge RC-5 remote */
 		rc_map = RC_MAP_HAUPPAUGE;
 		break;
 	case CX23885_BOARD_TERRATEC_CINERGY_T_PCIE_DUAL:
 		/* Integrated CX23885 IR controller */
-		allowed_protos = RC_BIT_ALL_IR_DECODER;
+		driver_type = RC_DRIVER_IR_RAW;
+		allowed_protos = RC_BIT_NEC;
 		/* The grey Terratec remote with orange buttons */
 		rc_map = RC_MAP_NEC_TERRATEC_CINERGY_XS;
 		break;
 	case CX23885_BOARD_TEVII_S470:
 		/* Integrated CX23885 IR controller */
-		allowed_protos = RC_BIT_ALL_IR_DECODER;
+		driver_type = RC_DRIVER_IR_RAW;
+		allowed_protos = RC_BIT_ALL;
 		/* A guess at the remote */
 		rc_map = RC_MAP_TEVII_NEC;
 		break;
 	case CX23885_BOARD_MYGICA_X8507:
 		/* Integrated CX23885 IR controller */
-		allowed_protos = RC_BIT_ALL_IR_DECODER;
+		driver_type = RC_DRIVER_IR_RAW;
+		allowed_protos = RC_BIT_ALL;
 		/* A guess at the remote */
 		rc_map = RC_MAP_TOTAL_MEDIA_IN_HAND_02;
 		break;
 	case CX23885_BOARD_TBS_6980:
 	case CX23885_BOARD_TBS_6981:
 		/* Integrated CX23885 IR controller */
-		allowed_protos = RC_BIT_ALL_IR_DECODER;
+		driver_type = RC_DRIVER_IR_RAW;
+		allowed_protos = RC_BIT_ALL;
 		/* A guess at the remote */
 		rc_map = RC_MAP_TBS_NEC;
-		break;
-	case CX23885_BOARD_DVBSKY_T9580:
-	case CX23885_BOARD_DVBSKY_T980C:
-	case CX23885_BOARD_DVBSKY_S950C:
-	case CX23885_BOARD_DVBSKY_S950:
-	case CX23885_BOARD_DVBSKY_S952:
-	case CX23885_BOARD_DVBSKY_T982:
-		/* Integrated CX23885 IR controller */
-		allowed_protos = RC_BIT_ALL_IR_DECODER;
-		rc_map = RC_MAP_DVBSKY;
-		break;
-	case CX23885_BOARD_TT_CT2_4500_CI:
-		/* Integrated CX23885 IR controller */
-		allowed_protos = RC_BIT_ALL_IR_DECODER;
-		rc_map = RC_MAP_TT_1500;
 		break;
 	default:
 		return -ENODEV;
@@ -344,7 +326,7 @@ int cx23885_input_init(struct cx23885_dev *dev)
 				    pci_name(dev->pci));
 
 	/* input device */
-	rc = rc_allocate_device(RC_DRIVER_IR_RAW);
+	rc = rc_allocate_device();
 	if (!rc) {
 		ret = -ENOMEM;
 		goto err_out_free;
@@ -363,7 +345,8 @@ int cx23885_input_init(struct cx23885_dev *dev)
 		rc->input_id.product = dev->pci->device;
 	}
 	rc->dev.parent = &dev->pci->dev;
-	rc->allowed_protocols = allowed_protos;
+	rc->driver_type = driver_type;
+	rc->allowed_protos = allowed_protos;
 	rc->priv = kernel_ir;
 	rc->open = cx23885_input_ir_open;
 	rc->close = cx23885_input_ir_close;

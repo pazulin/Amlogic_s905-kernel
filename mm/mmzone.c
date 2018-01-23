@@ -52,15 +52,16 @@ static inline int zref_in_nodemask(struct zoneref *zref, nodemask_t *nodes)
 }
 
 /* Returns the next zone at or below highest_zoneidx in a zonelist */
-struct zoneref *__next_zones_zonelist(struct zoneref *z,
+struct zoneref *next_zones_zonelist(struct zoneref *z,
 					enum zone_type highest_zoneidx,
-					nodemask_t *nodes)
+					nodemask_t *nodes,
+					struct zone **zone)
 {
 	/*
 	 * Find the next suitable zone to use for the allocation.
 	 * Only filter based on nodemask if it's set
 	 */
-	if (unlikely(nodes == NULL))
+	if (likely(nodes == NULL))
 		while (zonelist_zone_idx(z) > highest_zoneidx)
 			z++;
 	else
@@ -68,20 +69,21 @@ struct zoneref *__next_zones_zonelist(struct zoneref *z,
 				(z->zone && !zref_in_nodemask(z, nodes)))
 			z++;
 
+	*zone = zonelist_zone(z);
 	return z;
 }
 
 #ifdef CONFIG_ARCH_HAS_HOLES_MEMORYMODEL
-bool memmap_valid_within(unsigned long pfn,
+int memmap_valid_within(unsigned long pfn,
 					struct page *page, struct zone *zone)
 {
 	if (page_to_pfn(page) != pfn)
-		return false;
+		return 0;
 
 	if (page_zone(page) != zone)
-		return false;
+		return 0;
 
-	return true;
+	return 1;
 }
 #endif /* CONFIG_ARCH_HAS_HOLES_MEMORYMODEL */
 
@@ -92,6 +94,8 @@ void lruvec_init(struct lruvec *lruvec)
 	memset(lruvec, 0, sizeof(struct lruvec));
 
 	for_each_lru(lru)
+		INIT_LIST_HEAD(&lruvec->lists[lru]);
+	for_each_lru_normal(lru)
 		INIT_LIST_HEAD(&lruvec->lists[lru]);
 }
 

@@ -5,9 +5,8 @@
 
 #include <linux/irqreturn.h>
 #include <linux/kd.h>
-#include <linux/sched/signal.h>
+#include <linux/sched.h>
 #include <linux/slab.h>
-
 #include "chan.h"
 #include <irq_kern.h>
 #include <irq_user.h>
@@ -633,7 +632,6 @@ static irqreturn_t winch_interrupt(int irq, void *data)
 	int fd = winch->fd;
 	int err;
 	char c;
-	struct pid *pgrp;
 
 	if (fd != -1) {
 		err = generic_read(fd, &c, NULL);
@@ -659,10 +657,7 @@ static irqreturn_t winch_interrupt(int irq, void *data)
 		if (line != NULL) {
 			chan_window_size(line, &tty->winsize.ws_row,
 					 &tty->winsize.ws_col);
-			pgrp = tty_get_pgrp(tty);
-			if (pgrp)
-				kill_pgrp(pgrp, SIGWINCH, 1);
-			put_pid(pgrp);
+			kill_pgrp(tty->pgrp, SIGWINCH, 1);
 		}
 		tty_kref_put(tty);
 	}

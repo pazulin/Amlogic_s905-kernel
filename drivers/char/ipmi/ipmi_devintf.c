@@ -108,7 +108,7 @@ static int ipmi_fasync(int fd, struct file *file, int on)
 	return (result);
 }
 
-static const struct ipmi_user_hndl ipmi_hndlrs =
+static struct ipmi_user_hndl ipmi_hndlrs =
 {
 	.ipmi_recv_hndl	= file_receive_handler,
 };
@@ -157,16 +157,12 @@ static int ipmi_release(struct inode *inode, struct file *file)
 {
 	struct ipmi_file_private *priv = file->private_data;
 	int                      rv;
-	struct  ipmi_recv_msg *msg, *next;
 
 	rv = ipmi_destroy_user(priv->user);
 	if (rv)
 		return rv;
 
-	list_for_each_entry_safe(msg, next, &priv->recv_msgs, link)
-		ipmi_free_recv_msg(msg);
-
-
+	/* FIXME - free the messages in the list. */
 	kfree(priv);
 
 	return 0;
@@ -989,3 +985,4 @@ module_exit(cleanup_ipmi);
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Corey Minyard <minyard@mvista.com>");
 MODULE_DESCRIPTION("Linux device interface for the IPMI message handler.");
+MODULE_ALIAS("platform:ipmi_si");

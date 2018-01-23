@@ -646,9 +646,6 @@ static int atk_read_value(struct atk_sensor_data *sensor, u64 *value)
 		else
 			err = atk_read_value_new(sensor, value);
 
-		if (err)
-			return err;
-
 		sensor->is_valid = true;
 		sensor->last_updated = jiffies;
 		sensor->cached_value = *value;
@@ -691,7 +688,7 @@ static int atk_debugfs_gitm_get(void *p, u64 *val)
 DEFINE_SIMPLE_ATTRIBUTE(atk_debugfs_gitm,
 			atk_debugfs_gitm_get,
 			NULL,
-			"0x%08llx\n");
+			"0x%08llx\n")
 
 static int atk_acpi_print(char *buf, size_t sz, union acpi_object *obj)
 {

@@ -38,6 +38,8 @@ MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Pablo Neira Ayuso <pablo@netfilter.org>");
 MODULE_DESCRIPTION("cttimeout: Extended Netfilter Connection Tracking timeout tuning");
 
+static LIST_HEAD(cttimeout_list);
+
 static const struct nla_policy cttimeout_nla_policy[CTA_TIMEOUT_MAX+1] = {
 	[CTA_TIMEOUT_NAME]	= { .type = NLA_NUL_STRING,
 				    .len  = CTNL_TIMEOUT_NAME_MAX - 1},
@@ -56,8 +58,7 @@ ctnl_timeout_parse_policy(void *timeouts, struct nf_conntrack_l4proto *l4proto,
 		struct nlattr *tb[l4proto->ctnl_timeout.nlattr_max+1];
 
 		ret = nla_parse_nested(tb, l4proto->ctnl_timeout.nlattr_max,
-				       attr, l4proto->ctnl_timeout.nla_policy,
-				       NULL);
+				       attr, l4proto->ctnl_timeout.nla_policy);
 		if (ret < 0)
 			return ret;
 
@@ -66,15 +67,16 @@ ctnl_timeout_parse_policy(void *timeouts, struct nf_conntrack_l4proto *l4proto,
 	return ret;
 }
 
-static int cttimeout_new_timeout(struct net *net, struct sock *ctnl,
-				 struct sk_buff *skb,
-				 const struct nlmsghdr *nlh,
-				 const struct nlattr * const cda[])
+static int
+cttimeout_new_timeout(struct sock *ctnl, struct sk_buff *skb,
+		      const struct nlmsghdr *nlh,
+		      const struct nlattr * const cda[])
 {
 	__u16 l3num;
 	__u8 l4num;
 	struct nf_conntrack_l4proto *l4proto;
 	struct ctnl_timeout *timeout, *matching = NULL;
+	struct net *net = sock_net(skb->sk);
 	char *name;
 	int ret;
 
@@ -88,7 +90,7 @@ static int cttimeout_new_timeout(struct net *net, struct sock *ctnl,
 	l3num = ntohs(nla_get_be16(cda[CTA_TIMEOUT_L3PROTO]));
 	l4num = nla_get_u8(cda[CTA_TIMEOUT_L4PROTO]);
 
-	list_for_each_entry(timeout, &net->nfct_timeout_list, head) {
+	list_for_each_entry(timeout, &cttimeout_list, head) {
 		if (strncmp(timeout->name, name, CTNL_TIMEOUT_NAME_MAX) != 0)
 			continue;
 
@@ -99,28 +101,31 @@ static int cttimeout_new_timeout(struct net *net, struct sock *ctnl,
 		break;
 	}
 
+	l4proto = nf_ct_l4proto_find_get(l3num, l4num);
+
+	/* This protocol is not supportted, skip. */
+	if (l4proto->l4proto != l4num) {
+		ret = -EOPNOTSUPP;
+		goto err_proto_put;
+	}
+
 	if (matching) {
 		if (nlh->nlmsg_flags & NLM_F_REPLACE) {
 			/* You cannot replace one timeout policy by another of
 			 * different kind, sorry.
 			 */
 			if (matching->l3num != l3num ||
-			    matching->l4proto->l4proto != l4num)
-				return -EINVAL;
+			    matching->l4proto->l4proto != l4num) {
+				ret = -EINVAL;
+				goto err_proto_put;
+			}
 
-			return ctnl_timeout_parse_policy(&matching->data,
-							 matching->l4proto, net,
-							 cda[CTA_TIMEOUT_DATA]);
+			ret = ctnl_timeout_parse_policy(&matching->data,
+							l4proto, net,
+							cda[CTA_TIMEOUT_DATA]);
+			return ret;
 		}
-
-		return -EBUSY;
-	}
-
-	l4proto = nf_ct_l4proto_find_get(l3num, l4num);
-
-	/* This protocol is not supportted, skip. */
-	if (l4proto->l4proto != l4num) {
-		ret = -EOPNOTSUPP;
+		ret = -EBUSY;
 		goto err_proto_put;
 	}
 
@@ -139,8 +144,8 @@ static int cttimeout_new_timeout(struct net *net, struct sock *ctnl,
 	strcpy(timeout->name, nla_data(cda[CTA_TIMEOUT_NAME]));
 	timeout->l3num = l3num;
 	timeout->l4proto = l4proto;
-	refcount_set(&timeout->refcnt, 1);
-	list_add_tail_rcu(&timeout->head, &net->nfct_timeout_list);
+	atomic_set(&timeout->refcnt, 1);
+	list_add_tail_rcu(&timeout->head, &cttimeout_list);
 
 	return 0;
 err:
@@ -159,7 +164,7 @@ ctnl_timeout_fill_info(struct sk_buff *skb, u32 portid, u32 seq, u32 type,
 	unsigned int flags = portid ? NLM_F_MULTI : 0;
 	struct nf_conntrack_l4proto *l4proto = timeout->l4proto;
 
-	event = nfnl_msg_type(NFNL_SUBSYS_CTNETLINK_TIMEOUT, event);
+	event |= NFNL_SUBSYS_CTNETLINK_TIMEOUT << 8;
 	nlh = nlmsg_put(skb, portid, seq, event, sizeof(*nfmsg), flags);
 	if (nlh == NULL)
 		goto nlmsg_failure;
@@ -173,7 +178,7 @@ ctnl_timeout_fill_info(struct sk_buff *skb, u32 portid, u32 seq, u32 type,
 	    nla_put_be16(skb, CTA_TIMEOUT_L3PROTO, htons(timeout->l3num)) ||
 	    nla_put_u8(skb, CTA_TIMEOUT_L4PROTO, timeout->l4proto->l4proto) ||
 	    nla_put_be32(skb, CTA_TIMEOUT_USE,
-			 htonl(refcount_read(&timeout->refcnt))))
+			 htonl(atomic_read(&timeout->refcnt))))
 		goto nla_put_failure;
 
 	if (likely(l4proto->ctnl_timeout.obj_to_nlattr)) {
@@ -204,7 +209,6 @@ nla_put_failure:
 static int
 ctnl_timeout_dump(struct sk_buff *skb, struct netlink_callback *cb)
 {
-	struct net *net = sock_net(skb->sk);
 	struct ctnl_timeout *cur, *last;
 
 	if (cb->args[2])
@@ -215,7 +219,7 @@ ctnl_timeout_dump(struct sk_buff *skb, struct netlink_callback *cb)
 		cb->args[1] = 0;
 
 	rcu_read_lock();
-	list_for_each_entry_rcu(cur, &net->nfct_timeout_list, head) {
+	list_for_each_entry_rcu(cur, &cttimeout_list, head) {
 		if (last) {
 			if (cur != last)
 				continue;
@@ -236,10 +240,10 @@ ctnl_timeout_dump(struct sk_buff *skb, struct netlink_callback *cb)
 	return skb->len;
 }
 
-static int cttimeout_get_timeout(struct net *net, struct sock *ctnl,
-				 struct sk_buff *skb,
-				 const struct nlmsghdr *nlh,
-				 const struct nlattr * const cda[])
+static int
+cttimeout_get_timeout(struct sock *ctnl, struct sk_buff *skb,
+		      const struct nlmsghdr *nlh,
+		      const struct nlattr * const cda[])
 {
 	int ret = -ENOENT;
 	char *name;
@@ -256,7 +260,7 @@ static int cttimeout_get_timeout(struct net *net, struct sock *ctnl,
 		return -EINVAL;
 	name = nla_data(cda[CTA_TIMEOUT_NAME]);
 
-	list_for_each_entry(cur, &net->nfct_timeout_list, head) {
+	list_for_each_entry(cur, &cttimeout_list, head) {
 		struct sk_buff *skb2;
 
 		if (strncmp(cur->name, name, CTNL_TIMEOUT_NAME_MAX) != 0)
@@ -287,94 +291,47 @@ static int cttimeout_get_timeout(struct net *net, struct sock *ctnl,
 	return ret;
 }
 
-static void untimeout(struct nf_conntrack_tuple_hash *i,
-		      struct ctnl_timeout *timeout)
-{
-	struct nf_conn *ct = nf_ct_tuplehash_to_ctrack(i);
-	struct nf_conn_timeout *timeout_ext = nf_ct_timeout_find(ct);
-
-	if (timeout_ext && (!timeout || timeout_ext->timeout == timeout))
-		RCU_INIT_POINTER(timeout_ext->timeout, NULL);
-}
-
-static void ctnl_untimeout(struct net *net, struct ctnl_timeout *timeout)
-{
-	struct nf_conntrack_tuple_hash *h;
-	const struct hlist_nulls_node *nn;
-	unsigned int last_hsize;
-	spinlock_t *lock;
-	int i, cpu;
-
-	for_each_possible_cpu(cpu) {
-		struct ct_pcpu *pcpu = per_cpu_ptr(net->ct.pcpu_lists, cpu);
-
-		spin_lock_bh(&pcpu->lock);
-		hlist_nulls_for_each_entry(h, nn, &pcpu->unconfirmed, hnnode)
-			untimeout(h, timeout);
-		spin_unlock_bh(&pcpu->lock);
-	}
-
-	local_bh_disable();
-restart:
-	last_hsize = nf_conntrack_htable_size;
-	for (i = 0; i < last_hsize; i++) {
-		lock = &nf_conntrack_locks[i % CONNTRACK_LOCKS];
-		nf_conntrack_lock(lock);
-		if (last_hsize != nf_conntrack_htable_size) {
-			spin_unlock(lock);
-			goto restart;
-		}
-
-		hlist_nulls_for_each_entry(h, nn, &nf_conntrack_hash[i], hnnode)
-			untimeout(h, timeout);
-		spin_unlock(lock);
-	}
-	local_bh_enable();
-}
-
 /* try to delete object, fail if it is still in use. */
-static int ctnl_timeout_try_del(struct net *net, struct ctnl_timeout *timeout)
+static int ctnl_timeout_try_del(struct ctnl_timeout *timeout)
 {
 	int ret = 0;
 
-	/* We want to avoid races with ctnl_timeout_put. So only when the
-	 * current refcnt is 1, we decrease it to 0.
-	 */
-	if (refcount_dec_if_one(&timeout->refcnt)) {
+	/* we want to avoid races with nf_ct_timeout_find_get. */
+	if (atomic_dec_and_test(&timeout->refcnt)) {
 		/* We are protected by nfnl mutex. */
 		list_del_rcu(&timeout->head);
 		nf_ct_l4proto_put(timeout->l4proto);
-		ctnl_untimeout(net, timeout);
 		kfree_rcu(timeout, rcu_head);
 	} else {
+		/* still in use, restore reference counter. */
+		atomic_inc(&timeout->refcnt);
 		ret = -EBUSY;
 	}
 	return ret;
 }
 
-static int cttimeout_del_timeout(struct net *net, struct sock *ctnl,
-				 struct sk_buff *skb,
-				 const struct nlmsghdr *nlh,
-				 const struct nlattr * const cda[])
+static int
+cttimeout_del_timeout(struct sock *ctnl, struct sk_buff *skb,
+		      const struct nlmsghdr *nlh,
+		      const struct nlattr * const cda[])
 {
-	struct ctnl_timeout *cur, *tmp;
-	int ret = -ENOENT;
 	char *name;
+	struct ctnl_timeout *cur;
+	int ret = -ENOENT;
 
 	if (!cda[CTA_TIMEOUT_NAME]) {
-		list_for_each_entry_safe(cur, tmp, &net->nfct_timeout_list,
-					 head)
-			ctnl_timeout_try_del(net, cur);
+		list_for_each_entry(cur, &cttimeout_list, head)
+			ctnl_timeout_try_del(cur);
 
 		return 0;
 	}
 	name = nla_data(cda[CTA_TIMEOUT_NAME]);
 
-	list_for_each_entry(cur, &net->nfct_timeout_list, head) {
+	list_for_each_entry(cur, &cttimeout_list, head) {
 		if (strncmp(cur->name, name, CTNL_TIMEOUT_NAME_MAX) != 0)
 			continue;
 
-		ret = ctnl_timeout_try_del(net, cur);
+		ret = ctnl_timeout_try_del(cur);
 		if (ret < 0)
 			return ret;
 
@@ -383,14 +340,15 @@ static int cttimeout_del_timeout(struct net *net, struct sock *ctnl,
 	return ret;
 }
 
-static int cttimeout_default_set(struct net *net, struct sock *ctnl,
-				 struct sk_buff *skb,
-				 const struct nlmsghdr *nlh,
-				 const struct nlattr * const cda[])
+static int
+cttimeout_default_set(struct sock *ctnl, struct sk_buff *skb,
+		      const struct nlmsghdr *nlh,
+		      const struct nlattr * const cda[])
 {
 	__u16 l3num;
 	__u8 l4num;
 	struct nf_conntrack_l4proto *l4proto;
+	struct net *net = sock_net(skb->sk);
 	unsigned int *timeouts;
 	int ret;
 
@@ -432,7 +390,7 @@ cttimeout_default_fill_info(struct net *net, struct sk_buff *skb, u32 portid,
 	struct nfgenmsg *nfmsg;
 	unsigned int flags = portid ? NLM_F_MULTI : 0;
 
-	event = nfnl_msg_type(NFNL_SUBSYS_CTNETLINK_TIMEOUT, event);
+	event |= NFNL_SUBSYS_CTNETLINK_TIMEOUT << 8;
 	nlh = nlmsg_put(skb, portid, seq, event, sizeof(*nfmsg), flags);
 	if (nlh == NULL)
 		goto nlmsg_failure;
@@ -472,14 +430,14 @@ nla_put_failure:
 	return -1;
 }
 
-static int cttimeout_default_get(struct net *net, struct sock *ctnl,
-				 struct sk_buff *skb,
+static int cttimeout_default_get(struct sock *ctnl, struct sk_buff *skb,
 				 const struct nlmsghdr *nlh,
 				 const struct nlattr * const cda[])
 {
 	__u16 l3num;
 	__u8 l4num;
 	struct nf_conntrack_l4proto *l4proto;
+	struct net *net = sock_net(skb->sk);
 	struct sk_buff *skb2;
 	int ret, err;
 
@@ -524,20 +482,19 @@ err:
 }
 
 #ifdef CONFIG_NF_CONNTRACK_TIMEOUT
-static struct ctnl_timeout *
-ctnl_timeout_find_get(struct net *net, const char *name)
+static struct ctnl_timeout *ctnl_timeout_find_get(const char *name)
 {
 	struct ctnl_timeout *timeout, *matching = NULL;
 
 	rcu_read_lock();
-	list_for_each_entry_rcu(timeout, &net->nfct_timeout_list, head) {
+	list_for_each_entry_rcu(timeout, &cttimeout_list, head) {
 		if (strncmp(timeout->name, name, CTNL_TIMEOUT_NAME_MAX) != 0)
 			continue;
 
 		if (!try_module_get(THIS_MODULE))
 			goto err;
 
-		if (!refcount_inc_not_zero(&timeout->refcnt)) {
+		if (!atomic_inc_not_zero(&timeout->refcnt)) {
 			module_put(THIS_MODULE);
 			goto err;
 		}
@@ -551,9 +508,7 @@ err:
 
 static void ctnl_timeout_put(struct ctnl_timeout *timeout)
 {
-	if (refcount_dec_and_test(&timeout->refcnt))
-		kfree_rcu(timeout, rcu_head);
-
+	atomic_dec(&timeout->refcnt);
 	module_put(THIS_MODULE);
 }
 #endif /* CONFIG_NF_CONNTRACK_TIMEOUT */
@@ -585,40 +540,9 @@ static const struct nfnetlink_subsystem cttimeout_subsys = {
 
 MODULE_ALIAS_NFNL_SUBSYS(NFNL_SUBSYS_CTNETLINK_TIMEOUT);
 
-static int __net_init cttimeout_net_init(struct net *net)
-{
-	INIT_LIST_HEAD(&net->nfct_timeout_list);
-
-	return 0;
-}
-
-static void __net_exit cttimeout_net_exit(struct net *net)
-{
-	struct ctnl_timeout *cur, *tmp;
-
-	ctnl_untimeout(net, NULL);
-
-	list_for_each_entry_safe(cur, tmp, &net->nfct_timeout_list, head) {
-		list_del_rcu(&cur->head);
-		nf_ct_l4proto_put(cur->l4proto);
-
-		if (refcount_dec_and_test(&cur->refcnt))
-			kfree_rcu(cur, rcu_head);
-	}
-}
-
-static struct pernet_operations cttimeout_ops = {
-	.init	= cttimeout_net_init,
-	.exit	= cttimeout_net_exit,
-};
-
 static int __init cttimeout_init(void)
 {
 	int ret;
-
-	ret = register_pernet_subsys(&cttimeout_ops);
-	if (ret < 0)
-		return ret;
 
 	ret = nfnetlink_subsys_register(&cttimeout_subsys);
 	if (ret < 0) {
@@ -633,21 +557,27 @@ static int __init cttimeout_init(void)
 	return 0;
 
 err_out:
-	unregister_pernet_subsys(&cttimeout_ops);
 	return ret;
 }
 
 static void __exit cttimeout_exit(void)
 {
+	struct ctnl_timeout *cur, *tmp;
+
 	pr_info("cttimeout: unregistering from nfnetlink.\n");
 
 	nfnetlink_subsys_unregister(&cttimeout_subsys);
-
-	unregister_pernet_subsys(&cttimeout_ops);
+	list_for_each_entry_safe(cur, tmp, &cttimeout_list, head) {
+		list_del_rcu(&cur->head);
+		/* We are sure that our objects have no clients at this point,
+		 * it's safe to release them all without checking refcnt.
+		 */
+		nf_ct_l4proto_put(cur->l4proto);
+		kfree_rcu(cur, rcu_head);
+	}
 #ifdef CONFIG_NF_CONNTRACK_TIMEOUT
 	RCU_INIT_POINTER(nf_ct_timeout_find_get_hook, NULL);
 	RCU_INIT_POINTER(nf_ct_timeout_put_hook, NULL);
-	synchronize_rcu();
 #endif /* CONFIG_NF_CONNTRACK_TIMEOUT */
 }
 

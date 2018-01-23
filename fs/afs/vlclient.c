@@ -58,18 +58,22 @@ static int afs_vl_abort_to_error(u32 abort_code)
 /*
  * deliver reply data to a VL.GetEntryByXXX call
  */
-static int afs_deliver_vl_get_entry_by_xxx(struct afs_call *call)
+static int afs_deliver_vl_get_entry_by_xxx(struct afs_call *call,
+					   struct sk_buff *skb, bool last)
 {
 	struct afs_cache_vlocation *entry;
 	__be32 *bp;
 	u32 tmp;
-	int loop, ret;
+	int loop;
 
-	_enter("");
+	_enter(",,%u", last);
 
-	ret = afs_transfer_reply(call);
-	if (ret < 0)
-		return ret;
+	afs_transfer_reply(call, skb);
+	if (!last)
+		return 0;
+
+	if (call->reply_size != call->reply_max)
+		return -EBADMSG;
 
 	/* unmarshall the reply once we've received all of it */
 	entry = call->reply;
@@ -147,7 +151,7 @@ int afs_vl_get_entry_by_name(struct in_addr *addr,
 			     struct key *key,
 			     const char *volname,
 			     struct afs_cache_vlocation *entry,
-			     bool async)
+			     const struct afs_wait_mode *wait_mode)
 {
 	struct afs_call *call;
 	size_t volnamesz, reqsz, padsz;
@@ -177,7 +181,7 @@ int afs_vl_get_entry_by_name(struct in_addr *addr,
 		memset((void *) bp + volnamesz, 0, padsz);
 
 	/* initiate the call */
-	return afs_make_call(addr, call, GFP_KERNEL, async);
+	return afs_make_call(addr, call, GFP_KERNEL, wait_mode);
 }
 
 /*
@@ -188,7 +192,7 @@ int afs_vl_get_entry_by_id(struct in_addr *addr,
 			   afs_volid_t volid,
 			   afs_voltype_t voltype,
 			   struct afs_cache_vlocation *entry,
-			   bool async)
+			   const struct afs_wait_mode *wait_mode)
 {
 	struct afs_call *call;
 	__be32 *bp;
@@ -211,5 +215,5 @@ int afs_vl_get_entry_by_id(struct in_addr *addr,
 	*bp   = htonl(voltype);
 
 	/* initiate the call */
-	return afs_make_call(addr, call, GFP_KERNEL, async);
+	return afs_make_call(addr, call, GFP_KERNEL, wait_mode);
 }

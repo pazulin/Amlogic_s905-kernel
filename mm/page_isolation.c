@@ -3,18 +3,23 @@
  */
 
 #include <linux/mm.h>
+#include <linux/pagemap.h>
 #include <linux/page-isolation.h>
 #include <linux/pageblock-flags.h>
 #include <linux/memory.h>
 #include <linux/hugetlb.h>
-#include <linux/page_owner.h>
+#include <linux/sched.h>
 #include "internal.h"
 
-#define CREATE_TRACE_POINTS
-#include <trace/events/page_isolation.h>
-
-static int set_migratetype_isolate(struct page *page,
-				bool skip_hwpoisoned_pages)
+int iso_status = 0;
+EXPORT_SYMBOL(iso_status);
+int iso_recount = 0;
+EXPORT_SYMBOL(iso_recount);
+wait_queue_head_t iso_wq;
+EXPORT_SYMBOL(iso_wq);
+DEFINE_MUTEX(iso_wait);
+EXPORT_SYMBOL(iso_wait);
+int set_migratetype_isolate(struct page *page, bool skip_hwpoisoned_pages)
 {
 	struct zone *zone;
 	unsigned long flags, pfn;
@@ -55,7 +60,7 @@ static int set_migratetype_isolate(struct page *page,
 		ret = 0;
 
 	/*
-	 * immobile means "not-on-lru" pages. If immobile is larger than
+	 * immobile means "not-on-lru" paes. If immobile is larger than
 	 * removable-by-driver pages reported by notifier, we'll fail.
 	 */
 
@@ -65,73 +70,31 @@ out:
 		int migratetype = get_pageblock_migratetype(page);
 
 		set_pageblock_migratetype(page, MIGRATE_ISOLATE);
-		zone->nr_isolate_pageblock++;
-		nr_pages = move_freepages_block(zone, page, MIGRATE_ISOLATE,
-									NULL);
+		nr_pages = move_freepages_block(zone, page, MIGRATE_ISOLATE);
 
 		__mod_zone_freepage_state(zone, -nr_pages, migratetype);
 	}
 
 	spin_unlock_irqrestore(&zone->lock, flags);
 	if (!ret)
-		drain_all_pages(zone);
+		drain_all_pages();
 	return ret;
 }
 
-static void unset_migratetype_isolate(struct page *page, unsigned migratetype)
+void unset_migratetype_isolate(struct page *page, unsigned migratetype)
 {
 	struct zone *zone;
 	unsigned long flags, nr_pages;
-	bool isolated_page = false;
-	unsigned int order;
-	unsigned long pfn, buddy_pfn;
-	struct page *buddy;
 
 	zone = page_zone(page);
 	spin_lock_irqsave(&zone->lock, flags);
-	if (!is_migrate_isolate_page(page))
+	if (get_pageblock_migratetype(page) != MIGRATE_ISOLATE)
 		goto out;
-
-	/*
-	 * Because freepage with more than pageblock_order on isolated
-	 * pageblock is restricted to merge due to freepage counting problem,
-	 * it is possible that there is free buddy page.
-	 * move_freepages_block() doesn't care of merge so we need other
-	 * approach in order to merge them. Isolation and free will make
-	 * these pages to be merged.
-	 */
-	if (PageBuddy(page)) {
-		order = page_order(page);
-		if (order >= pageblock_order) {
-			pfn = page_to_pfn(page);
-			buddy_pfn = __find_buddy_pfn(pfn, order);
-			buddy = page + (buddy_pfn - pfn);
-
-			if (pfn_valid_within(buddy_pfn) &&
-			    !is_migrate_isolate_page(buddy)) {
-				__isolate_free_page(page, order);
-				isolated_page = true;
-			}
-		}
-	}
-
-	/*
-	 * If we isolate freepage with more than pageblock_order, there
-	 * should be no freepage in the range, so we could avoid costly
-	 * pageblock scanning for freepage moving.
-	 */
-	if (!isolated_page) {
-		nr_pages = move_freepages_block(zone, page, migratetype, NULL);
-		__mod_zone_freepage_state(zone, nr_pages, migratetype);
-	}
+	nr_pages = move_freepages_block(zone, page, migratetype);
+	__mod_zone_freepage_state(zone, nr_pages, migratetype);
 	set_pageblock_migratetype(page, migratetype);
-	zone->nr_isolate_pageblock--;
 out:
 	spin_unlock_irqrestore(&zone->lock, flags);
-	if (isolated_page) {
-		post_alloc_hook(page, order, __GFP_MOVABLE);
-		__free_pages(page, order);
-	}
 }
 
 static inline struct page *
@@ -165,10 +128,10 @@ int start_isolate_page_range(unsigned long start_pfn, unsigned long end_pfn,
 {
 	unsigned long pfn;
 	unsigned long undo_pfn;
-	struct page *page;
+	struct page *page = NULL;
 
-	BUG_ON(!IS_ALIGNED(start_pfn, pageblock_nr_pages));
-	BUG_ON(!IS_ALIGNED(end_pfn, pageblock_nr_pages));
+	BUG_ON((start_pfn) & (pageblock_nr_pages - 1));
+	BUG_ON((end_pfn) & (pageblock_nr_pages - 1));
 
 	for (pfn = start_pfn;
 	     pfn < end_pfn;
@@ -180,6 +143,11 @@ int start_isolate_page_range(unsigned long start_pfn, unsigned long end_pfn,
 			goto undo;
 		}
 	}
+#ifdef CONFIG_CMA
+	if (migratetype == MIGRATE_CMA && page)
+		__mod_zone_page_state(page_zone(page),
+				      NR_CMA_ISOLATED, end_pfn - start_pfn);
+#endif
 	return 0;
 undo:
 	for (pfn = start_pfn;
@@ -197,19 +165,22 @@ int undo_isolate_page_range(unsigned long start_pfn, unsigned long end_pfn,
 			    unsigned migratetype)
 {
 	unsigned long pfn;
-	struct page *page;
-
-	BUG_ON(!IS_ALIGNED(start_pfn, pageblock_nr_pages));
-	BUG_ON(!IS_ALIGNED(end_pfn, pageblock_nr_pages));
-
+	struct page *page = NULL;
+	BUG_ON((start_pfn) & (pageblock_nr_pages - 1));
+	BUG_ON((end_pfn) & (pageblock_nr_pages - 1));
 	for (pfn = start_pfn;
 	     pfn < end_pfn;
 	     pfn += pageblock_nr_pages) {
 		page = __first_valid_page(pfn, pageblock_nr_pages);
-		if (!page || !is_migrate_isolate_page(page))
+		if (!page || get_pageblock_migratetype(page) != MIGRATE_ISOLATE)
 			continue;
 		unset_migratetype_isolate(page, migratetype);
 	}
+#ifdef CONFIG_CMA
+	if (migratetype == MIGRATE_CMA && page)
+		__mod_zone_page_state(page_zone(page),
+				      NR_CMA_ISOLATED, start_pfn - end_pfn);
+#endif
 	return 0;
 }
 /*
@@ -217,9 +188,9 @@ int undo_isolate_page_range(unsigned long start_pfn, unsigned long end_pfn,
  * all pages in [start_pfn...end_pfn) must be in the same zone.
  * zone->lock must be held before call this.
  *
- * Returns the last tested pfn.
+ * Returns 1 if all pages in the range are isolated.
  */
-static unsigned long
+static int
 __test_page_isolated_in_pageblock(unsigned long pfn, unsigned long end_pfn,
 				  bool skip_hwpoisoned_pages)
 {
@@ -231,30 +202,55 @@ __test_page_isolated_in_pageblock(unsigned long pfn, unsigned long end_pfn,
 			continue;
 		}
 		page = pfn_to_page(pfn);
-		if (PageBuddy(page))
+		if (PageBuddy(page)) {
 			/*
-			 * If the page is on a free list, it has to be on
-			 * the correct MIGRATE_ISOLATE freelist. There is no
-			 * simple way to verify that as VM_BUG_ON(), though.
+			 * If race between isolatation and allocation happens,
+			 * some free pages could be in MIGRATE_MOVABLE list
+			 * although pageblock's migratation type of the page
+			 * is MIGRATE_ISOLATE. Catch it and move the page into
+			 * MIGRATE_ISOLATE list.
 			 */
-			pfn += 1 << page_order(page);
-		else if (skip_hwpoisoned_pages && PageHWPoison(page))
-			/* A HWPoisoned page cannot be also PageBuddy */
-			pfn++;
-		else
-			break;
-	}
+			if (get_freepage_migratetype(page) != MIGRATE_ISOLATE) {
+				struct page *end_page;
 
-	return pfn;
+				end_page = page + (1 << page_order(page)) - 1;
+				move_freepages(page_zone(page), page, end_page,
+						MIGRATE_ISOLATE);
+			}
+			pfn += 1 << page_order(page);
+		}
+		else if (page_count(page) == 0 &&
+			get_freepage_migratetype(page) == MIGRATE_ISOLATE)
+			pfn += 1;
+		else if (skip_hwpoisoned_pages && PageHWPoison(page)) {
+			/*
+			 * The HWPoisoned page may be not in buddy
+			 * system, and page_count() is not 0.
+			 */
+			pfn++;
+			continue;
+		} else {
+			pr_debug("%s, page:%ld not isolate, flag:%lx, ",
+				__func__, pfn, page->flags);
+			pr_debug("page_cnt:%d, isolate:%d, mapcnt:%d\n",
+				page_count(page),
+				get_freepage_migratetype(page),
+				atomic_read(&page->_mapcount));
+			return -EBUSY;
+		}
+	}
+	if (pfn < end_pfn)
+		return 1;
+	return 0;
 }
 
-/* Caller should ensure that requested range is in a single zone */
 int test_pages_isolated(unsigned long start_pfn, unsigned long end_pfn,
 			bool skip_hwpoisoned_pages)
 {
 	unsigned long pfn, flags;
 	struct page *page;
 	struct zone *zone;
+	int ret;
 
 	/*
 	 * Note: pageblock_nr_pages != MAX_ORDER. Then, chunks of free pages
@@ -263,7 +259,7 @@ int test_pages_isolated(unsigned long start_pfn, unsigned long end_pfn,
 	 */
 	for (pfn = start_pfn; pfn < end_pfn; pfn += pageblock_nr_pages) {
 		page = __first_valid_page(pfn, pageblock_nr_pages);
-		if (page && !is_migrate_isolate_page(page))
+		if (page && get_pageblock_migratetype(page) != MIGRATE_ISOLATE)
 			break;
 	}
 	page = __first_valid_page(start_pfn, end_pfn - start_pfn);
@@ -272,29 +268,55 @@ int test_pages_isolated(unsigned long start_pfn, unsigned long end_pfn,
 	/* Check all pages are free or marked as ISOLATED */
 	zone = page_zone(page);
 	spin_lock_irqsave(&zone->lock, flags);
-	pfn = __test_page_isolated_in_pageblock(start_pfn, end_pfn,
+	ret = __test_page_isolated_in_pageblock(start_pfn, end_pfn,
 						skip_hwpoisoned_pages);
 	spin_unlock_irqrestore(&zone->lock, flags);
+	if (ret == -EBUSY) {
+		DECLARE_WAITQUEUE(wait, current);
+		if (iso_status == MIGRATE_CMA_HOLD ||
+		   iso_status == MIGRATE_CMA_ALLOC) {
+			mutex_lock(&iso_wait);
+			iso_status = MIGRATE_CMA_ALLOC;
+			init_waitqueue_head(&iso_wq);
+			add_wait_queue(&iso_wq, &wait);
+			mutex_unlock(&iso_wait);
 
-	trace_test_pages_isolated(start_pfn, end_pfn, pfn);
+			schedule_timeout_interruptible(msecs_to_jiffies(10));
 
-	return pfn < end_pfn ? -EBUSY : 0;
+			mutex_lock(&iso_wait);
+			remove_wait_queue(&iso_wq, &wait);
+			mutex_unlock(&iso_wait);
+		}
+	}
+
+	return ret ? -EBUSY : 0;
 }
 
 struct page *alloc_migrate_target(struct page *page, unsigned long private,
 				  int **resultp)
 {
 	gfp_t gfp_mask = GFP_USER | __GFP_MOVABLE;
+#ifdef CONFIG_CMA
+	struct address_space *mapping = NULL;
 
+	mapping = page_mapping(page);
+	if ((unsigned long)mapping & PAGE_MAPPING_ANON)
+		mapping = NULL;
+	if (mapping)
+		gfp_mask |= (mapping_gfp_mask(mapping) & __GFP_BDEV);
+#endif
 	/*
 	 * TODO: allocate a destination hugepage from a nearest neighbor node,
 	 * accordance with memory policy of the user process if possible. For
 	 * now as a simple work-around, we use the next node for destination.
 	 */
-	if (PageHuge(page))
+	if (PageHuge(page)) {
+		nodemask_t src = nodemask_of_node(page_to_nid(page));
+		nodemask_t dst;
+		nodes_complement(dst, src);
 		return alloc_huge_page_node(page_hstate(compound_head(page)),
-					    next_node_in(page_to_nid(page),
-							 node_online_map));
+					    next_node(page_to_nid(page), dst));
+	}
 
 	if (PageHighMem(page))
 		gfp_mask |= __GFP_HIGHMEM;

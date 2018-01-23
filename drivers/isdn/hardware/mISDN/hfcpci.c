@@ -1717,8 +1717,9 @@ static void
 inithfcpci(struct hfc_pci *hc)
 {
 	printk(KERN_DEBUG "inithfcpci: entered\n");
-	setup_timer(&hc->dch.timer, (void *)hfcpci_dbusy_timer,
-		    (long)&hc->dch);
+	hc->dch.timer.function = (void *) hfcpci_dbusy_timer;
+	hc->dch.timer.data = (long) &hc->dch;
+	init_timer(&hc->dch.timer);
 	hc->chanlimit = 2;
 	mode_hfcpci(&hc->bch[0], 1, -1);
 	mode_hfcpci(&hc->bch[1], 2, -1);
@@ -1754,7 +1755,7 @@ init_card(struct hfc_pci *hc)
 		enable_hwirq(hc);
 		spin_unlock_irqrestore(&hc->lock, flags);
 		/* Timeout 80ms */
-		set_current_state(TASK_UNINTERRUPTIBLE);
+		current->state = TASK_UNINTERRUPTIBLE;
 		schedule_timeout((80 * HZ) / 1000);
 		printk(KERN_INFO "HFC PCI: IRQ %d count %d\n",
 		       hc->irq, hc->irqcnt);
@@ -2043,7 +2044,9 @@ setup_hw(struct hfc_pci *hc)
 	Write_hfc(hc, HFCPCI_INT_M1, hc->hw.int_m1);
 	/* At this point the needed PCI config is done */
 	/* fifos are still not enabled */
-	setup_timer(&hc->hw.timer, (void *)hfcpci_Timer, (long)hc);
+	hc->hw.timer.function = (void *) hfcpci_Timer;
+	hc->hw.timer.data = (long) hc;
+	init_timer(&hc->hw.timer);
 	/* default PCM master */
 	test_and_set_bit(HFC_CFG_MASTER, &hc->cfg);
 	return 0;

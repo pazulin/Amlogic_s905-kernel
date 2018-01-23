@@ -13,6 +13,10 @@
  *    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  *    GNU General Public License for more details.
  *
+ *    You should have received a copy of the GNU General Public License
+ *    along with this program; if not, write to the Free Software
+ *    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *
  */
 
 #include "dvb_frontend.h"
@@ -170,7 +174,7 @@ static int ec100_get_tune_settings(struct dvb_frontend *fe,
 	return 0;
 }
 
-static int ec100_read_status(struct dvb_frontend *fe, enum fe_status *status)
+static int ec100_read_status(struct dvb_frontend *fe, fe_status_t *status)
 {
 	struct ec100_state *state = fe->demodulator_priv;
 	int ret;
@@ -276,7 +280,7 @@ static void ec100_release(struct dvb_frontend *fe)
 	kfree(state);
 }
 
-static const struct dvb_frontend_ops ec100_ops;
+static struct dvb_frontend_ops ec100_ops;
 
 struct dvb_frontend *ec100_attach(const struct ec100_config *config,
 	struct i2c_adapter *i2c)
@@ -311,7 +315,7 @@ error:
 }
 EXPORT_SYMBOL(ec100_attach);
 
-static const struct dvb_frontend_ops ec100_ops = {
+static struct dvb_frontend_ops ec100_ops = {
 	.delsys = { SYS_DVBT },
 	.info = {
 		.name = "E3C EC100 DVB-T",

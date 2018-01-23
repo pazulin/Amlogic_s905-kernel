@@ -23,48 +23,6 @@
 #include <asm/pgtable.h>
 #include <asm/firmware.h>
 
-/*
- * This macro generates asm code to compute the VSID scramble
- * function.  Used in slb_allocate() and do_stab_bolted.  The function
- * computed is: (protovsid*VSID_MULTIPLIER) % VSID_MODULUS
- *
- *	rt = register containing the proto-VSID and into which the
- *		VSID will be stored
- *	rx = scratch register (clobbered)
- *	rf = flags
- *
- *	- rt and rx must be different registers
- *	- The answer will end up in the low VSID_BITS bits of rt.  The higher
- *	  bits may contain other garbage, so you may need to mask the
- *	  result.
- */
-#define ASM_VSID_SCRAMBLE(rt, rx, rf, size)				\
-	lis	rx,VSID_MULTIPLIER_##size@h;				\
-	ori	rx,rx,VSID_MULTIPLIER_##size@l;				\
-	mulld	rt,rt,rx;		/* rt = rt * MULTIPLIER */	\
-/*									\
- * powermac get slb fault before feature fixup, so make 65 bit part     \
- * the default part of feature fixup					\
- */									\
-BEGIN_MMU_FTR_SECTION							\
-	srdi	rx,rt,VSID_BITS_65_##size;				\
-	clrldi	rt,rt,(64-VSID_BITS_65_##size);				\
-	add	rt,rt,rx;						\
-	addi	rx,rt,1;						\
-	srdi	rx,rx,VSID_BITS_65_##size;				\
-	add	rt,rt,rx;						\
-	rldimi	rf,rt,SLB_VSID_SHIFT_##size,(64 - (SLB_VSID_SHIFT_##size + VSID_BITS_65_##size)); \
-MMU_FTR_SECTION_ELSE							\
-	srdi	rx,rt,VSID_BITS_##size;					\
-	clrldi	rt,rt,(64-VSID_BITS_##size);				\
-	add	rt,rt,rx;		/* add high and low bits */	\
-	addi	rx,rt,1;						\
-	srdi	rx,rx,VSID_BITS_##size;	/* extract 2^VSID_BITS bit */	\
-	add	rt,rt,rx;						\
-	rldimi	rf,rt,SLB_VSID_SHIFT_##size,(64 - (SLB_VSID_SHIFT_##size + VSID_BITS_##size)); \
-ALT_MMU_FTR_SECTION_END_IFCLR(MMU_FTR_68_BIT_VA)
-
-
 /* void slb_allocate_realmode(unsigned long ea);
  *
  * Create an SLB entry for the given EA (user or kernel).
@@ -77,7 +35,7 @@ _GLOBAL(slb_allocate_realmode)
 	 * check for bad kernel/user address
 	 * (ea & ~REGION_MASK) >= PGTABLE_RANGE
 	 */
-	rldicr. r9,r3,4,(63 - H_PGTABLE_EADDR_SIZE - 4)
+	rldicr. r9,r3,4,(63 - 46 - 4)
 	bne-	8f
 
 	srdi	r9,r3,60		/* get region */
@@ -87,6 +45,13 @@ _GLOBAL(slb_allocate_realmode)
 	/* r3 = address, r10 = esid, cr7 = <> PAGE_OFFSET */
 	blt	cr7,0f			/* user or kernel? */
 
+	/* kernel address: proto-VSID = ESID */
+	/* WARNING - MAGIC: we don't use the VSID 0xfffffffff, but
+	 * this code will generate the protoVSID 0xfffffffff for the
+	 * top segment.  That's ok, the scramble below will translate
+	 * it to VSID 0, which is reserved as a bad VSID - one which
+	 * will never have any pages in it.  */
+
 	/* Check if hitting the linear mapping or some other kernel space
 	*/
 	bne	cr7,1f
@@ -94,27 +59,27 @@ _GLOBAL(slb_allocate_realmode)
 	/* Linear mapping encoding bits, the "li" instruction below will
 	 * be patched by the kernel at boot
 	 */
-.globl slb_miss_kernel_load_linear
-slb_miss_kernel_load_linear:
+_GLOBAL(slb_miss_kernel_load_linear)
 	li	r11,0
 	/*
-	 * context = (ea >> 60) - (0xc - 1)
+	 * context = (MAX_USER_CONTEXT) + ((ea >> 60) - 0xc) + 1
 	 * r9 = region id.
 	 */
-	subi	r9,r9,KERNEL_REGION_CONTEXT_OFFSET
+	addis	r9,r9,(MAX_USER_CONTEXT - 0xc + 1)@ha
+	addi	r9,r9,(MAX_USER_CONTEXT - 0xc + 1)@l
+
 
 BEGIN_FTR_SECTION
-	b	.Lslb_finish_load
+	b	slb_finish_load
 END_MMU_FTR_SECTION_IFCLR(MMU_FTR_1T_SEGMENT)
-	b	.Lslb_finish_load_1T
+	b	slb_finish_load_1T
 
 1:
 #ifdef CONFIG_SPARSEMEM_VMEMMAP
+	/* Check virtual memmap region. To be patches at kernel boot */
 	cmpldi	cr0,r9,0xf
 	bne	1f
-/* Check virtual memmap region. To be patched at kernel boot */
-.globl slb_miss_kernel_load_vmemmap
-slb_miss_kernel_load_vmemmap:
+_GLOBAL(slb_miss_kernel_load_vmemmap)
 	li	r11,0
 	b	6f
 1:
@@ -124,39 +89,28 @@ slb_miss_kernel_load_vmemmap:
 	 * can be demoted from 64K -> 4K dynamically on some machines
 	 */
 	clrldi	r11,r10,48
-	cmpldi	r11,(H_VMALLOC_SIZE >> 28) - 1
+	cmpldi	r11,(VMALLOC_SIZE >> 28) - 1
 	bgt	5f
 	lhz	r11,PACAVMALLOCSLLP(r13)
 	b	6f
 5:
 	/* IO mapping */
-.globl slb_miss_kernel_load_io
-slb_miss_kernel_load_io:
+	_GLOBAL(slb_miss_kernel_load_io)
 	li	r11,0
 6:
 	/*
-	 * context = (ea >> 60) - (0xc - 1)
+	 * context = (MAX_USER_CONTEXT) + ((ea >> 60) - 0xc) + 1
 	 * r9 = region id.
 	 */
-	subi	r9,r9,KERNEL_REGION_CONTEXT_OFFSET
+	addis	r9,r9,(MAX_USER_CONTEXT - 0xc + 1)@ha
+	addi	r9,r9,(MAX_USER_CONTEXT - 0xc + 1)@l
 
 BEGIN_FTR_SECTION
-	b	.Lslb_finish_load
+	b	slb_finish_load
 END_MMU_FTR_SECTION_IFCLR(MMU_FTR_1T_SEGMENT)
-	b	.Lslb_finish_load_1T
+	b	slb_finish_load_1T
 
-0:	/*
-	 * For userspace addresses, make sure this is region 0.
-	 */
-	cmpdi	r9, 0
-	bne-	8f
-        /*
-         * user space make sure we are within the allowed limit
-	 */
-	ld	r11,PACA_ADDR_LIMIT(r13)
-	cmpld	r3,r11
-	bge-	8f
-
+0:
 	/* when using slices, we extract the psize off the slice bitmaps
 	 * and then we need to get the sllp encoding off the mmu_psize_defs
 	 * array.
@@ -212,22 +166,80 @@ END_MMU_FTR_SECTION_IFCLR(MMU_FTR_1T_SEGMENT)
 	ld	r9,PACACONTEXTID(r13)
 BEGIN_FTR_SECTION
 	cmpldi	r10,0x1000
-	bge	.Lslb_finish_load_1T
+	bge	slb_finish_load_1T
 END_MMU_FTR_SECTION_IFSET(MMU_FTR_1T_SEGMENT)
-	b	.Lslb_finish_load
+	b	slb_finish_load
 
-8:	/* invalid EA - return an error indication */
-	crset	4*cr0+eq		/* indicate failure */
-	blr
+8:	/* invalid EA */
+	li	r10,0			/* BAD_VSID */
+	li	r9,0			/* BAD_VSID */
+	li	r11,SLB_VSID_USER	/* flags don't much matter */
+	b	slb_finish_load
+
+#ifdef __DISABLED__
+
+/* void slb_allocate_user(unsigned long ea);
+ *
+ * Create an SLB entry for the given EA (user or kernel).
+ * 	r3 = faulting address, r13 = PACA
+ *	r9, r10, r11 are clobbered by this function
+ * No other registers are examined or changed.
+ *
+ * It is called with translation enabled in order to be able to walk the
+ * page tables. This is not currently used.
+ */
+_GLOBAL(slb_allocate_user)
+	/* r3 = faulting address */
+	srdi	r10,r3,28		/* get esid */
+
+	crset	4*cr7+lt		/* set "user" flag for later */
+
+	/* check if we fit in the range covered by the pagetables*/
+	srdi.	r9,r3,PGTABLE_EADDR_SIZE
+	crnot	4*cr0+eq,4*cr0+eq
+	beqlr
+
+	/* now we need to get to the page tables in order to get the page
+	 * size encoding from the PMD. In the future, we'll be able to deal
+	 * with 1T segments too by getting the encoding from the PGD instead
+	 */
+	ld	r9,PACAPGDIR(r13)
+	cmpldi	cr0,r9,0
+	beqlr
+	rlwinm	r11,r10,8,25,28
+	ldx	r9,r9,r11		/* get pgd_t */
+	cmpldi	cr0,r9,0
+	beqlr
+	rlwinm	r11,r10,3,17,28
+	ldx	r9,r9,r11		/* get pmd_t */
+	cmpldi	cr0,r9,0
+	beqlr
+
+	/* build vsid flags */
+	andi.	r11,r9,SLB_VSID_LLP
+	ori	r11,r11,SLB_VSID_USER
+
+	/* get context to calculate proto-VSID */
+	ld	r9,PACACONTEXTID(r13)
+	/* fall through slb_finish_load */
+
+#endif /* __DISABLED__ */
+
 
 /*
  * Finish loading of an SLB entry and return
  *
  * r3 = EA, r9 = context, r10 = ESID, r11 = flags, clobbers r9, cr7 = <> PAGE_OFFSET
  */
-.Lslb_finish_load:
+slb_finish_load:
 	rldimi  r10,r9,ESID_BITS,0
-	ASM_VSID_SCRAMBLE(r10,r9,r11,256M)
+	ASM_VSID_SCRAMBLE(r10,r9,256M)
+	/*
+	 * bits above VSID_BITS_256M need to be ignored from r10
+	 * also combine VSID and flags
+	 */
+	rldimi	r11,r10,SLB_VSID_SHIFT,(64 - (SLB_VSID_SHIFT + VSID_BITS_256M))
+
 	/* r3 = EA, r11 = VSID data */
 	/*
 	 * Find a slot, round robin. Previously we tried to find a
@@ -238,8 +250,7 @@ END_MMU_FTR_SECTION_IFSET(MMU_FTR_1T_SEGMENT)
 7:	ld	r10,PACASTABRR(r13)
 	addi	r10,r10,1
 	/* This gets soft patched on boot. */
-.globl slb_compare_rr_to_size
-slb_compare_rr_to_size:
+_GLOBAL(slb_compare_rr_to_size)
 	cmpldi	r10,0
 
 	blt+	4f
@@ -288,15 +299,15 @@ slb_compare_rr_to_size:
  *
  * r3 = EA, r9 = context, r10 = ESID(256MB), r11 = flags, clobbers r9
  */
-.Lslb_finish_load_1T:
+slb_finish_load_1T:
 	srdi	r10,r10,(SID_SHIFT_1T - SID_SHIFT)	/* get 1T ESID */
 	rldimi  r10,r9,ESID_BITS_1T,0
-	ASM_VSID_SCRAMBLE(r10,r9,r11,1T)
+	ASM_VSID_SCRAMBLE(r10,r9,1T)
 	/*
 	 * bits above VSID_BITS_1T need to be ignored from r10
 	 * also combine VSID and flags
 	 */
-
+	rldimi	r11,r10,SLB_VSID_SHIFT_1T,(64 - (SLB_VSID_SHIFT_1T + VSID_BITS_1T))
 	li	r10,MMU_SEGSIZE_1T
 	rldimi	r11,r10,SLB_VSID_SSIZE_SHIFT,0	/* insert segment size */
 
@@ -304,11 +315,3 @@ slb_compare_rr_to_size:
 	clrrdi	r3,r3,SID_SHIFT_1T	/* clear out non-ESID bits */
 	b	7b
 
-
-_ASM_NOKPROBE_SYMBOL(slb_allocate_realmode)
-_ASM_NOKPROBE_SYMBOL(slb_miss_kernel_load_linear)
-_ASM_NOKPROBE_SYMBOL(slb_miss_kernel_load_io)
-_ASM_NOKPROBE_SYMBOL(slb_compare_rr_to_size)
-#ifdef CONFIG_SPARSEMEM_VMEMMAP
-_ASM_NOKPROBE_SYMBOL(slb_miss_kernel_load_vmemmap)
-#endif

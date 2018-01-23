@@ -169,19 +169,21 @@ static void *sta2x11_swiotlb_alloc_coherent(struct device *dev,
 					    size_t size,
 					    dma_addr_t *dma_handle,
 					    gfp_t flags,
-					    unsigned long attrs)
+					    struct dma_attrs *attrs)
 {
 	void *vaddr;
 
-	vaddr = x86_swiotlb_alloc_coherent(dev, size, dma_handle, flags, attrs);
+	vaddr = dma_generic_alloc_coherent(dev, size, dma_handle, flags, attrs);
+	if (!vaddr)
+		vaddr = swiotlb_alloc_coherent(dev, size, dma_handle, flags);
 	*dma_handle = p2a(*dma_handle, to_pci_dev(dev));
 	return vaddr;
 }
 
 /* We have our own dma_ops: the same as swiotlb but from alloc (above) */
-static const struct dma_map_ops sta2x11_dma_ops = {
+static struct dma_map_ops sta2x11_dma_ops = {
 	.alloc = sta2x11_swiotlb_alloc_coherent,
-	.free = x86_swiotlb_free_coherent,
+	.free = swiotlb_free_coherent,
 	.map_page = swiotlb_map_page,
 	.unmap_page = swiotlb_unmap_page,
 	.map_sg = swiotlb_map_sg_attrs,
@@ -203,7 +205,7 @@ static void sta2x11_setup_pdev(struct pci_dev *pdev)
 		return;
 	pci_set_consistent_dma_mask(pdev, STA2X11_AMBA_SIZE - 1);
 	pci_set_dma_mask(pdev, STA2X11_AMBA_SIZE - 1);
-	pdev->dev.dma_ops = &sta2x11_dma_ops;
+	pdev->dev.archdata.dma_ops = &sta2x11_dma_ops;
 
 	/* We must enable all devices as master, for audio DMA to work */
 	pci_set_master(pdev);
@@ -223,7 +225,7 @@ bool dma_capable(struct device *dev, dma_addr_t addr, size_t size)
 {
 	struct sta2x11_mapping *map;
 
-	if (dev->dma_ops != &sta2x11_dma_ops) {
+	if (dev->archdata.dma_ops != &sta2x11_dma_ops) {
 		if (!dev->dma_mask)
 			return false;
 		return addr + size - 1 <= *dev->dma_mask;
@@ -247,7 +249,7 @@ bool dma_capable(struct device *dev, dma_addr_t addr, size_t size)
  */
 dma_addr_t phys_to_dma(struct device *dev, phys_addr_t paddr)
 {
-	if (dev->dma_ops != &sta2x11_dma_ops)
+	if (dev->archdata.dma_ops != &sta2x11_dma_ops)
 		return paddr;
 	return p2a(paddr, to_pci_dev(dev));
 }
@@ -259,7 +261,7 @@ dma_addr_t phys_to_dma(struct device *dev, phys_addr_t paddr)
  */
 phys_addr_t dma_to_phys(struct device *dev, dma_addr_t daddr)
 {
-	if (dev->dma_ops != &sta2x11_dma_ops)
+	if (dev->archdata.dma_ops != &sta2x11_dma_ops)
 		return daddr;
 	return a2p(daddr, to_pci_dev(dev));
 }

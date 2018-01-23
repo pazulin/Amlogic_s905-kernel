@@ -12,9 +12,7 @@
 #include <linux/delay.h>
 #include <linux/init.h>
 #include <linux/spinlock.h>
-#include <linux/sched/mm.h>
-#include <linux/sched/hotplug.h>
-#include <linux/sched/task_stack.h>
+#include <linux/sched.h>
 #include <linux/interrupt.h>
 #include <linux/cache.h>
 #include <linux/profile.h>
@@ -263,6 +261,7 @@ int __cpu_up(unsigned int cpu, struct task_struct *idle)
 }
 
 #ifdef CONFIG_HOTPLUG_CPU
+static DECLARE_COMPLETION(cpu_killed);
 
 /*
  * __cpu_disable runs on the processor to be shutdown.
@@ -300,7 +299,7 @@ int __cpu_disable(void)
  */
 void __cpu_die(unsigned int cpu)
 {
-	if (!cpu_wait_death(cpu, 1))
+	if (!wait_for_completion_timeout(&cpu_killed, msecs_to_jiffies(1)))
 		pr_err("CPU%u: unable to kill\n", cpu);
 }
 
@@ -314,9 +313,8 @@ void cpu_die(void)
 {
 	local_irq_disable();
 	idle_task_exit();
-	irq_ctx_exit(smp_processor_id());
 
-	(void)cpu_report_death();
+	complete(&cpu_killed);
 
 	asm ("XOR	TXENABLE, D0Re0,D0Re0\n");
 }
@@ -346,8 +344,8 @@ asmlinkage void secondary_start_kernel(void)
 	 * All kernel threads share the same mm context; grab a
 	 * reference and switch to it.
 	 */
-	mmget(mm);
-	mmgrab(mm);
+	atomic_inc(&mm->mm_users);
+	atomic_inc(&mm->mm_count);
 	current->active_mm = mm;
 	cpumask_set_cpu(cpu, mm_cpumask(mm));
 	enter_lazy_tlb(mm, current);
@@ -369,7 +367,6 @@ asmlinkage void secondary_start_kernel(void)
 		panic("No TBI found!");
 
 	per_cpu_trap_init(cpu);
-	irq_ctx_init(cpu);
 
 	preempt_disable();
 
@@ -398,7 +395,7 @@ asmlinkage void secondary_start_kernel(void)
 	/*
 	 * OK, it's off to the idle thread for us
 	 */
-	cpu_startup_entry(CPUHP_AP_ONLINE_IDLE);
+	cpu_startup_entry(CPUHP_ONLINE);
 }
 
 void __init smp_cpus_done(unsigned int max_cpus)

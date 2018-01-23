@@ -24,13 +24,15 @@
 #ifndef _ASM_ARC_UACCESS_H
 #define _ASM_ARC_UACCESS_H
 
+#include <linux/sched.h>
+#include <asm/errno.h>
 #include <linux/string.h>	/* for generic string functions */
 
 
-#define __kernel_ok		(uaccess_kernel())
+#define __kernel_ok		(segment_eq(get_fs(), KERNEL_DS))
 
 /*
- * Algorithmically, for __user_ok() we want do:
+ * Algorthmically, for __user_ok() we want do:
  * 	(start < TASK_SIZE) && (start+len < TASK_SIZE)
  * where TASK_SIZE could either be retrieved from thread_info->addr_limit or
  * emitted directly in code.
@@ -81,10 +83,7 @@
 	"2:	;nop\n"				\
 	"	.section .fixup, \"ax\"\n"	\
 	"	.align 4\n"			\
-	"3:	# return -EFAULT\n"		\
-	"	mov %0, %3\n"			\
-	"	# zero out dst ptr\n"		\
-	"	mov %1,  0\n"			\
+	"3:	mov %0, %3\n"			\
 	"	j   2b\n"			\
 	"	.previous\n"			\
 	"	.section __ex_table, \"a\"\n"	\
@@ -102,11 +101,7 @@
 	"2:	;nop\n"				\
 	"	.section .fixup, \"ax\"\n"	\
 	"	.align 4\n"			\
-	"3:	# return -EFAULT\n"		\
-	"	mov %0, %3\n"			\
-	"	# zero out dst ptr\n"		\
-	"	mov %1,  0\n"			\
-	"	mov %R1, 0\n"			\
+	"3:	mov %0, %3\n"			\
 	"	j   2b\n"			\
 	"	.previous\n"			\
 	"	.section __ex_table, \"a\"\n"	\
@@ -168,7 +163,7 @@
 
 
 static inline unsigned long
-raw_copy_from_user(void *to, const void __user *from, unsigned long n)
+__arc_copy_from_user(void *to, const void __user *from, unsigned long n)
 {
 	long res = 0;
 	char val;
@@ -394,8 +389,11 @@ raw_copy_from_user(void *to, const void __user *from, unsigned long n)
 	return res;
 }
 
+extern unsigned long slowpath_copy_to_user(void __user *to, const void *from,
+					   unsigned long n);
+
 static inline unsigned long
-raw_copy_to_user(void __user *to, const void *from, unsigned long n)
+__arc_copy_to_user(void __user *to, const void *from, unsigned long n)
 {
 	long res = 0;
 	char val;
@@ -661,30 +659,31 @@ static inline unsigned long __arc_clear_user(void __user *to, unsigned long n)
 static inline long
 __arc_strncpy_from_user(char *dst, const char __user *src, long count)
 {
-	long res = 0;
+	long res = count;
 	char val;
+	unsigned int hw_count;
 
 	if (count == 0)
 		return 0;
 
 	__asm__ __volatile__(
-	"	lp	3f			\n"
+	"	lp 2f		\n"
 	"1:	ldb.ab  %3, [%2, 1]		\n"
-	"	breq.d	%3, 0, 3f               \n"
+	"	breq.d  %3, 0, 2f		\n"
 	"	stb.ab  %3, [%1, 1]		\n"
-	"	add	%0, %0, 1	# Num of NON NULL bytes copied	\n"
-	"3:								\n"
+	"2:	sub %0, %6, %4			\n"
+	"3:	;nop				\n"
 	"	.section .fixup, \"ax\"		\n"
 	"	.align 4			\n"
-	"4:	mov %0, %4		# sets @res as -EFAULT	\n"
+	"4:	mov %0, %5			\n"
 	"	j   3b				\n"
 	"	.previous			\n"
 	"	.section __ex_table, \"a\"	\n"
 	"	.align 4			\n"
 	"	.word   1b, 4b			\n"
 	"	.previous			\n"
-	: "+r"(res), "+r"(dst), "+r"(src), "=r"(val)
-	: "g"(-EFAULT), "l"(count)
+	: "=r"(res), "+r"(dst), "+r"(src), "=&r"(val), "=l"(hw_count)
+	: "g"(-EFAULT), "ir"(count), "4"(count)	/* this "4" seeds lp_count */
 	: "memory");
 
 	return res;
@@ -721,20 +720,24 @@ static inline long __arc_strnlen_user(const char __user *s, long n)
 }
 
 #ifndef CONFIG_CC_OPTIMIZE_FOR_SIZE
-
-#define INLINE_COPY_TO_USER
-#define INLINE_COPY_FROM_USER
-
+#define __copy_from_user(t, f, n)	__arc_copy_from_user(t, f, n)
+#define __copy_to_user(t, f, n)		__arc_copy_to_user(t, f, n)
 #define __clear_user(d, n)		__arc_clear_user(d, n)
 #define __strncpy_from_user(d, s, n)	__arc_strncpy_from_user(d, s, n)
 #define __strnlen_user(s, n)		__arc_strnlen_user(s, n)
 #else
+extern long arc_copy_from_user_noinline(void *to, const void __user * from,
+		unsigned long n);
+extern long arc_copy_to_user_noinline(void __user *to, const void *from,
+		unsigned long n);
 extern unsigned long arc_clear_user_noinline(void __user *to,
 		unsigned long n);
 extern long arc_strncpy_from_user_noinline (char *dst, const char __user *src,
 		long count);
 extern long arc_strnlen_user_noinline(const char __user *src, long n);
 
+#define __copy_from_user(t, f, n)	arc_copy_from_user_noinline(t, f, n)
+#define __copy_to_user(t, f, n)		arc_copy_to_user_noinline(t, f, n)
 #define __clear_user(d, n)		arc_clear_user_noinline(d, n)
 #define __strncpy_from_user(d, s, n)	arc_strncpy_from_user_noinline(d, s, n)
 #define __strnlen_user(s, n)		arc_strnlen_user_noinline(s, n)
@@ -742,5 +745,7 @@ extern long arc_strnlen_user_noinline(const char __user *src, long n);
 #endif
 
 #include <asm-generic/uaccess.h>
+
+extern int fixup_exception(struct pt_regs *regs);
 
 #endif

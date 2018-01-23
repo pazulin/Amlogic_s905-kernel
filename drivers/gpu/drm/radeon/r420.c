@@ -92,7 +92,8 @@ void r420_pipes_init(struct radeon_device *rdev)
 	       (1 << 2) | (1 << 3));
 	/* add idle wait as per freedesktop.org bug 24041 */
 	if (r100_gui_wait_for_idle(rdev)) {
-		pr_warn("Failed to wait GUI idle while programming pipes. Bad things might happen.\n");
+		printk(KERN_WARNING "Failed to wait GUI idle while "
+		       "programming pipes. Bad things might happen.\n");
 	}
 	/* get max number of pipes */
 	gb_pipe_select = RREG32(R400_GB_PIPE_SELECT);
@@ -127,7 +128,8 @@ void r420_pipes_init(struct radeon_device *rdev)
 	tmp |= R300_TILE_SIZE_16 | R300_ENABLE_TILING;
 	WREG32(R300_GB_TILE_CONFIG, tmp);
 	if (r100_gui_wait_for_idle(rdev)) {
-		pr_warn("Failed to wait GUI idle while programming pipes. Bad things might happen.\n");
+		printk(KERN_WARNING "Failed to wait GUI idle while "
+		       "programming pipes. Bad things might happen.\n");
 	}
 
 	tmp = RREG32(R300_DST_PIPE_CONFIG);
@@ -139,7 +141,8 @@ void r420_pipes_init(struct radeon_device *rdev)
 	       R300_DC_DC_DISABLE_IGNORE_PE);
 
 	if (r100_gui_wait_for_idle(rdev)) {
-		pr_warn("Failed to wait GUI idle while programming pipes. Bad things might happen.\n");
+		printk(KERN_WARNING "Failed to wait GUI idle while "
+		       "programming pipes. Bad things might happen.\n");
 	}
 
 	if (rdev->family == CHIP_RV530) {
@@ -216,7 +219,7 @@ static void r420_cp_errata_init(struct radeon_device *rdev)
 	radeon_ring_write(ring, PACKET0(R300_CP_RESYNC_ADDR, 1));
 	radeon_ring_write(ring, rdev->config.r300.resync_scratch);
 	radeon_ring_write(ring, 0xDEADBEEF);
-	radeon_ring_unlock_commit(rdev, ring, false);
+	radeon_ring_unlock_commit(rdev, ring);
 }
 
 static void r420_cp_errata_fini(struct radeon_device *rdev)
@@ -229,7 +232,7 @@ static void r420_cp_errata_fini(struct radeon_device *rdev)
 	radeon_ring_lock(rdev, ring, 8);
 	radeon_ring_write(ring, PACKET0(R300_RB3D_DSTCACHE_CTLSTAT, 0));
 	radeon_ring_write(ring, R300_RB3D_DC_FINISH);
-	radeon_ring_unlock_commit(rdev, ring, false);
+	radeon_ring_unlock_commit(rdev, ring);
 	radeon_scratch_free(rdev, rdev->config.r300.resync_scratch);
 }
 

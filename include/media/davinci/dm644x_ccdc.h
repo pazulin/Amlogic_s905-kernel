@@ -10,6 +10,10 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
  */
 #ifndef _DM644X_CCDC_H
 #define _DM644X_CCDC_H
@@ -110,7 +114,7 @@ struct ccdc_fault_pixel {
 	/* Number of fault pixel */
 	unsigned short fp_num;
 	/* Address of fault pixel table */
-	unsigned long fpc_table_addr;
+	unsigned int fpc_table_addr;
 };
 
 /* Structure for CCDC configuration parameters for raw capture mode passed

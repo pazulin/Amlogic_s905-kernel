@@ -16,6 +16,10 @@
  *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  *  General Public License for more details.
  *
+ *  You should have received a copy of the GNU General Public License along
+ *  with this program; if not, write to the Free Software Foundation, Inc.,
+ *  59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+ *
  * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
 
@@ -29,7 +33,6 @@
 #include <linux/dynamic_debug.h>
 
 #include "internal.h"
-#include "sleep.h"
 
 #define _COMPONENT		ACPI_BUS_COMPONENT
 ACPI_MODULE_NAME("utils");
@@ -133,27 +136,13 @@ acpi_extract_package(union acpi_object *package,
 				break;
 			case 'B':
 				size_required +=
-				    sizeof(u8 *) + element->buffer.length;
+				    sizeof(u8 *) +
+				    (element->buffer.length * sizeof(u8));
 				tail_offset += sizeof(u8 *);
 				break;
 			default:
 				printk(KERN_WARNING PREFIX "Invalid package element"
 					      " [%d] got string/buffer,"
-					      " expecting [%c]\n",
-					      i, format_string[i]);
-				return AE_BAD_DATA;
-				break;
-			}
-			break;
-		case ACPI_TYPE_LOCAL_REFERENCE:
-			switch (format_string[i]) {
-			case 'R':
-				size_required += sizeof(void *);
-				tail_offset += sizeof(void *);
-				break;
-			default:
-				printk(KERN_WARNING PREFIX "Invalid package element"
-					      " [%d] got reference,"
 					      " expecting [%c]\n",
 					      i, format_string[i]);
 				return AE_BAD_DATA;
@@ -176,10 +165,11 @@ acpi_extract_package(union acpi_object *package,
 	 * Validate output buffer.
 	 */
 	if (buffer->length == ACPI_ALLOCATE_BUFFER) {
-		buffer->pointer = ACPI_ALLOCATE_ZEROED(size_required);
+		buffer->pointer = ACPI_ALLOCATE(size_required);
 		if (!buffer->pointer)
 			return AE_NO_MEMORY;
 		buffer->length = size_required;
+		memset(buffer->pointer, 0, size_required);
 	} else {
 		if (buffer->length < size_required) {
 			buffer->length = size_required;
@@ -200,6 +190,10 @@ acpi_extract_package(union acpi_object *package,
 
 		u8 **pointer = NULL;
 		union acpi_object *element = &(package->package.elements[i]);
+
+		if (!element) {
+			return AE_BAD_DATA;
+		}
 
 		switch (element->type) {
 
@@ -247,25 +241,14 @@ acpi_extract_package(union acpi_object *package,
 				memcpy(tail, element->buffer.pointer,
 				       element->buffer.length);
 				head += sizeof(u8 *);
-				tail += element->buffer.length;
+				tail += element->buffer.length * sizeof(u8);
 				break;
 			default:
 				/* Should never get here */
 				break;
 			}
 			break;
-		case ACPI_TYPE_LOCAL_REFERENCE:
-			switch (format_string[i]) {
-			case 'R':
-				*(void **)head =
-				    (void *)element->reference.handle;
-				head += sizeof(void *);
-				break;
-			default:
-				/* Should never get here */
-				break;
-			}
-			break;
+
 		case ACPI_TYPE_PACKAGE:
 			/* TBD: handle nested packages... */
 		default:
@@ -339,16 +322,22 @@ acpi_evaluate_reference(acpi_handle handle,
 	package = buffer.pointer;
 
 	if ((buffer.length == 0) || !package) {
+		printk(KERN_ERR PREFIX "No return object (len %X ptr %p)\n",
+			    (unsigned)buffer.length, package);
 		status = AE_BAD_DATA;
 		acpi_util_eval_error(handle, pathname, status);
 		goto end;
 	}
 	if (package->type != ACPI_TYPE_PACKAGE) {
+		printk(KERN_ERR PREFIX "Expecting a [Package], found type %X\n",
+			    package->type);
 		status = AE_BAD_DATA;
 		acpi_util_eval_error(handle, pathname, status);
 		goto end;
 	}
 	if (!package->package.count) {
+		printk(KERN_ERR PREFIX "[Package] has zero elements (%p)\n",
+			    package);
 		status = AE_BAD_DATA;
 		acpi_util_eval_error(handle, pathname, status);
 		goto end;
@@ -367,13 +356,17 @@ acpi_evaluate_reference(acpi_handle handle,
 
 		if (element->type != ACPI_TYPE_LOCAL_REFERENCE) {
 			status = AE_BAD_DATA;
+			printk(KERN_ERR PREFIX
+				    "Expecting a [Reference] package element, found type %X\n",
+				    element->type);
 			acpi_util_eval_error(handle, pathname, status);
 			break;
 		}
 
 		if (!element->reference.handle) {
+			printk(KERN_WARNING PREFIX "Invalid reference in"
+			       " package %s\n", pathname);
 			status = AE_NULL_ENTRY;
-			acpi_util_eval_error(handle, pathname, status);
 			break;
 		}
 		/* Get the  acpi_handle. */
@@ -430,7 +423,7 @@ out:
 EXPORT_SYMBOL(acpi_get_physical_device_location);
 
 /**
- * acpi_evaluate_ost: Evaluate _OST for hotplug operations
+ * acpi_evaluate_hotplug_ost: Evaluate _OST for hotplug operations
  * @handle: ACPI device handle
  * @source_event: source event code
  * @status_code: status code
@@ -441,15 +434,17 @@ EXPORT_SYMBOL(acpi_get_physical_device_location);
  * When the platform does not support _OST, this function has no effect.
  */
 acpi_status
-acpi_evaluate_ost(acpi_handle handle, u32 source_event, u32 status_code,
-		  struct acpi_buffer *status_buf)
+acpi_evaluate_hotplug_ost(acpi_handle handle, u32 source_event,
+		u32 status_code, struct acpi_buffer *status_buf)
 {
+#ifdef ACPI_HOTPLUG_OST
 	union acpi_object params[3] = {
 		{.type = ACPI_TYPE_INTEGER,},
 		{.type = ACPI_TYPE_INTEGER,},
 		{.type = ACPI_TYPE_BUFFER,}
 	};
 	struct acpi_object_list arg_list = {3, params};
+	acpi_status status;
 
 	params[0].integer.value = source_event;
 	params[1].integer.value = status_code;
@@ -461,9 +456,13 @@ acpi_evaluate_ost(acpi_handle handle, u32 source_event, u32 status_code,
 		params[2].buffer.length = 0;
 	}
 
-	return acpi_evaluate_object(handle, "_OST", &arg_list, NULL);
+	status = acpi_evaluate_object(handle, "_OST", &arg_list, NULL);
+	return status;
+#else
+	return AE_OK;
+#endif
 }
-EXPORT_SYMBOL(acpi_evaluate_ost);
+EXPORT_SYMBOL(acpi_evaluate_hotplug_ost);
 
 /**
  * acpi_handle_path: Return the object path of handle
@@ -625,7 +624,7 @@ acpi_status acpi_evaluate_lck(acpi_handle handle, int lock)
  * some old BIOSes do expect a buffer or an integer etc.
  */
 union acpi_object *
-acpi_evaluate_dsm(acpi_handle handle, const u8 *uuid, u64 rev, u64 func,
+acpi_evaluate_dsm(acpi_handle handle, const u8 *uuid, int rev, int func,
 		  union acpi_object *argv4)
 {
 	acpi_status ret;
@@ -669,12 +668,13 @@ EXPORT_SYMBOL(acpi_evaluate_dsm);
  * @uuid: UUID of requested functions, should be 16 bytes at least
  * @rev: revision number of requested functions
  * @funcs: bitmap of requested functions
+ * @exclude: excluding special value, used to support i915 and nouveau
  *
  * Evaluate device's _DSM method to check whether it supports requested
  * functions. Currently only support 64 functions at maximum, should be
  * enough for now.
  */
-bool acpi_check_dsm(acpi_handle handle, const u8 *uuid, u64 rev, u64 funcs)
+bool acpi_check_dsm(acpi_handle handle, const u8 *uuid, int rev, u64 funcs)
 {
 	int i;
 	u64 mask = 0;
@@ -692,7 +692,7 @@ bool acpi_check_dsm(acpi_handle handle, const u8 *uuid, u64 rev, u64 funcs)
 		mask = obj->integer.value;
 	else if (obj->type == ACPI_TYPE_BUFFER)
 		for (i = 0; i < obj->buffer.length && i < 8; i++)
-			mask |= (((u64)obj->buffer.pointer[i]) << (i * 8));
+			mask |= (((u8)obj->buffer.pointer[i]) << (i * 8));
 	ACPI_FREE(obj);
 
 	/*
@@ -705,114 +705,3 @@ bool acpi_check_dsm(acpi_handle handle, const u8 *uuid, u64 rev, u64 funcs)
 	return false;
 }
 EXPORT_SYMBOL(acpi_check_dsm);
-
-/**
- * acpi_dev_found - Detect presence of a given ACPI device in the namespace.
- * @hid: Hardware ID of the device.
- *
- * Return %true if the device was present at the moment of invocation.
- * Note that if the device is pluggable, it may since have disappeared.
- *
- * For this function to work, acpi_bus_scan() must have been executed
- * which happens in the subsys_initcall() subsection. Hence, do not
- * call from a subsys_initcall() or earlier (use acpi_get_devices()
- * instead). Calling from module_init() is fine (which is synonymous
- * with device_initcall()).
- */
-bool acpi_dev_found(const char *hid)
-{
-	struct acpi_device_bus_id *acpi_device_bus_id;
-	bool found = false;
-
-	mutex_lock(&acpi_device_lock);
-	list_for_each_entry(acpi_device_bus_id, &acpi_bus_id_list, node)
-		if (!strcmp(acpi_device_bus_id->bus_id, hid)) {
-			found = true;
-			break;
-		}
-	mutex_unlock(&acpi_device_lock);
-
-	return found;
-}
-EXPORT_SYMBOL(acpi_dev_found);
-
-struct acpi_dev_present_info {
-	struct acpi_device_id hid[2];
-	const char *uid;
-	s64 hrv;
-};
-
-static int acpi_dev_present_cb(struct device *dev, void *data)
-{
-	struct acpi_device *adev = to_acpi_device(dev);
-	struct acpi_dev_present_info *match = data;
-	unsigned long long hrv;
-	acpi_status status;
-
-	if (acpi_match_device_ids(adev, match->hid))
-		return 0;
-
-	if (match->uid && (!adev->pnp.unique_id ||
-	    strcmp(adev->pnp.unique_id, match->uid)))
-		return 0;
-
-	if (match->hrv == -1)
-		return 1;
-
-	status = acpi_evaluate_integer(adev->handle, "_HRV", NULL, &hrv);
-	if (ACPI_FAILURE(status))
-		return 0;
-
-	return hrv == match->hrv;
-}
-
-/**
- * acpi_dev_present - Detect that a given ACPI device is present
- * @hid: Hardware ID of the device.
- * @uid: Unique ID of the device, pass NULL to not check _UID
- * @hrv: Hardware Revision of the device, pass -1 to not check _HRV
- *
- * Return %true if a matching device was present at the moment of invocation.
- * Note that if the device is pluggable, it may since have disappeared.
- *
- * Note that unlike acpi_dev_found() this function checks the status
- * of the device. So for devices which are present in the dsdt, but
- * which are disabled (their _STA callback returns 0) this function
- * will return false.
- *
- * For this function to work, acpi_bus_scan() must have been executed
- * which happens in the subsys_initcall() subsection. Hence, do not
- * call from a subsys_initcall() or earlier (use acpi_get_devices()
- * instead). Calling from module_init() is fine (which is synonymous
- * with device_initcall()).
- */
-bool acpi_dev_present(const char *hid, const char *uid, s64 hrv)
-{
-	struct acpi_dev_present_info match = {};
-	struct device *dev;
-
-	strlcpy(match.hid[0].id, hid, sizeof(match.hid[0].id));
-	match.uid = uid;
-	match.hrv = hrv;
-
-	dev = bus_find_device(&acpi_bus_type, NULL, &match,
-			      acpi_dev_present_cb);
-
-	return !!dev;
-}
-EXPORT_SYMBOL(acpi_dev_present);
-
-/*
- * acpi_backlight= handling, this is done here rather then in video_detect.c
- * because __setup cannot be used in modules.
- */
-char acpi_video_backlight_string[16];
-EXPORT_SYMBOL(acpi_video_backlight_string);
-
-static int __init acpi_backlight(char *str)
-{
-	strlcpy(acpi_video_backlight_string, str,
-		sizeof(acpi_video_backlight_string));
-	return 1;
-}
-__setup("acpi_backlight=", acpi_backlight);

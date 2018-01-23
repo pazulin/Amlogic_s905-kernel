@@ -27,9 +27,36 @@ static netdev_tx_t nlmon_xmit(struct sk_buff *skb, struct net_device *dev)
 	return NETDEV_TX_OK;
 }
 
+static int nlmon_is_valid_mtu(int new_mtu)
+{
+	/* Note that in netlink we do not really have an upper limit. On
+	 * default, we use NLMSG_GOODSIZE. Here at least we should make
+	 * sure that it's at least the header size.
+	 */
+	return new_mtu >= (int) sizeof(struct nlmsghdr);
+}
+
+static int nlmon_change_mtu(struct net_device *dev, int new_mtu)
+{
+	if (!nlmon_is_valid_mtu(new_mtu))
+		return -EINVAL;
+
+	dev->mtu = new_mtu;
+	return 0;
+}
+
 static int nlmon_dev_init(struct net_device *dev)
 {
-	dev->lstats = netdev_alloc_pcpu_stats(struct pcpu_lstats);
+	int i;
+
+	dev->lstats = alloc_percpu(struct pcpu_lstats);
+
+	for_each_possible_cpu(i) {
+		struct pcpu_lstats *nlmstats;
+		nlmstats = per_cpu_ptr(dev->lstats, i);
+		u64_stats_init(&nlmstats->syncp);
+	}
+
 	return dev->lstats == NULL ? -ENOMEM : 0;
 }
 
@@ -58,7 +85,7 @@ static int nlmon_close(struct net_device *dev)
 	return netlink_remove_tap(&nlmon->nt);
 }
 
-static void
+static struct rtnl_link_stats64 *
 nlmon_get_stats64(struct net_device *dev, struct rtnl_link_stats64 *stats)
 {
 	int i;
@@ -72,10 +99,10 @@ nlmon_get_stats64(struct net_device *dev, struct rtnl_link_stats64 *stats)
 		nl_stats = per_cpu_ptr(dev->lstats, i);
 
 		do {
-			start = u64_stats_fetch_begin_irq(&nl_stats->syncp);
+			start = u64_stats_fetch_begin_bh(&nl_stats->syncp);
 			tbytes = nl_stats->bytes;
 			tpackets = nl_stats->packets;
-		} while (u64_stats_fetch_retry_irq(&nl_stats->syncp, start));
+		} while (u64_stats_fetch_retry_bh(&nl_stats->syncp, start));
 
 		packets += tpackets;
 		bytes += tbytes;
@@ -86,6 +113,8 @@ nlmon_get_stats64(struct net_device *dev, struct rtnl_link_stats64 *stats)
 
 	stats->rx_bytes = bytes;
 	stats->tx_bytes = 0;
+
+	return stats;
 }
 
 static u32 always_on(struct net_device *dev)
@@ -104,19 +133,19 @@ static const struct net_device_ops nlmon_ops = {
 	.ndo_stop = nlmon_close,
 	.ndo_start_xmit = nlmon_xmit,
 	.ndo_get_stats64 = nlmon_get_stats64,
+	.ndo_change_mtu = nlmon_change_mtu,
 };
 
 static void nlmon_setup(struct net_device *dev)
 {
 	dev->type = ARPHRD_NETLINK;
-	dev->priv_flags |= IFF_NO_QUEUE;
+	dev->tx_queue_len = 0;
 
 	dev->netdev_ops	= &nlmon_ops;
 	dev->ethtool_ops = &nlmon_ethtool_ops;
 	dev->destructor	= free_netdev;
 
-	dev->features = NETIF_F_SG | NETIF_F_FRAGLIST |
-			NETIF_F_HIGHDMA | NETIF_F_LLTX;
+	dev->features = NETIF_F_FRAGLIST | NETIF_F_HIGHDMA;
 	dev->flags = IFF_NOARP;
 
 	/* That's rather a softlimit here, which, of course,
@@ -124,7 +153,6 @@ static void nlmon_setup(struct net_device *dev)
 	 * expected in most cases.
 	 */
 	dev->mtu = NLMSG_GOODSIZE;
-	dev->min_mtu = sizeof(struct nlmsghdr);
 }
 
 static int nlmon_validate(struct nlattr *tb[], struct nlattr *data[])

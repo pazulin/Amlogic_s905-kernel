@@ -46,7 +46,7 @@ struct vmwgfx_gmrid_man {
 
 static int vmw_gmrid_man_get_node(struct ttm_mem_type_manager *man,
 				  struct ttm_buffer_object *bo,
-				  const struct ttm_place *place,
+				  struct ttm_placement *placement,
 				  struct ttm_mem_reg *mem)
 {
 	struct vmwgfx_gmrid_man *gman =
@@ -159,13 +159,14 @@ static int vmw_gmrid_man_takedown(struct ttm_mem_type_manager *man)
 static void vmw_gmrid_man_debug(struct ttm_mem_type_manager *man,
 				const char *prefix)
 {
-	pr_info("%s: No debug info available for the GMR id manager\n", prefix);
+	printk(KERN_INFO "%s: No debug info available for the GMR "
+	       "id manager.\n", prefix);
 }
 
 const struct ttm_mem_type_manager_func vmw_gmrid_manager_func = {
-	.init = vmw_gmrid_man_init,
-	.takedown = vmw_gmrid_man_takedown,
-	.get_node = vmw_gmrid_man_get_node,
-	.put_node = vmw_gmrid_man_put_node,
-	.debug = vmw_gmrid_man_debug
+	vmw_gmrid_man_init,
+	vmw_gmrid_man_takedown,
+	vmw_gmrid_man_get_node,
+	vmw_gmrid_man_put_node,
+	vmw_gmrid_man_debug
 };

@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2017, Intel Corp.
+ * Copyright (C) 2000 - 2013, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -73,7 +73,7 @@ void *acpi_os_allocate_zeroed(acpi_size size)
 
 		/* Clear the memory block */
 
-		memset(allocation, 0, size);
+		ACPI_MEMSET(allocation, 0, size);
 	}
 
 	return (allocation);
@@ -142,45 +142,6 @@ acpi_status acpi_ut_create_caches(void)
 	if (ACPI_FAILURE(status)) {
 		return (status);
 	}
-#ifdef ACPI_ASL_COMPILER
-	/*
-	 * For use with the ASL-/ASL+ option. This cache keeps track of regular
-	 * 0xA9 0x01 comments.
-	 */
-	status =
-	    acpi_os_create_cache("Acpi-Comment",
-				 sizeof(struct acpi_comment_node),
-				 ACPI_MAX_COMMENT_CACHE_DEPTH,
-				 &acpi_gbl_reg_comment_cache);
-	if (ACPI_FAILURE(status)) {
-		return (status);
-	}
-
-	/*
-	 * This cache keeps track of the starting addresses of where the comments
-	 * lie. This helps prevent duplication of comments.
-	 */
-	status =
-	    acpi_os_create_cache("Acpi-Comment-Addr",
-				 sizeof(struct acpi_comment_addr_node),
-				 ACPI_MAX_COMMENT_CACHE_DEPTH,
-				 &acpi_gbl_comment_addr_cache);
-	if (ACPI_FAILURE(status)) {
-		return (status);
-	}
-
-	/*
-	 * This cache will be used for nodes that represent files.
-	 */
-	status =
-	    acpi_os_create_cache("Acpi-File", sizeof(struct acpi_file_node),
-				 ACPI_MAX_COMMENT_CACHE_DEPTH,
-				 &acpi_gbl_file_cache);
-	if (ACPI_FAILURE(status)) {
-		return (status);
-	}
-#endif
-
 #ifdef ACPI_DBG_TRACK_ALLOCATIONS
 
 	/* Memory allocation lists */
@@ -220,7 +181,7 @@ acpi_status acpi_ut_delete_caches(void)
 	char buffer[7];
 
 	if (acpi_gbl_display_final_mem_stats) {
-		strcpy(buffer, "MEMORY");
+		ACPI_STRCPY(buffer, "MEMORY");
 		(void)acpi_db_display_statistics(buffer);
 	}
 #endif
@@ -239,17 +200,6 @@ acpi_status acpi_ut_delete_caches(void)
 
 	(void)acpi_os_delete_cache(acpi_gbl_ps_node_ext_cache);
 	acpi_gbl_ps_node_ext_cache = NULL;
-
-#ifdef ACPI_ASL_COMPILER
-	(void)acpi_os_delete_cache(acpi_gbl_reg_comment_cache);
-	acpi_gbl_reg_comment_cache = NULL;
-
-	(void)acpi_os_delete_cache(acpi_gbl_comment_addr_cache);
-	acpi_gbl_comment_addr_cache = NULL;
-
-	(void)acpi_os_delete_cache(acpi_gbl_file_cache);
-	acpi_gbl_file_cache = NULL;
-#endif
 
 #ifdef ACPI_DBG_TRACK_ALLOCATIONS
 
@@ -281,7 +231,7 @@ acpi_status acpi_ut_delete_caches(void)
  *
  ******************************************************************************/
 
-acpi_status acpi_ut_validate_buffer(struct acpi_buffer *buffer)
+acpi_status acpi_ut_validate_buffer(struct acpi_buffer * buffer)
 {
 
 	/* Obviously, the structure pointer must be valid */
@@ -322,7 +272,8 @@ acpi_status acpi_ut_validate_buffer(struct acpi_buffer *buffer)
  ******************************************************************************/
 
 acpi_status
-acpi_ut_initialize_buffer(struct acpi_buffer *buffer, acpi_size required_length)
+acpi_ut_initialize_buffer(struct acpi_buffer * buffer,
+			  acpi_size required_length)
 {
 	acpi_size input_buffer_length;
 
@@ -386,6 +337,6 @@ acpi_ut_initialize_buffer(struct acpi_buffer *buffer, acpi_size required_length)
 
 	/* Have a valid buffer, clear it */
 
-	memset(buffer->pointer, 0, required_length);
+	ACPI_MEMSET(buffer->pointer, 0, required_length);
 	return (AE_OK);
 }

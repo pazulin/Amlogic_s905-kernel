@@ -23,11 +23,14 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * To obtain the license, point your browser to
- * http://www.gnu.org/copyleft/gpl.html
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+ * Or, point your browser to http://www.gnu.org/copyleft/gpl.html
  *
  *
- * the project's page is at https://linuxtv.org
+ * the project's page is at http://www.linuxtv.org/ 
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -43,7 +46,7 @@
 #include "tda1004x.h"
 #include "tua6100.h"
 #include "dvb-pll.h"
-#include <media/drv-intf/saa7146_vv.h>
+#include <media/saa7146_vv.h>
 #include <linux/module.h>
 #include <linux/errno.h>
 #include <linux/slab.h>
@@ -65,7 +68,7 @@ DVB_DEFINE_MOD_OPT_ADAPTER_NR(adapter_nr);
 
 struct budget_av {
 	struct budget budget;
-	struct video_device vd;
+	struct video_device *vd;
 	int cur_input;
 	int has_saa7113;
 	struct tasklet_struct ciintf_irq_tasklet;
@@ -577,7 +580,7 @@ static u8 typhoon_cinergy1200s_inittab[] = {
 	0xff, 0xff
 };
 
-static const struct stv0299_config typhoon_config = {
+static struct stv0299_config typhoon_config = {
 	.demod_address = 0x68,
 	.inittab = typhoon_cinergy1200s_inittab,
 	.mclk = 88000000UL,
@@ -590,7 +593,7 @@ static const struct stv0299_config typhoon_config = {
 };
 
 
-static const struct stv0299_config cinergy_1200s_config = {
+static struct stv0299_config cinergy_1200s_config = {
 	.demod_address = 0x68,
 	.inittab = typhoon_cinergy1200s_inittab,
 	.mclk = 88000000UL,
@@ -602,7 +605,7 @@ static const struct stv0299_config cinergy_1200s_config = {
 	.set_symbol_rate = philips_su1278_ty_ci_set_symbol_rate,
 };
 
-static const struct stv0299_config cinergy_1200s_1894_0010_config = {
+static struct stv0299_config cinergy_1200s_1894_0010_config = {
 	.demod_address = 0x68,
 	.inittab = typhoon_cinergy1200s_inittab,
 	.mclk = 88000000UL,
@@ -876,7 +879,7 @@ static int philips_sd1878_ci_set_symbol_rate(struct dvb_frontend *fe,
 	return 0;
 }
 
-static const struct stv0299_config philips_sd1878_config = {
+static struct stv0299_config philips_sd1878_config = {
 	.demod_address = 0x68,
      .inittab = philips_sd1878_inittab,
 	.mclk = 88000000UL,
@@ -1505,7 +1508,7 @@ static int budget_av_attach(struct saa7146_dev *dev, struct saa7146_pci_extensio
 	if (i2c_readregs(&budget_av->budget.i2c_adap, 0xa0, 0x30, mac, 6)) {
 		pr_err("KNC1-%d: Could not read MAC from KNC1 card\n",
 		       budget_av->budget.dvb_adapter.num);
-		eth_zero_addr(mac);
+		memset(mac, 0, 6);
 	} else {
 		pr_info("KNC1-%d: MAC addr = %pM\n",
 			budget_av->budget.dvb_adapter.num, mac);
@@ -1633,4 +1636,5 @@ module_exit(budget_av_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Ralph Metzler, Marcus Metzler, Michael Hunold, others");
-MODULE_DESCRIPTION("driver for the SAA7146 based so-called budget PCI DVB w/ analog input and CI-module (e.g. the KNC cards)");
+MODULE_DESCRIPTION("driver for the SAA7146 based so-called "
+		   "budget PCI DVB w/ analog input and CI-module (e.g. the KNC cards)");

@@ -358,8 +358,7 @@ int wl1271_acx_beacon_filter_opt(struct wl1271 *wl, struct wl12xx_vif *wlvif,
 	struct acx_beacon_filter_option *beacon_filter = NULL;
 	int ret = 0;
 
-	wl1271_debug(DEBUG_ACX, "acx beacon filter opt enable=%d",
-		     enable_filter);
+	wl1271_debug(DEBUG_ACX, "acx beacon filter opt");
 
 	if (enable_filter &&
 	    wl->conf.conn.bcn_filt_mode == CONF_BCN_FILT_MODE_DISABLED)
@@ -534,9 +533,9 @@ int wl12xx_acx_sg_cfg(struct wl1271 *wl)
 	}
 
 	/* BT-WLAN coext parameters */
-	for (i = 0; i < WLCORE_CONF_SG_PARAMS_MAX; i++)
+	for (i = 0; i < CONF_SG_PARAMS_MAX; i++)
 		param->params[i] = cpu_to_le32(c->params[i]);
-	param->param_idx = WLCORE_CONF_SG_PARAMS_ALL;
+	param->param_idx = CONF_SG_PARAMS_ALL;
 
 	ret = wl1271_cmd_configure(wl, ACX_SG_CFG, param, sizeof(*param));
 	if (ret < 0) {
@@ -1419,8 +1418,7 @@ out:
 
 /* setup BA session receiver setting in the FW. */
 int wl12xx_acx_set_ba_receiver_session(struct wl1271 *wl, u8 tid_index,
-				       u16 ssn, bool enable, u8 peer_hlid,
-				       u8 win_size)
+				       u16 ssn, bool enable, u8 peer_hlid)
 {
 	struct wl1271_acx_ba_receiver_setup *acx;
 	int ret;
@@ -1436,7 +1434,7 @@ int wl12xx_acx_set_ba_receiver_session(struct wl1271 *wl, u8 tid_index,
 	acx->hlid = peer_hlid;
 	acx->tid = tid_index;
 	acx->enable = enable;
-	acx->win_size =	win_size;
+	acx->win_size = wl->conf.ht.rx_ba_win_size;
 	acx->ssn = ssn;
 
 	ret = wlcore_cmd_configure_failsafe(wl, ACX_BA_SESSION_RX_SETUP, acx,
@@ -1593,8 +1591,7 @@ out:
 	return ret;
 }
 
-int wl1271_acx_set_inconnection_sta(struct wl1271 *wl,
-				    struct wl12xx_vif *wlvif, u8 *addr)
+int wl1271_acx_set_inconnection_sta(struct wl1271 *wl, u8 *addr)
 {
 	struct wl1271_acx_inconnection_sta *acx = NULL;
 	int ret;
@@ -1606,7 +1603,6 @@ int wl1271_acx_set_inconnection_sta(struct wl1271 *wl,
 		return -ENOMEM;
 
 	memcpy(acx->addr, addr, ETH_ALEN);
-	acx->role_id = wlvif->role_id;
 
 	ret = wl1271_cmd_configure(wl, ACX_UPDATE_INCONNECTION_STA_LIST,
 				   acx, sizeof(*acx));
@@ -1726,7 +1722,7 @@ int wl12xx_acx_config_hangover(struct wl1271 *wl)
 	acx->decrease_delta = conf->decrease_delta;
 	acx->quiet_time = conf->quiet_time;
 	acx->increase_time = conf->increase_time;
-	acx->window_size = conf->window_size;
+	acx->window_size = acx->window_size;
 
 	ret = wl1271_cmd_configure(wl, ACX_CONFIG_HANGOVER, acx,
 				   sizeof(*acx));

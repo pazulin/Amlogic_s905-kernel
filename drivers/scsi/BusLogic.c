@@ -2327,12 +2327,12 @@ static int blogic_slaveconfig(struct scsi_device *dev)
 		if (qdepth == 0)
 			qdepth = BLOGIC_MAX_AUTO_TAG_DEPTH;
 		adapter->qdepth[tgt_id] = qdepth;
-		scsi_change_queue_depth(dev, qdepth);
+		scsi_adjust_queue_depth(dev, MSG_SIMPLE_TAG, qdepth);
 	} else {
 		adapter->tagq_ok &= ~(1 << tgt_id);
 		qdepth = adapter->untag_qdepth;
 		adapter->qdepth[tgt_id] = qdepth;
-		scsi_change_queue_depth(dev, qdepth);
+		scsi_adjust_queue_depth(dev, 0, qdepth);
 	}
 	qdepth = 0;
 	for (tgt_id = 0; tgt_id < adapter->maxdev; tgt_id++)
@@ -3009,7 +3009,7 @@ static int blogic_hostreset(struct scsi_cmnd *SCpnt)
 
 	spin_lock_irq(SCpnt->device->host->host_lock);
 
-	blogic_inc_count(&stats->adapter_reset_req);
+	blogic_inc_count(&stats->adatper_reset_req);
 
 	rc = blogic_resetadapter(adapter, false);
 	spin_unlock_irq(SCpnt->device->host->host_lock);
@@ -3485,7 +3485,7 @@ static int blogic_show_info(struct seq_file *m, struct Scsi_Host *shost)
 	seq_printf(m, "\n\
 Current Driver Queue Depth:	%d\n\
 Currently Allocated CCBs:	%d\n", adapter->drvr_qdepth, adapter->alloc_ccbs);
-	seq_puts(m, "\n\n\
+	seq_printf(m, "\n\n\
 			   DATA TRANSFER STATISTICS\n\
 \n\
 Target	Tagged Queuing	Queue Depth  Active  Attempted	Completed\n\
@@ -3500,7 +3500,7 @@ Target	Tagged Queuing	Queue Depth  Active  Attempted	Completed\n\
 		seq_printf(m,
 				  "	    %3d       %3u    %9u	%9u\n", adapter->qdepth[tgt], adapter->active_cmds[tgt], tgt_stats[tgt].cmds_tried, tgt_stats[tgt].cmds_complete);
 	}
-	seq_puts(m, "\n\
+	seq_printf(m, "\n\
 Target  Read Commands  Write Commands   Total Bytes Read    Total Bytes Written\n\
 ======  =============  ==============  ===================  ===================\n");
 	for (tgt = 0; tgt < adapter->maxdev; tgt++) {
@@ -3517,7 +3517,7 @@ Target  Read Commands  Write Commands   Total Bytes Read    Total Bytes Written\
 		else
 			seq_printf(m, "	     %9u\n", tgt_stats[tgt].byteswritten.units);
 	}
-	seq_puts(m, "\n\
+	seq_printf(m, "\n\
 Target  Command    0-1KB      1-2KB      2-4KB      4-8KB     8-16KB\n\
 ======  =======  =========  =========  =========  =========  =========\n");
 	for (tgt = 0; tgt < adapter->maxdev; tgt++) {
@@ -3533,7 +3533,7 @@ Target  Command    0-1KB      1-2KB      2-4KB      4-8KB     8-16KB\n\
 			    tgt_stats[tgt].write_sz_buckets[0],
 			    tgt_stats[tgt].write_sz_buckets[1], tgt_stats[tgt].write_sz_buckets[2], tgt_stats[tgt].write_sz_buckets[3], tgt_stats[tgt].write_sz_buckets[4]);
 	}
-	seq_puts(m, "\n\
+	seq_printf(m, "\n\
 Target  Command   16-32KB    32-64KB   64-128KB   128-256KB   256KB+\n\
 ======  =======  =========  =========  =========  =========  =========\n");
 	for (tgt = 0; tgt < adapter->maxdev; tgt++) {
@@ -3549,7 +3549,7 @@ Target  Command   16-32KB    32-64KB   64-128KB   128-256KB   256KB+\n\
 			    tgt_stats[tgt].write_sz_buckets[5],
 			    tgt_stats[tgt].write_sz_buckets[6], tgt_stats[tgt].write_sz_buckets[7], tgt_stats[tgt].write_sz_buckets[8], tgt_stats[tgt].write_sz_buckets[9]);
 	}
-	seq_puts(m, "\n\n\
+	seq_printf(m, "\n\n\
 			   ERROR RECOVERY STATISTICS\n\
 \n\
 	  Command Aborts      Bus Device Resets	  Host Adapter Resets\n\
@@ -3560,16 +3560,8 @@ Target	Requested Completed  Requested Completed  Requested Completed\n\
 		struct blogic_tgt_flags *tgt_flags = &adapter->tgt_flags[tgt];
 		if (!tgt_flags->tgt_exists)
 			continue;
-		seq_printf(m, "  %2d	 %5d %5d %5d    %5d %5d %5d	   %5d %5d %5d\n",
-			   tgt, tgt_stats[tgt].aborts_request,
-			   tgt_stats[tgt].aborts_tried,
-			   tgt_stats[tgt].aborts_done,
-			   tgt_stats[tgt].bdr_request,
-			   tgt_stats[tgt].bdr_tried,
-			   tgt_stats[tgt].bdr_done,
-			   tgt_stats[tgt].adapter_reset_req,
-			   tgt_stats[tgt].adapter_reset_attempt,
-			   tgt_stats[tgt].adapter_reset_done);
+		seq_printf(m, "\
+  %2d	 %5d %5d %5d    %5d %5d %5d	   %5d %5d %5d\n", tgt, tgt_stats[tgt].aborts_request, tgt_stats[tgt].aborts_tried, tgt_stats[tgt].aborts_done, tgt_stats[tgt].bdr_request, tgt_stats[tgt].bdr_tried, tgt_stats[tgt].bdr_done, tgt_stats[tgt].adatper_reset_req, tgt_stats[tgt].adapter_reset_attempt, tgt_stats[tgt].adapter_reset_done);
 	}
 	seq_printf(m, "\nExternal Host Adapter Resets: %d\n", adapter->ext_resets);
 	seq_printf(m, "Host Adapter Internal Errors: %d\n", adapter->adapter_intern_errors);
@@ -3901,7 +3893,7 @@ __setup("BusLogic=", blogic_setup);
 	  PCI_ANY_ID, PCI_ANY_ID, 0, 0, 0},
 	{ }
 };*/
-static const struct pci_device_id blogic_pci_tbl[] = {
+static DEFINE_PCI_DEVICE_TABLE(blogic_pci_tbl) = {
 	{PCI_DEVICE(PCI_VENDOR_ID_BUSLOGIC, PCI_DEVICE_ID_BUSLOGIC_MULTIMASTER)},
 	{PCI_DEVICE(PCI_VENDOR_ID_BUSLOGIC, PCI_DEVICE_ID_BUSLOGIC_MULTIMASTER_NC)},
 	{PCI_DEVICE(PCI_VENDOR_ID_BUSLOGIC, PCI_DEVICE_ID_BUSLOGIC_FLASHPOINT)},

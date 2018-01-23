@@ -11,7 +11,7 @@
 #include <linux/interrupt.h>
 #include <linux/time.h>
 #include <linux/delay.h>
-#include <linux/moduleparam.h>
+#include <linux/module.h>
 
 #include <asm/octeon/octeon.h>
 #include <asm/octeon/cvmx-npei-defs.h>
@@ -679,7 +679,7 @@ static void __cvmx_increment_ba(union cvmx_sli_mem_access_subidx *pmas)
 	if (OCTEON_IS_MODEL(OCTEON_CN68XX))
 		pmas->cn68xx.ba++;
 	else
-		pmas->s.ba++;
+		pmas->cn63xx.ba++;
 }
 
 /**
@@ -1351,7 +1351,7 @@ static int __cvmx_pcie_rc_initialize_gen2(int pcie_port)
 	if (OCTEON_IS_MODEL(OCTEON_CN68XX))
 		mem_access_subid.cn68xx.ba = 0;
 	else
-		mem_access_subid.s.ba = 0;
+		mem_access_subid.cn63xx.ba = 0;
 
 	/*
 	 * Setup mem access 12-15 for port 0, 16-19 for port 1,
@@ -1762,6 +1762,14 @@ static int octeon_pcie_write_config(unsigned int pcie_port, struct pci_bus *bus,
 	default:
 		return PCIBIOS_FUNC_NOT_SUPPORTED;
 	}
+#if PCI_CONFIG_SPACE_DELAY
+	/*
+	 * Delay on writes so that devices have time to come up. Some
+	 * bridges need this to allow time for the secondary busses to
+	 * work
+	 */
+	udelay(PCI_CONFIG_SPACE_DELAY);
+#endif
 	return PCIBIOS_SUCCESSFUL;
 }
 
@@ -1784,8 +1792,8 @@ static int octeon_dummy_write_config(struct pci_bus *bus, unsigned int devfn,
 }
 
 static struct pci_ops octeon_pcie0_ops = {
-	.read	= octeon_pcie0_read_config,
-	.write	= octeon_pcie0_write_config,
+	octeon_pcie0_read_config,
+	octeon_pcie0_write_config,
 };
 
 static struct resource octeon_pcie0_mem_resource = {
@@ -1805,8 +1813,8 @@ static struct pci_controller octeon_pcie0_controller = {
 };
 
 static struct pci_ops octeon_pcie1_ops = {
-	.read	= octeon_pcie1_read_config,
-	.write	= octeon_pcie1_write_config,
+	octeon_pcie1_read_config,
+	octeon_pcie1_write_config,
 };
 
 static struct resource octeon_pcie1_mem_resource = {
@@ -1826,8 +1834,8 @@ static struct pci_controller octeon_pcie1_controller = {
 };
 
 static struct pci_ops octeon_dummy_ops = {
-	.read	= octeon_dummy_read_config,
-	.write	= octeon_dummy_write_config,
+	octeon_dummy_read_config,
+	octeon_dummy_write_config,
 };
 
 static struct resource octeon_dummy_mem_resource = {

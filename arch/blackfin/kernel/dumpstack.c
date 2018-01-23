@@ -10,8 +10,6 @@
 #include <linux/mm.h>
 #include <linux/uaccess.h>
 #include <linux/module.h>
-#include <linux/sched/debug.h>
-
 #include <asm/trace.h>
 
 /*

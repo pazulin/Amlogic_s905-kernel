@@ -4,7 +4,6 @@
 #include <asm/page_64_types.h>
 
 #ifndef __ASSEMBLY__
-#include <asm/alternative.h>
 
 /* duplicated to the one in bootmem.h */
 extern unsigned long max_pfn;
@@ -35,26 +34,9 @@ extern unsigned long __phys_addr_symbol(unsigned long);
 #define pfn_valid(pfn)          ((pfn) < max_pfn)
 #endif
 
-void clear_page_orig(void *page);
-void clear_page_rep(void *page);
-void clear_page_erms(void *page);
-
-static inline void clear_page(void *page)
-{
-	alternative_call_2(clear_page_orig,
-			   clear_page_rep, X86_FEATURE_REP_GOOD,
-			   clear_page_erms, X86_FEATURE_ERMS,
-			   "=D" (page),
-			   "0" (page)
-			   : "memory", "rax", "rcx");
-}
-
+void clear_page(void *page);
 void copy_page(void *to, void *from);
 
 #endif	/* !__ASSEMBLY__ */
-
-#ifdef CONFIG_X86_VSYSCALL_EMULATION
-# define __HAVE_ARCH_GATE_AREA 1
-#endif
 
 #endif /* _ASM_X86_PAGE_64_H */

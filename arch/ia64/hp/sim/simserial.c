@@ -14,7 +14,6 @@
 #include <linux/init.h>
 #include <linux/errno.h>
 #include <linux/sched.h>
-#include <linux/sched/debug.h>
 #include <linux/tty.h>
 #include <linux/tty_flip.h>
 #include <linux/major.h>
@@ -301,7 +300,7 @@ static int rs_ioctl(struct tty_struct *tty, unsigned int cmd, unsigned long arg)
 	if ((cmd != TIOCGSERIAL) && (cmd != TIOCSSERIAL) &&
 	    (cmd != TIOCSERCONFIG) && (cmd != TIOCSERGSTRUCT) &&
 	    (cmd != TIOCMIWAIT)) {
-		if (tty_io_error(tty))
+		if (tty->flags & (1 << TTY_IO_ERROR))
 		    return -EIO;
 	}
 

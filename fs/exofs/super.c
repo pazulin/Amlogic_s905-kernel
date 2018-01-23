@@ -2,7 +2,7 @@
  * Copyright (C) 2005, 2006
  * Avishay Traeger (avishay@gmail.com)
  * Copyright (C) 2008, 2009
- * Boaz Harrosh <ooo@electrozaur.com>
+ * Boaz Harrosh <bharrosh@panasas.com>
  *
  * Copyrights for code taken from ext2:
  *     Copyright (C) 1992, 1993, 1994, 1995
@@ -122,7 +122,7 @@ static int parse_options(char *options, struct exofs_mountopt *opts)
 			if (match_int(&args[0], &option))
 				return -EINVAL;
 			if (option <= 0) {
-				EXOFS_ERR("Timeout must be > 0");
+				EXOFS_ERR("Timout must be > 0");
 				return -EINVAL;
 			}
 			opts->timeout = option * HZ;
@@ -194,8 +194,8 @@ static int init_inodecache(void)
 {
 	exofs_inode_cachep = kmem_cache_create("exofs_inode_cache",
 				sizeof(struct exofs_i_info), 0,
-				SLAB_RECLAIM_ACCOUNT | SLAB_MEM_SPREAD |
-				SLAB_ACCOUNT, exofs_init_once);
+				SLAB_RECLAIM_ACCOUNT | SLAB_MEM_SPREAD,
+				exofs_init_once);
 	if (exofs_inode_cachep == NULL)
 		return -ENOMEM;
 	return 0;
@@ -464,6 +464,7 @@ static void exofs_put_super(struct super_block *sb)
 			    sbi->one_comp.obj.partition);
 
 	exofs_sysfs_sb_del(sbi);
+	bdi_destroy(&sbi->bdi);
 	exofs_free_sbi(sbi);
 	sb->s_fs_info = NULL;
 }
@@ -542,7 +543,7 @@ static int exofs_devs_2_odi(struct exofs_dt_device_info *dt_dev,
 	return !(odi->systemid_len || odi->osdname_len);
 }
 
-static int __alloc_dev_table(struct exofs_sb_info *sbi, unsigned numdevs,
+int __alloc_dev_table(struct exofs_sb_info *sbi, unsigned numdevs,
 		      struct exofs_dev **peds)
 {
 	struct __alloc_ore_devs_and_exofs_devs {
@@ -808,12 +809,8 @@ static int exofs_fill_super(struct super_block *sb, void *data, int silent)
 	__sbi_read_stats(sbi);
 
 	/* set up operation vectors */
-	ret = super_setup_bdi(sb);
-	if (ret) {
-		EXOFS_DBGMSG("Failed to super_setup_bdi\n");
-		goto free_sbi;
-	}
-	sb->s_bdi->ra_pages = __ra_pages(&sbi->layout);
+	sbi->bdi.ra_pages = __ra_pages(&sbi->layout);
+	sb->s_bdi = &sbi->bdi;
 	sb->s_fs_info = sbi;
 	sb->s_op = &exofs_sops;
 	sb->s_export_op = &exofs_export_ops;
@@ -836,6 +833,14 @@ static int exofs_fill_super(struct super_block *sb, void *data, int silent)
 		EXOFS_ERR("ERROR: corrupt root inode (mode = %hd)\n",
 		       root->i_mode);
 		ret = -EINVAL;
+		goto free_sbi;
+	}
+
+	ret = bdi_setup_and_register(&sbi->bdi, "exofs", BDI_CAP_MAP_COPY);
+	if (ret) {
+		EXOFS_DBGMSG("Failed to bdi_setup_and_register\n");
+		dput(sb->s_root);
+		sb->s_root = NULL;
 		goto free_sbi;
 	}
 
@@ -953,7 +958,7 @@ static struct dentry *exofs_get_parent(struct dentry *child)
 	if (!ino)
 		return ERR_PTR(-ESTALE);
 
-	return d_obtain_alias(exofs_iget(child->d_sb, ino));
+	return d_obtain_alias(exofs_iget(child->d_inode->i_sb, ino));
 }
 
 static struct inode *exofs_nfs_get_inode(struct super_block *sb,

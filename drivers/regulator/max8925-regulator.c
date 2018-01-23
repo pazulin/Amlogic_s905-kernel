@@ -36,7 +36,9 @@
 
 struct max8925_regulator_info {
 	struct regulator_desc	desc;
+	struct regulator_dev	*regulator;
 	struct i2c_client	*i2c;
+	struct max8925_chip	*chip;
 
 	int	vol_reg;
 	int	enable_reg;
@@ -132,7 +134,7 @@ static int max8925_set_dvm_disable(struct regulator_dev *rdev)
 	return max8925_set_bits(info->i2c, info->vol_reg, 1 << SD1_DVM_EN, 0);
 }
 
-static const struct regulator_ops max8925_regulator_sdv_ops = {
+static struct regulator_ops max8925_regulator_sdv_ops = {
 	.map_voltage		= regulator_map_voltage_linear,
 	.list_voltage		= regulator_list_voltage_linear,
 	.set_voltage_sel	= max8925_set_voltage_sel,
@@ -145,7 +147,7 @@ static const struct regulator_ops max8925_regulator_sdv_ops = {
 	.set_suspend_disable	= max8925_set_dvm_disable,
 };
 
-static const struct regulator_ops max8925_regulator_ldo_ops = {
+static struct regulator_ops max8925_regulator_ldo_ops = {
 	.map_voltage		= regulator_map_voltage_linear,
 	.list_voltage		= regulator_list_voltage_linear,
 	.set_voltage_sel	= max8925_set_voltage_sel,
@@ -249,11 +251,10 @@ static int max8925_regulator_dt_init(struct platform_device *pdev,
 {
 	struct device_node *nproot, *np;
 	int rcount;
-
-	nproot = pdev->dev.parent->of_node;
+	nproot = of_node_get(pdev->dev.parent->of_node);
 	if (!nproot)
 		return -ENODEV;
-	np = of_get_child_by_name(nproot, "regulators");
+	np = of_find_node_by_name(nproot, "regulators");
 	if (!np) {
 		dev_err(&pdev->dev, "failed to find regulators node\n");
 		return -ENODEV;
@@ -263,7 +264,7 @@ static int max8925_regulator_dt_init(struct platform_device *pdev,
 				&max8925_regulator_matches[ridx], 1);
 	of_node_put(np);
 	if (rcount < 0)
-		return rcount;
+		return -ENODEV;
 	config->init_data =	max8925_regulator_matches[ridx].init_data;
 	config->of_node = max8925_regulator_matches[ridx].of_node;
 
@@ -302,6 +303,7 @@ static int max8925_regulator_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 	ri->i2c = chip->i2c;
+	ri->chip = chip;
 
 	config.dev = &pdev->dev;
 	config.driver_data = ri;
@@ -324,6 +326,7 @@ static int max8925_regulator_probe(struct platform_device *pdev)
 static struct platform_driver max8925_regulator_driver = {
 	.driver		= {
 		.name	= "max8925-regulator",
+		.owner	= THIS_MODULE,
 	},
 	.probe		= max8925_regulator_probe,
 };

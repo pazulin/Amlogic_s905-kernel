@@ -41,7 +41,6 @@ void nf_conntrack_cleanup_end(void);
 
 bool nf_ct_get_tuple(const struct sk_buff *skb, unsigned int nhoff,
 		     unsigned int dataoff, u_int16_t l3num, u_int8_t protonum,
-		     struct net *net,
 		     struct nf_conntrack_tuple *tuple,
 		     const struct nf_conntrack_l3proto *l3proto,
 		     const struct nf_conntrack_l4proto *l4proto);
@@ -53,8 +52,7 @@ bool nf_ct_invert_tuple(struct nf_conntrack_tuple *inverse,
 
 /* Find a connection corresponding to a tuple. */
 struct nf_conntrack_tuple_hash *
-nf_conntrack_find_get(struct net *net,
-		      const struct nf_conntrack_zone *zone,
+nf_conntrack_find_get(struct net *net, u16 zone,
 		      const struct nf_conntrack_tuple *tuple);
 
 int __nf_conntrack_confirm(struct sk_buff *skb);
@@ -62,10 +60,10 @@ int __nf_conntrack_confirm(struct sk_buff *skb);
 /* Confirm a connection: returns NF_DROP if packet must be dropped. */
 static inline int nf_conntrack_confirm(struct sk_buff *skb)
 {
-	struct nf_conn *ct = (struct nf_conn *)skb_nfct(skb);
+	struct nf_conn *ct = (struct nf_conn *)skb->nfct;
 	int ret = NF_ACCEPT;
 
-	if (ct) {
+	if (ct && !nf_ct_is_untracked(ct)) {
 		if (!nf_ct_is_confirmed(ct))
 			ret = __nf_conntrack_confirm(skb);
 		if (likely(ret == NF_ACCEPT))
@@ -74,16 +72,11 @@ static inline int nf_conntrack_confirm(struct sk_buff *skb)
 	return ret;
 }
 
-void
+int
 print_tuple(struct seq_file *s, const struct nf_conntrack_tuple *tuple,
             const struct nf_conntrack_l3proto *l3proto,
             const struct nf_conntrack_l4proto *proto);
 
-#define CONNTRACK_LOCKS 1024
-
-extern spinlock_t nf_conntrack_locks[CONNTRACK_LOCKS];
-void nf_conntrack_lock(spinlock_t *lock);
-
-extern spinlock_t nf_conntrack_expect_lock;
+extern spinlock_t nf_conntrack_lock ;
 
 #endif /* _NF_CONNTRACK_CORE_H */

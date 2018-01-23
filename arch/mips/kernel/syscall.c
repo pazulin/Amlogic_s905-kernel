@@ -26,7 +26,6 @@
 #include <linux/uaccess.h>
 #include <linux/slab.h>
 #include <linux/elf.h>
-#include <linux/sched/task_stack.h>
 
 #include <asm/asm.h>
 #include <asm/branch.h>
@@ -37,6 +36,7 @@
 #include <asm/sim.h>
 #include <asm/shmparam.h>
 #include <asm/sysmips.h>
+#include <asm/uaccess.h>
 #include <asm/switch_to.h>
 
 /*
@@ -60,9 +60,16 @@ SYSCALL_DEFINE6(mips_mmap, unsigned long, addr, unsigned long, len,
 	unsigned long, prot, unsigned long, flags, unsigned long,
 	fd, off_t, offset)
 {
+	unsigned long result;
+
+	result = -EINVAL;
 	if (offset & ~PAGE_MASK)
-		return -EINVAL;
-	return sys_mmap_pgoff(addr, len, prot, flags, fd, offset >> PAGE_SHIFT);
+		goto out;
+
+	result = sys_mmap_pgoff(addr, len, prot, flags, fd, offset >> PAGE_SHIFT);
+
+out:
+	return result;
 }
 
 SYSCALL_DEFINE6(mips_mmap2, unsigned long, addr, unsigned long, len,
@@ -98,19 +105,18 @@ static inline int mips_atomic_set(unsigned long addr, unsigned long new)
 	if (unlikely(addr & 3))
 		return -EINVAL;
 
-	if (unlikely(!access_ok(VERIFY_WRITE, (const void __user *)addr, 4)))
+	if (unlikely(!access_ok(VERIFY_WRITE, addr, 4)))
 		return -EINVAL;
 
 	if (cpu_has_llsc && R10000_LLSC_WAR) {
 		__asm__ __volatile__ (
-		"	.set	arch=r4000				\n"
+		"	.set	mips3					\n"
 		"	li	%[err], 0				\n"
 		"1:	ll	%[old], (%[addr])			\n"
 		"	move	%[tmp], %[new]				\n"
 		"2:	sc	%[tmp], (%[addr])			\n"
 		"	beqzl	%[tmp], 1b				\n"
 		"3:							\n"
-		"	.insn						\n"
 		"	.section .fixup,\"ax\"				\n"
 		"4:	li	%[err], %[efault]			\n"
 		"	j	3b					\n"
@@ -129,14 +135,13 @@ static inline int mips_atomic_set(unsigned long addr, unsigned long new)
 		: "memory");
 	} else if (cpu_has_llsc) {
 		__asm__ __volatile__ (
-		"	.set	"MIPS_ISA_ARCH_LEVEL"			\n"
+		"	.set	mips3					\n"
 		"	li	%[err], 0				\n"
 		"1:	ll	%[old], (%[addr])			\n"
 		"	move	%[tmp], %[new]				\n"
 		"2:	sc	%[tmp], (%[addr])			\n"
 		"	bnez	%[tmp], 4f				\n"
 		"3:							\n"
-		"	.insn						\n"
 		"	.subsection 2					\n"
 		"4:	b	1b					\n"
 		"	.previous					\n"

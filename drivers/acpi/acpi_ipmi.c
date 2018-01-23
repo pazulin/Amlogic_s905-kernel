@@ -17,6 +17,10 @@
  *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
  *  General Public License for more details.
  *
+ *  You should have received a copy of the GNU General Public License along
+ *  with this program; if not, write to the Free Software Foundation, Inc.,
+ *  59 Temple Place, Suite 330, Boston, MA 02111-1307 USA.
+ *
  * ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
  */
 
@@ -56,7 +60,7 @@ struct acpi_ipmi_device {
 struct ipmi_driver_data {
 	struct list_head ipmi_devices;
 	struct ipmi_smi_watcher bmc_events;
-	const struct ipmi_user_hndl ipmi_hndlrs;
+	struct ipmi_user_hndl ipmi_hndlrs;
 	struct mutex ipmi_lock;
 
 	/*
@@ -429,7 +433,8 @@ static void ipmi_msg_handler(struct ipmi_recv_msg *msg, void *user_msg_data)
 	if (msg->recv_type == IPMI_RESPONSE_RECV_TYPE &&
 	    msg->msg.data_len == 1) {
 		if (msg->msg.data[0] == IPMI_TIMEOUT_COMPLETION_CODE) {
-			dev_dbg_once(dev, "Unexpected response (timeout).\n");
+			dev_WARN_ONCE(dev, true,
+				      "Unexpected response (timeout).\n");
 			tx_msg->msg_done = ACPI_IPMI_TIMEOUT;
 		}
 		goto out_comp;

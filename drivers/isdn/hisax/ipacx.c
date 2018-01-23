@@ -424,7 +424,9 @@ dch_init(struct IsdnCardState *cs)
 
 	cs->setstack_d      = dch_setstack;
 
-	setup_timer(&cs->dbusytimer, (void *)dbusy_timer_handler, (long)cs);
+	cs->dbusytimer.function = (void *) dbusy_timer_handler;
+	cs->dbusytimer.data = (long) cs;
+	init_timer(&cs->dbusytimer);
 
 	cs->writeisac(cs, IPACX_TR_CONF0, 0x00);  // clear LDD
 	cs->writeisac(cs, IPACX_TR_CONF2, 0x00);  // enable transmitter
@@ -578,7 +580,7 @@ bch_fill_fifo(struct BCState *bcs)
 	if (cs->debug & L1_DEB_HSCX_FIFO) {
 		char *t = bcs->blog;
 
-		t += sprintf(t, "%s() B-%d cnt %d", __func__, hscx, count);
+		t += sprintf(t, "chb_fill_fifo() B-%d cnt %d", hscx, count);
 		QuickHex(t, ptr, count);
 		debugl1(cs, "%s", bcs->blog);
 	}

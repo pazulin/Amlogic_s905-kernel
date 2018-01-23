@@ -11,8 +11,7 @@
  * Waiting for completion is a typically sync point, but not an exclusion point.
  */
 
-#include <linux/sched/signal.h>
-#include <linux/sched/debug.h>
+#include <linux/sched.h>
 #include <linux/completion.h>
 
 /**
@@ -32,8 +31,7 @@ void complete(struct completion *x)
 	unsigned long flags;
 
 	spin_lock_irqsave(&x->wait.lock, flags);
-	if (x->done != UINT_MAX)
-		x->done++;
+	x->done++;
 	__wake_up_locked(&x->wait, TASK_NORMAL, 1);
 	spin_unlock_irqrestore(&x->wait.lock, flags);
 }
@@ -53,7 +51,7 @@ void complete_all(struct completion *x)
 	unsigned long flags;
 
 	spin_lock_irqsave(&x->wait.lock, flags);
-	x->done = UINT_MAX;
+	x->done += UINT_MAX/2;
 	__wake_up_locked(&x->wait, TASK_NORMAL, 0);
 	spin_unlock_irqrestore(&x->wait.lock, flags);
 }
@@ -81,8 +79,7 @@ do_wait_for_common(struct completion *x,
 		if (!x->done)
 			return timeout;
 	}
-	if (x->done != UINT_MAX)
-		x->done--;
+	x->done--;
 	return timeout ?: 1;
 }
 
@@ -151,7 +148,7 @@ EXPORT_SYMBOL(wait_for_completion_timeout);
  *
  * This waits to be signaled for completion of a specific task. It is NOT
  * interruptible and there is no timeout. The caller is accounted as waiting
- * for IO (which traditionally means blkio only).
+ * for IO.
  */
 void __sched wait_for_completion_io(struct completion *x)
 {
@@ -166,8 +163,7 @@ EXPORT_SYMBOL(wait_for_completion_io);
  *
  * This waits for either a completion of a specific task to be signaled or for a
  * specified timeout to expire. The timeout is in jiffies. It is not
- * interruptible. The caller is accounted as waiting for IO (which traditionally
- * means blkio only).
+ * interruptible. The caller is accounted as waiting for IO.
  *
  * Return: 0 if timed out, and positive (at least 1, or number of jiffies left
  * till timeout) if completed.
@@ -271,19 +267,10 @@ bool try_wait_for_completion(struct completion *x)
 	unsigned long flags;
 	int ret = 1;
 
-	/*
-	 * Since x->done will need to be locked only
-	 * in the non-blocking case, we check x->done
-	 * first without taking the lock so we can
-	 * return early in the blocking case.
-	 */
-	if (!READ_ONCE(x->done))
-		return 0;
-
 	spin_lock_irqsave(&x->wait.lock, flags);
 	if (!x->done)
 		ret = 0;
-	else if (x->done != UINT_MAX)
+	else
 		x->done--;
 	spin_unlock_irqrestore(&x->wait.lock, flags);
 	return ret;
@@ -300,21 +287,13 @@ EXPORT_SYMBOL(try_wait_for_completion);
  */
 bool completion_done(struct completion *x)
 {
-	if (!READ_ONCE(x->done))
-		return false;
+	unsigned long flags;
+	int ret = 1;
 
-	/*
-	 * If ->done, we need to wait for complete() to release ->wait.lock
-	 * otherwise we can end up freeing the completion before complete()
-	 * is done referencing it.
-	 *
-	 * The RMB pairs with complete()'s RELEASE of ->wait.lock and orders
-	 * the loads of ->done and ->wait.lock such that we cannot observe
-	 * the lock before complete() acquires it while observing the ->done
-	 * after it's acquired the lock.
-	 */
-	smp_rmb();
-	spin_unlock_wait(&x->wait.lock);
-	return true;
+	spin_lock_irqsave(&x->wait.lock, flags);
+	if (!x->done)
+		ret = 0;
+	spin_unlock_irqrestore(&x->wait.lock, flags);
+	return ret;
 }
 EXPORT_SYMBOL(completion_done);

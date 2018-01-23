@@ -93,7 +93,7 @@ static const int in_scale[6] = { 2500, 2250, 3300, 5000, 12000, 3300 };
 
 #define IN_FROM_REG(reg, scale)	(((reg) * (scale) + 96) / 192)
 #define IN_TO_REG(val, scale)	((val) <= 0 ? 0 : \
-				 (val) >= (scale) * 255 / 192 ? 255 : \
+				 (val) * 192 >= (scale) * 255 ? 255 : \
 				 ((val) * 192 + (scale) / 2) / (scale))
 
 #define TEMP_FROM_REG(reg)	((reg) * 1000)
@@ -103,12 +103,46 @@ static const int in_scale[6] = { 2500, 2250, 3300, 5000, 12000, 3300 };
 				   (val) + 500) / 1000))
 
 /*
+ * Functions declaration
+ */
+
+static int adm1025_probe(struct i2c_client *client,
+			 const struct i2c_device_id *id);
+static int adm1025_detect(struct i2c_client *client,
+			  struct i2c_board_info *info);
+static void adm1025_init_client(struct i2c_client *client);
+static int adm1025_remove(struct i2c_client *client);
+static struct adm1025_data *adm1025_update_device(struct device *dev);
+
+/*
+ * Driver data (common to all clients)
+ */
+
+static const struct i2c_device_id adm1025_id[] = {
+	{ "adm1025", adm1025 },
+	{ "ne1619", ne1619 },
+	{ }
+};
+MODULE_DEVICE_TABLE(i2c, adm1025_id);
+
+static struct i2c_driver adm1025_driver = {
+	.class		= I2C_CLASS_HWMON,
+	.driver = {
+		.name	= "adm1025",
+	},
+	.probe		= adm1025_probe,
+	.remove		= adm1025_remove,
+	.id_table	= adm1025_id,
+	.detect		= adm1025_detect,
+	.address_list	= normal_i2c,
+};
+
+/*
  * Client data (each client gets its own)
  */
 
 struct adm1025_data {
-	struct i2c_client *client;
-	const struct attribute_group *groups[3];
+	struct device *hwmon_dev;
 	struct mutex update_lock;
 	char valid; /* zero until following fields are valid */
 	unsigned long last_updated; /* in jiffies */
@@ -123,51 +157,6 @@ struct adm1025_data {
 	u8 vid;			/* register values, combined */
 	u8 vrm;
 };
-
-static struct adm1025_data *adm1025_update_device(struct device *dev)
-{
-	struct adm1025_data *data = dev_get_drvdata(dev);
-	struct i2c_client *client = data->client;
-
-	mutex_lock(&data->update_lock);
-
-	if (time_after(jiffies, data->last_updated + HZ * 2) || !data->valid) {
-		int i;
-
-		dev_dbg(&client->dev, "Updating data.\n");
-		for (i = 0; i < 6; i++) {
-			data->in[i] = i2c_smbus_read_byte_data(client,
-				      ADM1025_REG_IN(i));
-			data->in_min[i] = i2c_smbus_read_byte_data(client,
-					  ADM1025_REG_IN_MIN(i));
-			data->in_max[i] = i2c_smbus_read_byte_data(client,
-					  ADM1025_REG_IN_MAX(i));
-		}
-		for (i = 0; i < 2; i++) {
-			data->temp[i] = i2c_smbus_read_byte_data(client,
-					ADM1025_REG_TEMP(i));
-			data->temp_min[i] = i2c_smbus_read_byte_data(client,
-					    ADM1025_REG_TEMP_LOW(i));
-			data->temp_max[i] = i2c_smbus_read_byte_data(client,
-					    ADM1025_REG_TEMP_HIGH(i));
-		}
-		data->alarms = i2c_smbus_read_byte_data(client,
-			       ADM1025_REG_STATUS1)
-			     | (i2c_smbus_read_byte_data(client,
-				ADM1025_REG_STATUS2) << 8);
-		data->vid = (i2c_smbus_read_byte_data(client,
-			     ADM1025_REG_VID) & 0x0f)
-			  | ((i2c_smbus_read_byte_data(client,
-			      ADM1025_REG_VID4) & 0x01) << 4);
-
-		data->last_updated = jiffies;
-		data->valid = 1;
-	}
-
-	mutex_unlock(&data->update_lock);
-
-	return data;
-}
 
 /*
  * Sysfs stuff
@@ -228,8 +217,8 @@ static ssize_t set_in_min(struct device *dev, struct device_attribute *attr,
 			  const char *buf, size_t count)
 {
 	int index = to_sensor_dev_attr(attr)->index;
-	struct adm1025_data *data = dev_get_drvdata(dev);
-	struct i2c_client *client = data->client;
+	struct i2c_client *client = to_i2c_client(dev);
+	struct adm1025_data *data = i2c_get_clientdata(client);
 	long val;
 	int err;
 
@@ -249,8 +238,8 @@ static ssize_t set_in_max(struct device *dev, struct device_attribute *attr,
 			  const char *buf, size_t count)
 {
 	int index = to_sensor_dev_attr(attr)->index;
-	struct adm1025_data *data = dev_get_drvdata(dev);
-	struct i2c_client *client = data->client;
+	struct i2c_client *client = to_i2c_client(dev);
+	struct adm1025_data *data = i2c_get_clientdata(client);
 	long val;
 	int err;
 
@@ -284,8 +273,8 @@ static ssize_t set_temp_min(struct device *dev, struct device_attribute *attr,
 			    const char *buf, size_t count)
 {
 	int index = to_sensor_dev_attr(attr)->index;
-	struct adm1025_data *data = dev_get_drvdata(dev);
-	struct i2c_client *client = data->client;
+	struct i2c_client *client = to_i2c_client(dev);
+	struct adm1025_data *data = i2c_get_clientdata(client);
 	long val;
 	int err;
 
@@ -305,8 +294,8 @@ static ssize_t set_temp_max(struct device *dev, struct device_attribute *attr,
 	const char *buf, size_t count)
 {
 	int index = to_sensor_dev_attr(attr)->index;
-	struct adm1025_data *data = dev_get_drvdata(dev);
-	struct i2c_client *client = data->client;
+	struct i2c_client *client = to_i2c_client(dev);
+	struct adm1025_data *data = i2c_get_clientdata(client);
 	long val;
 	int err;
 
@@ -333,12 +322,12 @@ set_temp(1);
 set_temp(2);
 
 static ssize_t
-alarms_show(struct device *dev, struct device_attribute *attr, char *buf)
+show_alarms(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct adm1025_data *data = adm1025_update_device(dev);
 	return sprintf(buf, "%u\n", data->alarms);
 }
-static DEVICE_ATTR_RO(alarms);
+static DEVICE_ATTR(alarms, S_IRUGO, show_alarms, NULL);
 
 static ssize_t
 show_alarm(struct device *dev, struct device_attribute *attr, char *buf)
@@ -358,21 +347,21 @@ static SENSOR_DEVICE_ATTR(temp2_alarm, S_IRUGO, show_alarm, NULL, 4);
 static SENSOR_DEVICE_ATTR(temp1_fault, S_IRUGO, show_alarm, NULL, 14);
 
 static ssize_t
-cpu0_vid_show(struct device *dev, struct device_attribute *attr, char *buf)
+show_vid(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct adm1025_data *data = adm1025_update_device(dev);
 	return sprintf(buf, "%u\n", vid_from_reg(data->vid, data->vrm));
 }
-static DEVICE_ATTR_RO(cpu0_vid);
+static DEVICE_ATTR(cpu0_vid, S_IRUGO, show_vid, NULL);
 
 static ssize_t
-vrm_show(struct device *dev, struct device_attribute *attr, char *buf)
+show_vrm(struct device *dev, struct device_attribute *attr, char *buf)
 {
 	struct adm1025_data *data = dev_get_drvdata(dev);
 	return sprintf(buf, "%u\n", data->vrm);
 }
-static ssize_t vrm_store(struct device *dev, struct device_attribute *attr,
-			 const char *buf, size_t count)
+static ssize_t set_vrm(struct device *dev, struct device_attribute *attr,
+		       const char *buf, size_t count)
 {
 	struct adm1025_data *data = dev_get_drvdata(dev);
 	unsigned long val;
@@ -382,13 +371,10 @@ static ssize_t vrm_store(struct device *dev, struct device_attribute *attr,
 	if (err)
 		return err;
 
-	if (val > 255)
-		return -EINVAL;
-
 	data->vrm = val;
 	return count;
 }
-static DEVICE_ATTR_RW(vrm);
+static DEVICE_ATTR(vrm, S_IRUGO | S_IWUSR, show_vrm, set_vrm);
 
 /*
  * Real code
@@ -484,6 +470,51 @@ static int adm1025_detect(struct i2c_client *client,
 	return 0;
 }
 
+static int adm1025_probe(struct i2c_client *client,
+			 const struct i2c_device_id *id)
+{
+	struct adm1025_data *data;
+	int err;
+	u8 config;
+
+	data = devm_kzalloc(&client->dev, sizeof(struct adm1025_data),
+			    GFP_KERNEL);
+	if (!data)
+		return -ENOMEM;
+
+	i2c_set_clientdata(client, data);
+	mutex_init(&data->update_lock);
+
+	/* Initialize the ADM1025 chip */
+	adm1025_init_client(client);
+
+	/* Register sysfs hooks */
+	err = sysfs_create_group(&client->dev.kobj, &adm1025_group);
+	if (err)
+		return err;
+
+	/* Pin 11 is either in4 (+12V) or VID4 */
+	config = i2c_smbus_read_byte_data(client, ADM1025_REG_CONFIG);
+	if (!(config & 0x20)) {
+		err = sysfs_create_group(&client->dev.kobj, &adm1025_group_in4);
+		if (err)
+			goto exit_remove;
+	}
+
+	data->hwmon_dev = hwmon_device_register(&client->dev);
+	if (IS_ERR(data->hwmon_dev)) {
+		err = PTR_ERR(data->hwmon_dev);
+		goto exit_remove;
+	}
+
+	return 0;
+
+exit_remove:
+	sysfs_remove_group(&client->dev.kobj, &adm1025_group);
+	sysfs_remove_group(&client->dev.kobj, &adm1025_group_in4);
+	return err;
+}
+
 static void adm1025_init_client(struct i2c_client *client)
 {
 	u8 reg;
@@ -526,54 +557,61 @@ static void adm1025_init_client(struct i2c_client *client)
 					  (reg&0x7E)|0x01);
 }
 
-static int adm1025_probe(struct i2c_client *client,
-			 const struct i2c_device_id *id)
+static int adm1025_remove(struct i2c_client *client)
 {
-	struct device *dev = &client->dev;
-	struct device *hwmon_dev;
-	struct adm1025_data *data;
-	u8 config;
+	struct adm1025_data *data = i2c_get_clientdata(client);
 
-	data = devm_kzalloc(dev, sizeof(struct adm1025_data), GFP_KERNEL);
-	if (!data)
-		return -ENOMEM;
+	hwmon_device_unregister(data->hwmon_dev);
+	sysfs_remove_group(&client->dev.kobj, &adm1025_group);
+	sysfs_remove_group(&client->dev.kobj, &adm1025_group_in4);
 
-	i2c_set_clientdata(client, data);
-	data->client = client;
-	mutex_init(&data->update_lock);
-
-	/* Initialize the ADM1025 chip */
-	adm1025_init_client(client);
-
-	/* sysfs hooks */
-	data->groups[0] = &adm1025_group;
-	/* Pin 11 is either in4 (+12V) or VID4 */
-	config = i2c_smbus_read_byte_data(client, ADM1025_REG_CONFIG);
-	if (!(config & 0x20))
-		data->groups[1] = &adm1025_group_in4;
-
-	hwmon_dev = devm_hwmon_device_register_with_groups(dev, client->name,
-							   data, data->groups);
-	return PTR_ERR_OR_ZERO(hwmon_dev);
+	return 0;
 }
 
-static const struct i2c_device_id adm1025_id[] = {
-	{ "adm1025", adm1025 },
-	{ "ne1619", ne1619 },
-	{ }
-};
-MODULE_DEVICE_TABLE(i2c, adm1025_id);
+static struct adm1025_data *adm1025_update_device(struct device *dev)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	struct adm1025_data *data = i2c_get_clientdata(client);
 
-static struct i2c_driver adm1025_driver = {
-	.class		= I2C_CLASS_HWMON,
-	.driver = {
-		.name	= "adm1025",
-	},
-	.probe		= adm1025_probe,
-	.id_table	= adm1025_id,
-	.detect		= adm1025_detect,
-	.address_list	= normal_i2c,
-};
+	mutex_lock(&data->update_lock);
+
+	if (time_after(jiffies, data->last_updated + HZ * 2) || !data->valid) {
+		int i;
+
+		dev_dbg(&client->dev, "Updating data.\n");
+		for (i = 0; i < 6; i++) {
+			data->in[i] = i2c_smbus_read_byte_data(client,
+				      ADM1025_REG_IN(i));
+			data->in_min[i] = i2c_smbus_read_byte_data(client,
+					  ADM1025_REG_IN_MIN(i));
+			data->in_max[i] = i2c_smbus_read_byte_data(client,
+					  ADM1025_REG_IN_MAX(i));
+		}
+		for (i = 0; i < 2; i++) {
+			data->temp[i] = i2c_smbus_read_byte_data(client,
+					ADM1025_REG_TEMP(i));
+			data->temp_min[i] = i2c_smbus_read_byte_data(client,
+					    ADM1025_REG_TEMP_LOW(i));
+			data->temp_max[i] = i2c_smbus_read_byte_data(client,
+					    ADM1025_REG_TEMP_HIGH(i));
+		}
+		data->alarms = i2c_smbus_read_byte_data(client,
+			       ADM1025_REG_STATUS1)
+			     | (i2c_smbus_read_byte_data(client,
+				ADM1025_REG_STATUS2) << 8);
+		data->vid = (i2c_smbus_read_byte_data(client,
+			     ADM1025_REG_VID) & 0x0f)
+			  | ((i2c_smbus_read_byte_data(client,
+			      ADM1025_REG_VID4) & 0x01) << 4);
+
+		data->last_updated = jiffies;
+		data->valid = 1;
+	}
+
+	mutex_unlock(&data->update_lock);
+
+	return data;
+}
 
 module_i2c_driver(adm1025_driver);
 

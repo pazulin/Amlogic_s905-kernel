@@ -25,7 +25,6 @@
  */
 #include <linux/platform_device.h>
 #include <linux/gpio.h>
-#include <linux/leds.h>
 #include <linux/mtd/partitions.h>
 #include <linux/platform_data/gpio-davinci.h>
 #include <linux/platform_data/i2c-davinci.h>
@@ -128,6 +127,8 @@ static struct platform_device davinci_fb_device = {
 	.num_resources = 0,
 };
 
+static struct snd_platform_data dm644x_ntosd2_snd_data;
+
 static struct gpio_led ntosd2_leds[] = {
 	{ .name = "led1_green", .gpio = GPIO(10), },
 	{ .name = "led1_red",   .gpio = GPIO(11), },
@@ -163,8 +164,7 @@ static struct davinci_mmc_config davinci_ntosd2_mmc_config = {
 	.wires		= 4,
 };
 
-#define HAS_ATA		(IS_ENABLED(CONFIG_BLK_DEV_PALMCHIP_BK3710) || \
-			 IS_ENABLED(CONFIG_PATA_BK3710))
+#define HAS_ATA		IS_ENABLED(CONFIG_BLK_DEV_PALMCHIP_BK3710)
 
 #define HAS_NAND	IS_ENABLED(CONFIG_MTD_NAND_DAVINCI)
 
@@ -183,8 +183,9 @@ static __init void davinci_ntosd2_init(void)
 
 	if (HAS_ATA) {
 		if (HAS_NAND)
-			pr_warn("WARNING: both IDE and Flash are enabled, but they share AEMIF pins\n"
-				"\tDisable IDE for NAND/NOR support\n");
+			pr_warning("WARNING: both IDE and Flash are "
+				"enabled, but they share AEMIF pins.\n"
+				"\tDisable IDE for NAND/NOR support.\n");
 		davinci_init_ide();
 	} else if (HAS_NAND) {
 		davinci_cfg_reg(DM644X_HPIEN_DISABLE);
@@ -200,7 +201,7 @@ static __init void davinci_ntosd2_init(void)
 				ARRAY_SIZE(davinci_ntosd2_devices));
 
 	davinci_serial_init(dm644x_serial_device);
-	dm644x_init_asp();
+	dm644x_init_asp(&dm644x_ntosd2_snd_data);
 
 	soc_info->emac_pdata->phy_id = NEUROS_OSD2_PHY_ID;
 

@@ -32,6 +32,9 @@
 #define R4(x)				(((x) >> 4) & 0xf)
 #define R4_MSG(x)			((R4(x) < 9) ?  rrrr_msgs[R4(x)] : "Wrong R4!")
 
+#define MCI_STATUS_DEFERRED		BIT_64(44)
+#define MCI_STATUS_POISON		BIT_64(43)
+
 extern const char * const pp_msgs[];
 
 enum tt_ids {
@@ -79,5 +82,6 @@ struct amd_decoder_ops {
 void amd_report_gart_errors(bool);
 void amd_register_ecc_decoder(void (*f)(int, struct mce *));
 void amd_unregister_ecc_decoder(void (*f)(int, struct mce *));
+int amd_decode_mce(struct notifier_block *nb, unsigned long val, void *data);
 
 #endif /* _EDAC_MCE_AMD_H */

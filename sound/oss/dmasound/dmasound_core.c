@@ -182,9 +182,8 @@
 #include <linux/soundcard.h>
 #include <linux/poll.h>
 #include <linux/mutex.h>
-#include <linux/sched/signal.h>
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 #include "dmasound.h"
 

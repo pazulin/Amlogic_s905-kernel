@@ -26,6 +26,7 @@
 #include <asm/cpu-features.h>
 #include <asm/cpu-type.h>
 #include <asm/div64.h>
+#include <asm/smtc_ipi.h>
 #include <asm/time.h>
 
 /*
@@ -36,7 +37,7 @@ EXPORT_SYMBOL(rtc_lock);
 
 int __weak rtc_mips_set_time(unsigned long sec)
 {
-	return -ENODEV;
+	return 0;
 }
 
 int __weak rtc_mips_set_mmss(unsigned long nowtime)
@@ -70,7 +71,6 @@ EXPORT_SYMBOL(perf_irq);
  */
 
 unsigned int mips_hpt_frequency;
-EXPORT_SYMBOL_GPL(mips_hpt_frequency);
 
 /*
  * This function exists in order to cause an error due to a duplicate

@@ -53,7 +53,8 @@
 #include <xen/xenbus.h>
 #include <xen/features.h>
 
-#include "xenbus.h"
+#include "xenbus_comms.h"
+#include "xenbus_probe.h"
 
 /* backend/<type>/<fe-uuid>/<id> => <type>-<fe-domid>-<id> */
 static int backend_bus_id(char bus_id[XEN_BUS_ID_SIZE], const char *nodename)
@@ -181,9 +182,9 @@ static int xenbus_probe_backend(struct xen_bus_type *bus, const char *type,
 }
 
 static void frontend_changed(struct xenbus_watch *watch,
-			     const char *path, const char *token)
+			    const char **vec, unsigned int len)
 {
-	xenbus_otherend_changed(watch, path, token, 0);
+	xenbus_otherend_changed(watch, vec, len, 0);
 }
 
 static struct xen_bus_type xenbus_backend = {
@@ -204,11 +205,11 @@ static struct xen_bus_type xenbus_backend = {
 };
 
 static void backend_changed(struct xenbus_watch *watch,
-			    const char *path, const char *token)
+			    const char **vec, unsigned int len)
 {
 	DPRINTK("");
 
-	xenbus_dev_changed(path, &xenbus_backend);
+	xenbus_dev_changed(vec[XS_WATCH_PATH], &xenbus_backend);
 }
 
 static struct xenbus_watch be_watch = {
@@ -223,19 +224,23 @@ static int read_frontend_details(struct xenbus_device *xendev)
 
 int xenbus_dev_is_online(struct xenbus_device *dev)
 {
-	return !!xenbus_read_unsigned(dev->nodename, "online", 0);
+	int rc, val;
+
+	rc = xenbus_scanf(XBT_NIL, dev->nodename, "online", "%d", &val);
+	if (rc != 1)
+		val = 0; /* no online node present */
+
+	return val;
 }
 EXPORT_SYMBOL_GPL(xenbus_dev_is_online);
 
-int __xenbus_register_backend(struct xenbus_driver *drv, struct module *owner,
-			      const char *mod_name)
+int xenbus_register_backend(struct xenbus_driver *drv)
 {
 	drv->read_otherend_details = read_frontend_details;
 
-	return xenbus_register_driver_common(drv, &xenbus_backend,
-					     owner, mod_name);
+	return xenbus_register_driver_common(drv, &xenbus_backend);
 }
-EXPORT_SYMBOL_GPL(__xenbus_register_backend);
+EXPORT_SYMBOL_GPL(xenbus_register_backend);
 
 static int backend_probe_and_watch(struct notifier_block *notifier,
 				   unsigned long event,

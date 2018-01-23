@@ -96,7 +96,7 @@ static int smp_execute_task(struct domain_device *dev, void *req, int req_size,
 		task->slow_task->timer.expires = jiffies + SMP_TIMEOUT*HZ;
 		add_timer(&task->slow_task->timer);
 
-		res = i->dft->lldd_execute_task(task, GFP_KERNEL);
+		res = i->dft->lldd_execute_task(task, 1, GFP_KERNEL);
 
 		if (res) {
 			del_timer(&task->slow_task->timer);
@@ -2174,12 +2174,12 @@ int sas_smp_handler(struct Scsi_Host *shost, struct sas_rphy *rphy,
 			       bio_data(rsp->bio), blk_rq_bytes(rsp));
 	if (ret > 0) {
 		/* positive number is the untransferred residual */
-		scsi_req(rsp)->resid_len = ret;
-		scsi_req(req)->resid_len = 0;
+		rsp->resid_len = ret;
+		req->resid_len = 0;
 		ret = 0;
 	} else if (ret == 0) {
-		scsi_req(rsp)->resid_len = 0;
-		scsi_req(req)->resid_len = 0;
+		rsp->resid_len = 0;
+		req->resid_len = 0;
 	}
 
 	return ret;

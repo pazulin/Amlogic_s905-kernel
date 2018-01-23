@@ -14,8 +14,6 @@
 #include <linux/spinlock.h>
 #include <linux/atomic.h>
 #include <linux/binfmts.h>
-#include <linux/sched/coredump.h>
-#include <linux/sched/task.h>
 
 struct ctl_table_header;
 struct mempolicy;
@@ -26,9 +24,10 @@ struct mempolicy;
  * tree) of these proc_dir_entries, so that we can dynamically
  * add new files to /proc.
  *
- * parent/subdir are used for the directory structure (every /proc file has a
- * parent, but "subdir" is empty for all non-directory entries).
- * subdir_node is used to build the rb tree "subdir" of the parent.
+ * The "next" pointer creates a linked list of one /proc directory,
+ * while parent/subdir create the directory structure (every
+ * /proc file has a parent, but "subdir" is NULL for all
+ * non-directory entries).
  */
 struct proc_dir_entry {
 	unsigned int low_ino;
@@ -39,9 +38,7 @@ struct proc_dir_entry {
 	loff_t size;
 	const struct inode_operations *proc_iops;
 	const struct file_operations *proc_fops;
-	struct proc_dir_entry *parent;
-	struct rb_root subdir;
-	struct rb_node subdir_node;
+	struct proc_dir_entry *next, *parent, *subdir;
 	void *data;
 	atomic_t count;		/* use count */
 	atomic_t in_use;	/* number of callers into module in progress; */
@@ -55,6 +52,7 @@ struct proc_dir_entry {
 
 union proc_op {
 	int (*proc_get_link)(struct dentry *, struct path *);
+	int (*proc_read)(struct task_struct *task, char *page);
 	int (*proc_show)(struct seq_file *m,
 		struct pid_namespace *ns, struct pid *pid,
 		struct task_struct *task);
@@ -62,13 +60,12 @@ union proc_op {
 
 struct proc_inode {
 	struct pid *pid;
-	unsigned int fd;
+	int fd;
 	union proc_op op;
 	struct proc_dir_entry *pde;
 	struct ctl_table_header *sysctl;
 	struct ctl_table *sysctl_entry;
-	struct list_head sysctl_inodes;
-	const struct proc_ns_operations *ns_ops;
+	struct proc_ns ns;
 	struct inode vfs_inode;
 };
 
@@ -100,13 +97,25 @@ static inline struct task_struct *get_proc_task(struct inode *inode)
 	return get_pid_task(proc_pid(inode), PIDTYPE_PID);
 }
 
-void task_dump_owner(struct task_struct *task, mode_t mode,
-		     kuid_t *ruid, kgid_t *rgid);
-
-static inline unsigned name_to_int(const struct qstr *qstr)
+static inline int task_dumpable(struct task_struct *task)
 {
-	const char *name = qstr->name;
-	int len = qstr->len;
+	int dumpable = 0;
+	struct mm_struct *mm;
+
+	task_lock(task);
+	mm = task->mm;
+	if (mm)
+		dumpable = get_dumpable(mm);
+	task_unlock(task);
+	if (dumpable == SUID_DUMP_USER)
+		return 1;
+	return 0;
+}
+
+static inline unsigned name_to_int(struct dentry *dentry)
+{
+	const char *name = dentry->d_name.name;
+	int len = dentry->d_name.len;
 	unsigned n = 0;
 
 	if (len > 1 && *name == '0')
@@ -151,9 +160,9 @@ extern int proc_pid_statm(struct seq_file *, struct pid_namespace *,
  * base.c
  */
 extern const struct dentry_operations pid_dentry_operations;
-extern int pid_getattr(const struct path *, struct kstat *, u32, unsigned int);
+extern int pid_getattr(struct vfsmount *, struct dentry *, struct kstat *);
 extern int proc_setattr(struct dentry *, struct iattr *);
-extern struct inode *proc_pid_make_inode(struct super_block *, struct task_struct *, umode_t);
+extern struct inode *proc_pid_make_inode(struct super_block *, struct task_struct *);
 extern int pid_revalidate(struct dentry *, unsigned int);
 extern int pid_delete_dentry(const struct dentry *);
 extern int proc_pid_readdir(struct file *, struct dir_context *);
@@ -169,6 +178,8 @@ extern bool proc_fill_cache(struct file *, struct dir_context *, const char *, i
 /*
  * generic.c
  */
+extern spinlock_t proc_subdir_lock;
+
 extern struct dentry *proc_lookup(struct inode *, struct dentry *, unsigned int);
 extern struct dentry *proc_lookup_de(struct proc_dir_entry *, struct inode *,
 				     struct dentry *);
@@ -182,29 +193,29 @@ static inline struct proc_dir_entry *pde_get(struct proc_dir_entry *pde)
 }
 extern void pde_put(struct proc_dir_entry *);
 
-static inline bool is_empty_pde(const struct proc_dir_entry *pde)
-{
-	return S_ISDIR(pde->mode) && !pde->proc_iops;
-}
-
 /*
  * inode.c
  */
 struct pde_opener {
 	struct file *file;
 	struct list_head lh;
-	bool closing;
+	int closing;
 	struct completion *c;
 };
-extern const struct inode_operations proc_link_inode_operations;
 
 extern const struct inode_operations proc_pid_link_inode_operations;
 
 extern void proc_init_inodecache(void);
-void set_proc_pid_nlink(void);
 extern struct inode *proc_get_inode(struct super_block *, struct proc_dir_entry *);
-extern int proc_fill_super(struct super_block *, void *data, int flags);
+extern int proc_fill_super(struct super_block *);
 extern void proc_entry_rundown(struct proc_dir_entry *);
+
+/*
+ * proc_devtree.c
+ */
+#ifdef CONFIG_PROC_DEVICETREE
+extern void proc_device_tree_init(void);
+#endif
 
 /*
  * proc_namespaces.c
@@ -230,22 +241,14 @@ static inline int proc_net_init(void) { return 0; }
 extern int proc_setup_self(struct super_block *);
 
 /*
- * proc_thread_self.c
- */
-extern int proc_setup_thread_self(struct super_block *);
-extern void proc_thread_self_init(void);
-
-/*
  * proc_sysctl.c
  */
 #ifdef CONFIG_PROC_SYSCTL
 extern int proc_sys_init(void);
-extern void proc_sys_evict_inode(struct inode *inode,
-				 struct ctl_table_header *head);
+extern void sysctl_head_put(struct ctl_table_header *);
 #else
 static inline void proc_sys_init(void) { }
-static inline void proc_sys_evict_inode(struct  inode *inode,
-					struct ctl_table_header *head) { }
+static inline void sysctl_head_put(struct ctl_table_header *head) { }
 #endif
 
 /*
@@ -261,7 +264,6 @@ static inline void proc_tty_init(void) {}
  * root.c
  */
 extern struct proc_dir_entry proc_root;
-extern int proc_parse_options(char *options, struct pid_namespace *pid);
 
 extern void proc_self_init(void);
 extern int proc_remount(struct super_block *, int *, char *);
@@ -270,9 +272,8 @@ extern int proc_remount(struct super_block *, int *, char *);
  * task_[no]mmu.c
  */
 struct proc_maps_private {
-	struct inode *inode;
+	struct pid *pid;
 	struct task_struct *task;
-	struct mm_struct *mm;
 #ifdef CONFIG_MMU
 	struct vm_area_struct *tail_vma;
 #endif
@@ -280,8 +281,6 @@ struct proc_maps_private {
 	struct mempolicy *task_mempolicy;
 #endif
 };
-
-struct mm_struct *proc_mem_open(struct inode *inode, unsigned int mode);
 
 extern const struct file_operations proc_pid_maps_operations;
 extern const struct file_operations proc_tid_maps_operations;

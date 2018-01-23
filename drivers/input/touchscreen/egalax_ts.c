@@ -214,6 +214,8 @@ static int egalax_ts_probe(struct i2c_client *client,
 			     ABS_MT_POSITION_Y, 0, EGALAX_MAX_Y, 0, 0);
 	input_mt_init_slots(input_dev, MAX_SUPPORT_POINTS, 0);
 
+	input_set_drvdata(input_dev, ts);
+
 	error = devm_request_threaded_irq(&client->dev, client->irq, NULL,
 					  egalax_ts_interrupt,
 					  IRQF_TRIGGER_LOW | IRQF_ONESHOT,
@@ -227,6 +229,7 @@ static int egalax_ts_probe(struct i2c_client *client,
 	if (error)
 		return error;
 
+	i2c_set_clientdata(client, ts);
 	return 0;
 }
 
@@ -236,7 +239,8 @@ static const struct i2c_device_id egalax_ts_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, egalax_ts_id);
 
-static int __maybe_unused egalax_ts_suspend(struct device *dev)
+#ifdef CONFIG_PM_SLEEP
+static int egalax_ts_suspend(struct device *dev)
 {
 	static const u8 suspend_cmd[MAX_I2C_DATA_LEN] = {
 		0x3, 0x6, 0xa, 0x3, 0x36, 0x3f, 0x2, 0, 0, 0
@@ -248,24 +252,25 @@ static int __maybe_unused egalax_ts_suspend(struct device *dev)
 	return ret > 0 ? 0 : ret;
 }
 
-static int __maybe_unused egalax_ts_resume(struct device *dev)
+static int egalax_ts_resume(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
 
 	return egalax_wake_up_device(client);
 }
+#endif
 
 static SIMPLE_DEV_PM_OPS(egalax_ts_pm_ops, egalax_ts_suspend, egalax_ts_resume);
 
-static const struct of_device_id egalax_ts_dt_ids[] = {
+static struct of_device_id egalax_ts_dt_ids[] = {
 	{ .compatible = "eeti,egalax_ts" },
 	{ /* sentinel */ }
 };
-MODULE_DEVICE_TABLE(of, egalax_ts_dt_ids);
 
 static struct i2c_driver egalax_ts_driver = {
 	.driver = {
 		.name	= "egalax_ts",
+		.owner	= THIS_MODULE,
 		.pm	= &egalax_ts_pm_ops,
 		.of_match_table	= egalax_ts_dt_ids,
 	},

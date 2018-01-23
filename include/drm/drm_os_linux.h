@@ -4,7 +4,6 @@
  */
 
 #include <linux/interrupt.h>	/* For task queue support */
-#include <linux/sched/signal.h>
 #include <linux/delay.h>
 
 #ifndef readq

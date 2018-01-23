@@ -32,16 +32,12 @@
 MODULE_DESCRIPTION("TI DaVinci Video Port Interface driver");
 MODULE_LICENSE("GPL");
 
-#define VPIF_DRIVER_NAME	"vpif"
-MODULE_ALIAS("platform:" VPIF_DRIVER_NAME);
-
 #define VPIF_CH0_MAX_MODES	22
 #define VPIF_CH1_MAX_MODES	2
 #define VPIF_CH2_MAX_MODES	15
 #define VPIF_CH3_MAX_MODES	2
 
 spinlock_t vpif_lock;
-EXPORT_SYMBOL_GPL(vpif_lock);
 
 void __iomem *vpif_base;
 EXPORT_SYMBOL_GPL(vpif_base);
@@ -467,18 +463,10 @@ static const struct dev_pm_ops vpif_pm = {
 #define vpif_pm_ops NULL
 #endif
 
-#if IS_ENABLED(CONFIG_OF)
-static const struct of_device_id vpif_of_match[] = {
-	{ .compatible = "ti,da850-vpif", },
-	{ /* sentinel */ },
-};
-MODULE_DEVICE_TABLE(of, vpif_of_match);
-#endif
-
 static struct platform_driver vpif_driver = {
 	.driver = {
-		.of_match_table = of_match_ptr(vpif_of_match),
-		.name	= VPIF_DRIVER_NAME,
+		.name	= "vpif",
+		.owner = THIS_MODULE,
 		.pm	= vpif_pm_ops,
 	},
 	.remove = vpif_remove,

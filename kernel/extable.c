@@ -17,15 +17,12 @@
 */
 #include <linux/ftrace.h>
 #include <linux/memory.h>
-#include <linux/extable.h>
 #include <linux/module.h>
 #include <linux/mutex.h>
 #include <linux/init.h>
-#include <linux/kprobes.h>
-#include <linux/filter.h>
 
 #include <asm/sections.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 /*
  * mutex protecting text section modification (dynamic code patching).
@@ -39,7 +36,7 @@ extern struct exception_table_entry __start___ex_table[];
 extern struct exception_table_entry __stop___ex_table[];
 
 /* Cleared by build time tools if the table is already sorted. */
-u32 __initdata __visible main_extable_sort_needed = 1;
+u32 __initdata main_extable_sort_needed = 1;
 
 /* Sort the kernel's built-in exception table */
 void __init sort_main_extable(void)
@@ -105,12 +102,6 @@ int __kernel_text_address(unsigned long addr)
 		return 1;
 	if (is_module_text_address(addr))
 		return 1;
-	if (is_ftrace_trampoline(addr))
-		return 1;
-	if (is_kprobe_optinsn_slot(addr) || is_kprobe_insn_slot(addr))
-		return 1;
-	if (is_bpf_text_address(addr))
-		return 1;
 	/*
 	 * There might be init symbols in saved stacktraces.
 	 * Give those symbols a chance to be printed in
@@ -128,15 +119,7 @@ int kernel_text_address(unsigned long addr)
 {
 	if (core_kernel_text(addr))
 		return 1;
-	if (is_module_text_address(addr))
-		return 1;
-	if (is_ftrace_trampoline(addr))
-		return 1;
-	if (is_kprobe_optinsn_slot(addr) || is_kprobe_insn_slot(addr))
-		return 1;
-	if (is_bpf_text_address(addr))
-		return 1;
-	return 0;
+	return is_module_text_address(addr);
 }
 
 /*

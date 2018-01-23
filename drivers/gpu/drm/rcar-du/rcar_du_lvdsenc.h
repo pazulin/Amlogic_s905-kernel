@@ -1,7 +1,7 @@
 /*
  * rcar_du_lvdsenc.h  --  R-Car Display Unit LVDS Encoder
  *
- * Copyright (C) 2013-2014 Renesas Electronics Corporation
+ * Copyright (C) 2013 Renesas Corporation
  *
  * Contact: Laurent Pinchart (laurent.pinchart@ideasonboard.com)
  *
@@ -16,6 +16,7 @@
 
 #include <linux/io.h>
 #include <linux/module.h>
+#include <linux/platform_data/rcar-du.h>
 
 struct rcar_drm_crtc;
 struct rcar_du_lvdsenc;
@@ -26,38 +27,19 @@ enum rcar_lvds_input {
 	RCAR_LVDS_INPUT_DU2,
 };
 
-/* Keep in sync with the LVDCR0.LVMD hardware register values. */
-enum rcar_lvds_mode {
-	RCAR_LVDS_MODE_JEIDA = 0,
-	RCAR_LVDS_MODE_MIRROR = 1,
-	RCAR_LVDS_MODE_VESA = 4,
-};
-
 #if IS_ENABLED(CONFIG_DRM_RCAR_LVDS)
 int rcar_du_lvdsenc_init(struct rcar_du_device *rcdu);
-void rcar_du_lvdsenc_set_mode(struct rcar_du_lvdsenc *lvds,
-			      enum rcar_lvds_mode mode);
-int rcar_du_lvdsenc_enable(struct rcar_du_lvdsenc *lvds,
-			   struct drm_crtc *crtc, bool enable);
-void rcar_du_lvdsenc_atomic_check(struct rcar_du_lvdsenc *lvds,
-				  struct drm_display_mode *mode);
+int rcar_du_lvdsenc_dpms(struct rcar_du_lvdsenc *lvds,
+			 struct drm_crtc *crtc, int mode);
 #else
 static inline int rcar_du_lvdsenc_init(struct rcar_du_device *rcdu)
 {
 	return 0;
 }
-static inline void rcar_du_lvdsenc_set_mode(struct rcar_du_lvdsenc *lvds,
-					    enum rcar_lvds_mode mode)
-{
-}
-static inline int rcar_du_lvdsenc_enable(struct rcar_du_lvdsenc *lvds,
-					 struct drm_crtc *crtc, bool enable)
+static inline int rcar_du_lvdsenc_dpms(struct rcar_du_lvdsenc *lvds,
+				       struct drm_crtc *crtc, int mode)
 {
 	return 0;
-}
-static inline void rcar_du_lvdsenc_atomic_check(struct rcar_du_lvdsenc *lvds,
-						struct drm_display_mode *mode)
-{
 }
 #endif
 

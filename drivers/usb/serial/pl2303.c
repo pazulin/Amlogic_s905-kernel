@@ -33,11 +33,9 @@
 
 #define PL2303_QUIRK_UART_STATE_IDX0		BIT(0)
 #define PL2303_QUIRK_LEGACY			BIT(1)
-#define PL2303_QUIRK_ENDPOINT_HACK		BIT(2)
 
 static const struct usb_device_id id_table[] = {
-	{ USB_DEVICE(PL2303_VENDOR_ID, PL2303_PRODUCT_ID),
-		.driver_info = PL2303_QUIRK_ENDPOINT_HACK },
+	{ USB_DEVICE(PL2303_VENDOR_ID, PL2303_PRODUCT_ID) },
 	{ USB_DEVICE(PL2303_VENDOR_ID, PL2303_PRODUCT_ID_RSAQ2) },
 	{ USB_DEVICE(PL2303_VENDOR_ID, PL2303_PRODUCT_ID_DCU11) },
 	{ USB_DEVICE(PL2303_VENDOR_ID, PL2303_PRODUCT_ID_RSAQ3) },
@@ -50,9 +48,7 @@ static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE(PL2303_VENDOR_ID, PL2303_PRODUCT_ID_ZTEK) },
 	{ USB_DEVICE(IODATA_VENDOR_ID, IODATA_PRODUCT_ID) },
 	{ USB_DEVICE(IODATA_VENDOR_ID, IODATA_PRODUCT_ID_RSAQ5) },
-	{ USB_DEVICE(ATEN_VENDOR_ID, ATEN_PRODUCT_ID),
-		.driver_info = PL2303_QUIRK_ENDPOINT_HACK },
-	{ USB_DEVICE(ATEN_VENDOR_ID, ATEN_PRODUCT_ID2) },
+	{ USB_DEVICE(ATEN_VENDOR_ID, ATEN_PRODUCT_ID) },
 	{ USB_DEVICE(ATEN_VENDOR_ID2, ATEN_PRODUCT_ID) },
 	{ USB_DEVICE(ELCOM_VENDOR_ID, ELCOM_PRODUCT_ID) },
 	{ USB_DEVICE(ELCOM_VENDOR_ID, ELCOM_PRODUCT_ID_UCSGT) },
@@ -65,14 +61,14 @@ static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE(DCU10_VENDOR_ID, DCU10_PRODUCT_ID) },
 	{ USB_DEVICE(SITECOM_VENDOR_ID, SITECOM_PRODUCT_ID) },
 	{ USB_DEVICE(ALCATEL_VENDOR_ID, ALCATEL_PRODUCT_ID) },
+	{ USB_DEVICE(SAMSUNG_VENDOR_ID, SAMSUNG_PRODUCT_ID) },
 	{ USB_DEVICE(SIEMENS_VENDOR_ID, SIEMENS_PRODUCT_ID_SX1),
 		.driver_info = PL2303_QUIRK_UART_STATE_IDX0 },
 	{ USB_DEVICE(SIEMENS_VENDOR_ID, SIEMENS_PRODUCT_ID_X65),
 		.driver_info = PL2303_QUIRK_UART_STATE_IDX0 },
 	{ USB_DEVICE(SIEMENS_VENDOR_ID, SIEMENS_PRODUCT_ID_X75),
 		.driver_info = PL2303_QUIRK_UART_STATE_IDX0 },
-	{ USB_DEVICE(SIEMENS_VENDOR_ID, SIEMENS_PRODUCT_ID_EF81),
-		.driver_info = PL2303_QUIRK_ENDPOINT_HACK },
+	{ USB_DEVICE(SIEMENS_VENDOR_ID, SIEMENS_PRODUCT_ID_EF81) },
 	{ USB_DEVICE(BENQ_VENDOR_ID, BENQ_PRODUCT_ID_S81) }, /* Benq/Siemens S81 */
 	{ USB_DEVICE(SYNTECH_VENDOR_ID, SYNTECH_PRODUCT_ID) },
 	{ USB_DEVICE(NOKIA_CA42_VENDOR_ID, NOKIA_CA42_PRODUCT_ID) },
@@ -82,8 +78,7 @@ static const struct usb_device_id id_table[] = {
 	{ USB_DEVICE(SPEEDDRAGON_VENDOR_ID, SPEEDDRAGON_PRODUCT_ID) },
 	{ USB_DEVICE(DATAPILOT_U2_VENDOR_ID, DATAPILOT_U2_PRODUCT_ID) },
 	{ USB_DEVICE(BELKIN_VENDOR_ID, BELKIN_PRODUCT_ID) },
-	{ USB_DEVICE(ALCOR_VENDOR_ID, ALCOR_PRODUCT_ID),
-		.driver_info = PL2303_QUIRK_ENDPOINT_HACK },
+	{ USB_DEVICE(ALCOR_VENDOR_ID, ALCOR_PRODUCT_ID) },
 	{ USB_DEVICE(WS002IN_VENDOR_ID, WS002IN_PRODUCT_ID) },
 	{ USB_DEVICE(COREGA_VENDOR_ID, COREGA_PRODUCT_ID) },
 	{ USB_DEVICE(YCCABLE_VENDOR_ID, YCCABLE_PRODUCT_ID) },
@@ -137,7 +132,6 @@ MODULE_DEVICE_TABLE(usb, id_table);
 #define UART_OVERRUN_ERROR		0x40
 #define UART_CTS			0x80
 
-static void pl2303_set_break(struct usb_serial_port *port, bool enable);
 
 enum pl2303_type {
 	TYPE_01,	/* Type 0 and 1 (difference unknown) */
@@ -167,9 +161,6 @@ static const struct pl2303_type_data pl2303_type_data[TYPE_COUNT] = {
 	[TYPE_01] = {
 		.max_baud_rate =	1228800,
 		.quirks =		PL2303_QUIRK_LEGACY,
-	},
-	[TYPE_HX] = {
-		.max_baud_rate =	12000000,
 	},
 };
 
@@ -221,62 +212,6 @@ static int pl2303_probe(struct usb_serial *serial,
 	usb_set_serial_data(serial, (void *)id->driver_info);
 
 	return 0;
-}
-
-/*
- * Use interrupt endpoint from first interface if available.
- *
- * This is needed due to the looney way its endpoints are set up.
- */
-static int pl2303_endpoint_hack(struct usb_serial *serial,
-					struct usb_serial_endpoints *epds)
-{
-	struct usb_interface *interface = serial->interface;
-	struct usb_device *dev = serial->dev;
-	struct device *ddev = &interface->dev;
-	struct usb_host_interface *iface_desc;
-	struct usb_endpoint_descriptor *endpoint;
-	unsigned int i;
-
-	if (interface == dev->actconfig->interface[0])
-		return 0;
-
-	/* check out the endpoints of the other interface */
-	iface_desc = dev->actconfig->interface[0]->cur_altsetting;
-
-	for (i = 0; i < iface_desc->desc.bNumEndpoints; ++i) {
-		endpoint = &iface_desc->endpoint[i].desc;
-
-		if (!usb_endpoint_is_int_in(endpoint))
-			continue;
-
-		dev_dbg(ddev, "found interrupt in on separate interface\n");
-		if (epds->num_interrupt_in < ARRAY_SIZE(epds->interrupt_in))
-			epds->interrupt_in[epds->num_interrupt_in++] = endpoint;
-	}
-
-	return 0;
-}
-
-static int pl2303_calc_num_ports(struct usb_serial *serial,
-					struct usb_serial_endpoints *epds)
-{
-	unsigned long quirks = (unsigned long)usb_get_serial_data(serial);
-	struct device *dev = &serial->interface->dev;
-	int ret;
-
-	if (quirks & PL2303_QUIRK_ENDPOINT_HACK) {
-		ret = pl2303_endpoint_hack(serial, epds);
-		if (ret)
-			return ret;
-	}
-
-	if (epds->num_interrupt_in < 1) {
-		dev_err(dev, "required interrupt-in endpoint missing\n");
-		return -ENODEV;
-	}
-
-	return 1;
 }
 
 static int pl2303_startup(struct usb_serial *serial)
@@ -424,38 +359,21 @@ static speed_t pl2303_encode_baud_rate_direct(unsigned char buf[4],
 static speed_t pl2303_encode_baud_rate_divisor(unsigned char buf[4],
 								speed_t baud)
 {
-	unsigned int baseline, mantissa, exponent;
+	unsigned int tmp;
 
 	/*
 	 * Apparently the formula is:
-	 *   baudrate = 12M * 32 / (mantissa * 4^exponent)
-	 * where
-	 *   mantissa = buf[8:0]
-	 *   exponent = buf[11:9]
+	 * baudrate = 12M * 32 / (2^buf[1]) / buf[0]
 	 */
-	baseline = 12000000 * 32;
-	mantissa = baseline / baud;
-	if (mantissa == 0)
-		mantissa = 1;	/* Avoid dividing by zero if baud > 32*12M. */
-	exponent = 0;
-	while (mantissa >= 512) {
-		if (exponent < 7) {
-			mantissa >>= 2;	/* divide by 4 */
-			exponent++;
-		} else {
-			/* Exponent is maxed. Trim mantissa and leave. */
-			mantissa = 511;
-			break;
-		}
-	}
-
+	tmp = 12000000 * 32 / baud;
 	buf[3] = 0x80;
 	buf[2] = 0;
-	buf[1] = exponent << 1 | mantissa >> 8;
-	buf[0] = mantissa & 0xff;
-
-	/* Calculate and return the exact baud rate. */
-	baud = (baseline / mantissa) >> (exponent << 1);
+	buf[1] = (tmp >= 256);
+	while (tmp >= 256) {
+		tmp >>= 2;
+		buf[1] <<= 1;
+	}
+	buf[0] = tmp;
 
 	return baud;
 }
@@ -477,14 +395,16 @@ static void pl2303_encode_baud_rate(struct tty_struct *tty,
 	if (spriv->type->max_baud_rate)
 		baud = min_t(speed_t, baud, spriv->type->max_baud_rate);
 	/*
-	 * Use direct method for supported baud rates, otherwise use divisors.
+	 * Set baud rate to nearest supported value.
+	 *
+	 * NOTE: Baud rate 500k can only be set using divisors.
 	 */
 	baud_sup = pl2303_get_supported_baud_rate(baud);
 
-	if (baud == baud_sup)
-		baud = pl2303_encode_baud_rate_direct(buf, baud);
-	else
+	if (baud == 500000)
 		baud = pl2303_encode_baud_rate_divisor(buf, baud);
+	else
+		baud = pl2303_encode_baud_rate_direct(buf, baud_sup);
 
 	/* Save resulting baud rate */
 	tty_encode_baud_rate(tty, baud, baud);
@@ -503,7 +423,7 @@ static int pl2303_get_line_request(struct usb_serial_port *port,
 	if (ret != 7) {
 		dev_err(&port->dev, "%s - failed: %d\n", __func__, ret);
 
-		if (ret >= 0)
+		if (ret > 0)
 			ret = -EIO;
 
 		return ret;
@@ -523,8 +443,12 @@ static int pl2303_set_line_request(struct usb_serial_port *port,
 	ret = usb_control_msg(udev, usb_sndctrlpipe(udev, 0),
 				SET_LINE_REQUEST, SET_LINE_REQUEST_TYPE,
 				0, 0, buf, 7, 100);
-	if (ret < 0) {
+	if (ret != 7) {
 		dev_err(&port->dev, "%s - failed: %d\n", __func__, ret);
+
+		if (ret > 0)
+			ret = -EIO;
+
 		return ret;
 	}
 
@@ -690,7 +614,6 @@ static void pl2303_close(struct usb_serial_port *port)
 {
 	usb_serial_generic_close(port);
 	usb_kill_urb(port->interrupt_in_urb);
-	pl2303_set_break(port, false);
 }
 
 static int pl2303_open(struct tty_struct *tty, struct usb_serial_port *port)
@@ -817,16 +740,17 @@ static int pl2303_ioctl(struct tty_struct *tty,
 	return -ENOIOCTLCMD;
 }
 
-static void pl2303_set_break(struct usb_serial_port *port, bool enable)
+static void pl2303_break_ctl(struct tty_struct *tty, int break_state)
 {
+	struct usb_serial_port *port = tty->driver_data;
 	struct usb_serial *serial = port->serial;
 	u16 state;
 	int result;
 
-	if (enable)
-		state = BREAK_ON;
-	else
+	if (break_state == 0)
 		state = BREAK_OFF;
+	else
+		state = BREAK_ON;
 
 	dev_dbg(&port->dev, "%s - turning break %s\n", __func__,
 			state == BREAK_OFF ? "off" : "on");
@@ -836,13 +760,6 @@ static void pl2303_set_break(struct usb_serial_port *port, bool enable)
 				 0, NULL, 0, 100);
 	if (result)
 		dev_err(&port->dev, "error sending break = %d\n", result);
-}
-
-static void pl2303_break_ctl(struct tty_struct *tty, int state)
-{
-	struct usb_serial_port *port = tty->driver_data;
-
-	pl2303_set_break(port, state);
 }
 
 static void pl2303_update_line_status(struct usb_serial_port *port,
@@ -991,9 +908,7 @@ static struct usb_serial_driver pl2303_device = {
 		.name =		"pl2303",
 	},
 	.id_table =		id_table,
-	.num_bulk_in =		1,
-	.num_bulk_out =		1,
-	.num_interrupt_in =	0,	/* see pl2303_calc_num_ports */
+	.num_ports =		1,
 	.bulk_in_size =		256,
 	.bulk_out_size =	256,
 	.open =			pl2303_open,
@@ -1009,7 +924,6 @@ static struct usb_serial_driver pl2303_device = {
 	.process_read_urb =	pl2303_process_read_urb,
 	.read_int_callback =	pl2303_read_int_callback,
 	.probe =		pl2303_probe,
-	.calc_num_ports =	pl2303_calc_num_ports,
 	.attach =		pl2303_startup,
 	.release =		pl2303_release,
 	.port_probe =		pl2303_port_probe,

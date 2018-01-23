@@ -151,6 +151,11 @@ static void dz_stop_rx(struct uart_port *uport)
 	dz_out(dport, DZ_LPR, dport->cflag);
 }
 
+static void dz_enable_ms(struct uart_port *uport)
+{
+	/* nothing to do */
+}
+
 /*
  * ------------------------------------------------------------
  *
@@ -739,13 +744,14 @@ static int dz_verify_port(struct uart_port *uport, struct serial_struct *ser)
 	return ret;
 }
 
-static const struct uart_ops dz_ops = {
+static struct uart_ops dz_ops = {
 	.tx_empty	= dz_tx_empty,
 	.get_mctrl	= dz_get_mctrl,
 	.set_mctrl	= dz_set_mctrl,
 	.stop_tx	= dz_stop_tx,
 	.start_tx	= dz_start_tx,
 	.stop_rx	= dz_stop_rx,
+	.enable_ms	= dz_enable_ms,
 	.break_ctl	= dz_break_ctl,
 	.startup	= dz_startup,
 	.shutdown	= dz_shutdown,

@@ -116,7 +116,7 @@ static int dm355evm_rtc_set_time(struct device *dev, struct rtc_time *tm)
 	return 0;
 }
 
-static const struct rtc_class_ops dm355evm_rtc_ops = {
+static struct rtc_class_ops dm355evm_rtc_ops = {
 	.read_time	= dm355evm_rtc_read_time,
 	.set_time	= dm355evm_rtc_set_time,
 };
@@ -146,6 +146,7 @@ static int dm355evm_rtc_probe(struct platform_device *pdev)
 static struct platform_driver rtc_dm355evm_driver = {
 	.probe		= dm355evm_rtc_probe,
 	.driver		= {
+		.owner	= THIS_MODULE,
 		.name	= "rtc-dm355evm",
 	},
 };

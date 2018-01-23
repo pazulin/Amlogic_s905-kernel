@@ -12,8 +12,6 @@
 #include <linux/syscalls.h>
 #include <linux/moduleloader.h>
 #include <linux/atomic.h>
-#include <linux/sched/signal.h>
-
 #include <asm/mipsmtregs.h>
 #include <asm/mips_mt.h>
 #include <asm/processor.h>
@@ -96,12 +94,12 @@ int rtlx_open(int index, int can_sleep)
 	int ret = 0;
 
 	if (index >= RTLX_CHANNELS) {
-		pr_debug("rtlx_open index out of range\n");
+		pr_debug(KERN_DEBUG "rtlx_open index out of range\n");
 		return -ENOSYS;
 	}
 
 	if (atomic_inc_return(&channel_wqs[index].in_open) > 1) {
-		pr_debug("rtlx_open channel %d already opened\n", index);
+		pr_debug(KERN_DEBUG "rtlx_open channel %d already opened\n", index);
 		ret = -EBUSY;
 		goto out_fail;
 	}

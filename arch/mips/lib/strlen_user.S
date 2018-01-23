@@ -9,7 +9,6 @@
  */
 #include <asm/asm.h>
 #include <asm/asm-offsets.h>
-#include <asm/export.h>
 #include <asm/regdef.h>
 
 #define EX(insn,reg,addr,handler)			\
@@ -23,43 +22,19 @@
  *
  * Return 0 for error
  */
-	.macro __BUILD_STRLEN_ASM func
-LEAF(__strlen_\func\()_asm)
+LEAF(__strlen_user_asm)
 	LONG_L		v0, TI_ADDR_LIMIT($28)	# pointer ok?
 	and		v0, a0
-	bnez		v0, .Lfault\@
+	bnez		v0, .Lfault
 
+FEXPORT(__strlen_user_nocheck_asm)
 	move		v0, a0
-.ifeqs "\func", "kernel"
-1:	EX(lbu, v1, (v0), .Lfault\@)
-.else
-1:	EX(lbue, v1, (v0), .Lfault\@)
-.endif
+1:	EX(lbu, v1, (v0), .Lfault)
 	PTR_ADDIU	v0, 1
 	bnez		v1, 1b
 	PTR_SUBU	v0, a0
 	jr		ra
-	END(__strlen_\func\()_asm)
+	END(__strlen_user_asm)
 
-.Lfault\@:	move		v0, zero
+.Lfault:	move		v0, zero
 	jr		ra
-	.endm
-
-#ifndef CONFIG_EVA
-	/* Set aliases */
-	.global __strlen_user_asm
-	.set __strlen_user_asm, __strlen_kernel_asm
-EXPORT_SYMBOL(__strlen_user_asm)
-#endif
-
-__BUILD_STRLEN_ASM kernel
-EXPORT_SYMBOL(__strlen_kernel_asm)
-
-#ifdef CONFIG_EVA
-
-	.set push
-	.set eva
-__BUILD_STRLEN_ASM user
-	.set pop
-EXPORT_SYMBOL(__strlen_user_asm)
-#endif

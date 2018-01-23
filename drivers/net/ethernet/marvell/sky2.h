@@ -2247,7 +2247,6 @@ struct sky2_port {
 	u16		     rx_data_size;
 	u16		     rx_nfrags;
 
-	unsigned long	     last_rx;
 	struct {
 		unsigned long last;
 		u32	mac_rp;

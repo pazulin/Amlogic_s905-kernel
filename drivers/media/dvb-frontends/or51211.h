@@ -13,6 +13,10 @@
  *    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  *    GNU General Public License for more details.
  *
+ *    You should have received a copy of the GNU General Public License
+ *    along with this program; if not, write to the Free Software
+ *    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *
 */
 
 #ifndef OR51211_H
@@ -33,7 +37,7 @@ struct or51211_config
 	void (*sleep)(struct dvb_frontend * fe);
 };
 
-#if IS_REACHABLE(CONFIG_DVB_OR51211)
+#if IS_ENABLED(CONFIG_DVB_OR51211)
 extern struct dvb_frontend* or51211_attach(const struct or51211_config* config,
 					   struct i2c_adapter* i2c);
 #else

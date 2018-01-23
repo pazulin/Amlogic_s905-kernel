@@ -3,7 +3,6 @@
 
 #include <linux/llist.h>
 #include <linux/sched.h>
-#include <linux/sched/task_stack.h>
 #include <linux/workqueue.h>
 
 /*
@@ -32,15 +31,14 @@
  * passing it, as you might expect, the function to run when nothing is pending
  * and the workqueue to run that function out of.
  *
- * continue_at() also, critically, requires a 'return' immediately following the
- * location where this macro is referenced, to return to the calling function.
+ * continue_at() also, critically, is a macro that returns the calling function.
  * There's good reason for this.
  *
  * To use safely closures asynchronously, they must always have a refcount while
  * they are running owned by the thread that is running them. Otherwise, suppose
  * you submit some bios and wish to have a function run when they all complete:
  *
- * foo_endio(struct bio *bio)
+ * foo_endio(struct bio *bio, int error)
  * {
  *	closure_put(cl);
  * }
@@ -245,7 +243,7 @@ static inline void set_closure_fn(struct closure *cl, closure_fn *fn,
 	cl->fn = fn;
 	cl->wq = wq;
 	/* between atomic_dec() in closure_put() */
-	smp_mb__before_atomic();
+	smp_mb__before_atomic_dec();
 }
 
 static inline void closure_queue(struct closure *cl)
@@ -322,6 +320,7 @@ static inline void closure_wake_up(struct closure_waitlist *list)
 do {									\
 	set_closure_fn(_cl, _fn, _wq);					\
 	closure_sub(_cl, CLOSURE_RUNNING + 1);				\
+	return;								\
 } while (0)
 
 /**
@@ -350,6 +349,7 @@ do {									\
 do {									\
 	set_closure_fn(_cl, _fn, _wq);					\
 	closure_queue(_cl);						\
+	return;								\
 } while (0)
 
 /**
@@ -365,6 +365,7 @@ do {									\
 do {									\
 	set_closure_fn(_cl, _destructor, NULL);				\
 	closure_sub(_cl, CLOSURE_RUNNING - CLOSURE_DESTRUCTOR + 1);	\
+	return;								\
 } while (0)
 
 /**

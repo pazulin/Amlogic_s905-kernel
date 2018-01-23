@@ -4,12 +4,11 @@
  *  by the Free Software Foundation.
  *
  *  Copyright (C) 2011 Gabor Juhos <juhosg@openwrt.org>
- *  Copyright (C) 2013 John Crispin <john@phrozen.org>
+ *  Copyright (C) 2013 John Crispin <blogic@openwrt.org>
  */
 
 #include <linux/kernel.h>
-#include <linux/init.h>
-#include <linux/export.h>
+#include <linux/module.h>
 #include <linux/clkdev.h>
 #include <linux/clk.h>
 
@@ -57,18 +56,6 @@ unsigned long clk_get_rate(struct clk *clk)
 }
 EXPORT_SYMBOL_GPL(clk_get_rate);
 
-int clk_set_rate(struct clk *clk, unsigned long rate)
-{
-	return -1;
-}
-EXPORT_SYMBOL_GPL(clk_set_rate);
-
-long clk_round_rate(struct clk *clk, unsigned long rate)
-{
-	return -1;
-}
-EXPORT_SYMBOL_GPL(clk_round_rate);
-
 void __init plat_time_init(void)
 {
 	struct clk *clk;
@@ -82,5 +69,5 @@ void __init plat_time_init(void)
 	pr_info("CPU Clock: %ldMHz\n", clk_get_rate(clk) / 1000000);
 	mips_hpt_frequency = clk_get_rate(clk) / 2;
 	clk_put(clk);
-	clocksource_probe();
+	clocksource_of_init();
 }

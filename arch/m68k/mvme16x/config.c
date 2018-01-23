@@ -35,6 +35,7 @@
 #include <asm/setup.h>
 #include <asm/irq.h>
 #include <asm/traps.h>
+#include <asm/rtc.h>
 #include <asm/machdep.h>
 #include <asm/mvme16xhw.h>
 
@@ -72,8 +73,8 @@ int __init mvme16x_parse_bootinfo(const struct bi_record *bi)
 
 void mvme16x_reset(void)
 {
-	pr_info("\r\n\nCalled mvme16x_reset\r\n"
-		"\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r");
+	printk ("\r\n\nCalled mvme16x_reset\r\n"
+			"\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r\r");
 	/* The string of returns is to delay the reset until the whole
 	 * message is output.  Assert reset bit in GCSR */
 	*(volatile char *)0xfff40107 = 0x80;
@@ -212,7 +213,7 @@ static void __init mvme16x_init_IRQ (void)
 #define CySCRH		(0x22)
 #define CyTFTC		(0x80)
 
-void mvme16x_cons_write(struct console *co, const char *str, unsigned count)
+static void cons_write(struct console *co, const char *str, unsigned count)
 {
 	volatile unsigned char *base_addr = (u_char *)CD2401_ADDR;
 	volatile u_char sink;
@@ -267,6 +268,20 @@ void mvme16x_cons_write(struct console *co, const char *str, unsigned count)
 	base_addr[CyIER] = ier;
 }
 
+static struct console cons_info =
+{
+	.name	= "sercon",
+	.write	= cons_write,
+	.flags	= CON_PRINTBUFFER | CON_BOOT,
+	.index	= -1,
+};
+
+static void __init mvme16x_early_console(void)
+{
+	register_console(&cons_info);
+
+	printk(KERN_INFO "MVME16x: early console registered\n");
+}
 #endif
 
 void __init config_mvme16x(void)
@@ -289,7 +304,7 @@ void __init config_mvme16x(void)
 
     if (strncmp("BDID", p->bdid, 4))
     {
-	pr_crit("Bug call .BRD_ID returned garbage - giving up\n");
+	printk ("\n\nBug call .BRD_ID returned garbage - giving up\n\n");
 	while (1)
 		;
     }
@@ -298,29 +313,39 @@ void __init config_mvme16x(void)
 	vme_brdtype = brdno;
 
     mvme16x_get_model(id);
-    pr_info("BRD_ID: %s   BUG %x.%x %02x/%02x/%02x\n", id, p->rev >> 4,
-	    p->rev & 0xf, p->yr, p->mth, p->day);
+    printk ("\nBRD_ID: %s   BUG %x.%x %02x/%02x/%02x\n", id, p->rev>>4,
+					p->rev&0xf, p->yr, p->mth, p->day);
     if (brdno == 0x0162 || brdno == 0x172)
     {
 	unsigned char rev = *(unsigned char *)MVME162_VERSION_REG;
 
 	mvme16x_config = rev | MVME16x_CONFIG_GOT_SCCA;
 
-	pr_info("MVME%x Hardware status:\n", brdno);
-	pr_info("    CPU Type           68%s040\n",
-		rev & MVME16x_CONFIG_GOT_FPU ? "" : "LC");
-	pr_info("    CPU clock          %dMHz\n",
-		rev & MVME16x_CONFIG_SPEED_32 ? 32 : 25);
-	pr_info("    VMEchip2           %spresent\n",
-		rev & MVME16x_CONFIG_NO_VMECHIP2 ? "NOT " : "");
-	pr_info("    SCSI interface     %spresent\n",
-		rev & MVME16x_CONFIG_NO_SCSICHIP ? "NOT " : "");
-	pr_info("    Ethernet interface %spresent\n",
-		rev & MVME16x_CONFIG_NO_ETHERNET ? "NOT " : "");
+	printk ("MVME%x Hardware status:\n", brdno);
+	printk ("    CPU Type           68%s040\n",
+			rev & MVME16x_CONFIG_GOT_FPU ? "" : "LC");
+	printk ("    CPU clock          %dMHz\n",
+			rev & MVME16x_CONFIG_SPEED_32 ? 32 : 25);
+	printk ("    VMEchip2           %spresent\n",
+			rev & MVME16x_CONFIG_NO_VMECHIP2 ? "NOT " : "");
+	printk ("    SCSI interface     %spresent\n",
+			rev & MVME16x_CONFIG_NO_SCSICHIP ? "NOT " : "");
+	printk ("    Ethernet interface %spresent\n",
+			rev & MVME16x_CONFIG_NO_ETHERNET ? "NOT " : "");
     }
     else
     {
 	mvme16x_config = MVME16x_CONFIG_GOT_LP | MVME16x_CONFIG_GOT_CD2401;
+
+	/* Dont allow any interrupts from the CD2401 until the interrupt */
+	/* handlers are installed					 */
+
+	pcc2chip[PccSCCMICR] = 0x10;
+	pcc2chip[PccSCCTICR] = 0x10;
+	pcc2chip[PccSCCRICR] = 0x10;
+#ifdef CONFIG_EARLY_PRINTK
+	mvme16x_early_console();
+#endif
     }
 }
 

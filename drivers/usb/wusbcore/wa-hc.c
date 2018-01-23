@@ -39,9 +39,6 @@ int wa_create(struct wahc *wa, struct usb_interface *iface,
 	int result;
 	struct device *dev = &iface->dev;
 
-	if (iface->cur_altsetting->desc.bNumEndpoints < 3)
-		return -ENODEV;
-
 	result = wa_rpipes_create(wa);
 	if (result < 0)
 		goto error_rpipes_create;
@@ -78,6 +75,8 @@ void __wa_destroy(struct wahc *wa)
 	if (wa->dti_urb) {
 		usb_kill_urb(wa->dti_urb);
 		usb_put_urb(wa->dti_urb);
+		usb_kill_urb(wa->buf_in_urb);
+		usb_put_urb(wa->buf_in_urb);
 	}
 	kfree(wa->dti_buf);
 	wa_nep_destroy(wa);

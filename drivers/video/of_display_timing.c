@@ -88,15 +88,6 @@ static int of_parse_display_timing(const struct device_node *np,
 		dt->flags |= val ? DISPLAY_FLAGS_PIXDATA_POSEDGE :
 				DISPLAY_FLAGS_PIXDATA_NEGEDGE;
 
-	if (!of_property_read_u32(np, "syncclk-active", &val))
-		dt->flags |= val ? DISPLAY_FLAGS_SYNC_POSEDGE :
-				DISPLAY_FLAGS_SYNC_NEGEDGE;
-	else if (dt->flags & (DISPLAY_FLAGS_PIXDATA_POSEDGE |
-			      DISPLAY_FLAGS_PIXDATA_NEGEDGE))
-		dt->flags |= dt->flags & DISPLAY_FLAGS_PIXDATA_POSEDGE ?
-				DISPLAY_FLAGS_SYNC_POSEDGE :
-				DISPLAY_FLAGS_SYNC_NEGEDGE;
-
 	if (of_property_read_bool(np, "interlaced"))
 		dt->flags |= DISPLAY_FLAGS_INTERLACED;
 	if (of_property_read_bool(np, "doublescan"))
@@ -119,13 +110,15 @@ static int of_parse_display_timing(const struct device_node *np,
  * @name: name of the timing node
  * @dt: display_timing struct to fill
  **/
-int of_get_display_timing(const struct device_node *np, const char *name,
+int of_get_display_timing(struct device_node *np, const char *name,
 		struct display_timing *dt)
 {
 	struct device_node *timing_np;
 
-	if (!np)
+	if (!np) {
+		pr_err("%s: no devicenode given\n", of_node_full_name(np));
 		return -EINVAL;
+	}
 
 	timing_np = of_get_child_by_name(np, name);
 	if (!timing_np) {
@@ -142,15 +135,17 @@ EXPORT_SYMBOL_GPL(of_get_display_timing);
  * of_get_display_timings - parse all display_timing entries from a device_node
  * @np: device_node with the subnodes
  **/
-struct display_timings *of_get_display_timings(const struct device_node *np)
+struct display_timings *of_get_display_timings(struct device_node *np)
 {
 	struct device_node *timings_np;
 	struct device_node *entry;
 	struct device_node *native_mode;
 	struct display_timings *disp;
 
-	if (!np)
+	if (!np) {
+		pr_err("%s: no device node given\n", of_node_full_name(np));
 		return NULL;
+	}
 
 	timings_np = of_get_child_by_name(np, "display-timings");
 	if (!timings_np) {
@@ -169,7 +164,7 @@ struct display_timings *of_get_display_timings(const struct device_node *np)
 	entry = of_parse_phandle(timings_np, "native-mode", 0);
 	/* assume first child as native mode if none provided */
 	if (!entry)
-		entry = of_get_next_child(timings_np, NULL);
+		entry = of_get_next_child(np, NULL);
 	/* if there is no child, it is useless to go on */
 	if (!entry) {
 		pr_err("%s: no timing specifications given\n",
@@ -219,7 +214,6 @@ struct display_timings *of_get_display_timings(const struct device_node *np)
 			 */
 			pr_err("%s: error in timing %d\n",
 				of_node_full_name(np), disp->num_timings + 1);
-			kfree(dt);
 			goto timingfail;
 		}
 
@@ -243,9 +237,9 @@ struct display_timings *of_get_display_timings(const struct device_node *np)
 	return disp;
 
 timingfail:
-	of_node_put(native_mode);
+	if (native_mode)
+		of_node_put(native_mode);
 	display_timings_release(disp);
-	disp = NULL;
 entryfail:
 	kfree(disp);
 dispfail:
@@ -258,7 +252,7 @@ EXPORT_SYMBOL_GPL(of_get_display_timings);
  * of_display_timings_exist - check if a display-timings node is provided
  * @np: device_node with the timing
  **/
-int of_display_timings_exist(const struct device_node *np)
+int of_display_timings_exist(struct device_node *np)
 {
 	struct device_node *timings_np;
 

@@ -367,16 +367,12 @@ static int mthca_cmd_poll(struct mthca_dev *dev,
 		goto out;
 	}
 
-	if (out_is_imm && out_param) {
+	if (out_is_imm)
 		*out_param =
 			(u64) be32_to_cpu((__force __be32)
 					  __raw_readl(dev->hcr + HCR_OUT_PARAM_OFFSET)) << 32 |
 			(u64) be32_to_cpu((__force __be32)
 					  __raw_readl(dev->hcr + HCR_OUT_PARAM_OFFSET + 4));
-	} else if (out_is_imm) {
-		err = -EINVAL;
-		goto out;
-	}
 
 	status = be32_to_cpu((__force __be32) __raw_readl(dev->hcr + HCR_STATUS_OFFSET)) >> 24;
 	if (status) {
@@ -454,12 +450,8 @@ static int mthca_cmd_wait(struct mthca_dev *dev,
 		err = mthca_status_to_errno(context->status);
 	}
 
-	if (out_is_imm && out_param) {
+	if (out_is_imm)
 		*out_param = context->out_param;
-	} else if (out_is_imm) {
-		err = -EINVAL;
-		goto out;
-	}
 
 out:
 	spin_lock(&dev->cmd.context_lock);
@@ -1866,8 +1858,8 @@ int mthca_CONF_SPECIAL_QP(struct mthca_dev *dev, int type, u32 qpn)
 }
 
 int mthca_MAD_IFC(struct mthca_dev *dev, int ignore_mkey, int ignore_bkey,
-		  int port, const struct ib_wc *in_wc, const struct ib_grh *in_grh,
-		  const void *in_mad, void *response_mad)
+		  int port, struct ib_wc *in_wc, struct ib_grh *in_grh,
+		  void *in_mad, void *response_mad)
 {
 	struct mthca_mailbox *inmailbox, *outmailbox;
 	void *inbox;

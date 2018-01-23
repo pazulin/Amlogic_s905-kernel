@@ -8,7 +8,6 @@
  */
 
 #include <linux/kernel.h>
-#include <linux/sched/debug.h>
 #include <linux/init.h>
 #include <linux/serial_core.h>
 #include <linux/console.h>

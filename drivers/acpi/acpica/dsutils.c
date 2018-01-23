@@ -5,7 +5,7 @@
  ******************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2017, Intel Corp.
+ * Copyright (C) 2000 - 2013, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -245,9 +245,9 @@ acpi_ds_is_result_used(union acpi_parse_object * op,
 			 * we will use the return value
 			 */
 			if ((walk_state->control_state->common.state ==
-			     ACPI_CONTROL_PREDICATE_EXECUTING) &&
-			    (walk_state->control_state->control.predicate_op ==
-			     op)) {
+			     ACPI_CONTROL_PREDICATE_EXECUTING)
+			    && (walk_state->control_state->control.
+				predicate_op == op)) {
 				goto result_used;
 			}
 			break;
@@ -275,9 +275,9 @@ acpi_ds_is_result_used(union acpi_parse_object * op,
 		if ((op->common.parent->common.aml_opcode == AML_REGION_OP) ||
 		    (op->common.parent->common.aml_opcode == AML_DATA_REGION_OP)
 		    || (op->common.parent->common.aml_opcode == AML_PACKAGE_OP)
-		    || (op->common.parent->common.aml_opcode == AML_BUFFER_OP)
 		    || (op->common.parent->common.aml_opcode ==
-			AML_VARIABLE_PACKAGE_OP)
+			AML_VAR_PACKAGE_OP)
+		    || (op->common.parent->common.aml_opcode == AML_BUFFER_OP)
 		    || (op->common.parent->common.aml_opcode ==
 			AML_INT_EVAL_SUBTREE_OP)
 		    || (op->common.parent->common.aml_opcode ==
@@ -481,9 +481,10 @@ acpi_ds_create_operand(struct acpi_walk_state *walk_state,
 
 		/* Get the entire name string from the AML stream */
 
-		status = acpi_ex_get_name_string(ACPI_TYPE_ANY,
-						 arg->common.value.buffer,
-						 &name_string, &name_length);
+		status =
+		    acpi_ex_get_name_string(ACPI_TYPE_ANY,
+					    arg->common.value.buffer,
+					    &name_string, &name_length);
 
 		if (ACPI_FAILURE(status)) {
 			return_ACPI_STATUS(status);
@@ -502,8 +503,9 @@ acpi_ds_create_operand(struct acpi_walk_state *walk_state,
 		 */
 		if ((walk_state->deferred_node) &&
 		    (walk_state->deferred_node->type == ACPI_TYPE_BUFFER_FIELD)
-		    && (arg_index == (u32)
-			((walk_state->opcode == AML_CREATE_FIELD_OP) ? 3 : 2))) {
+		    && (arg_index ==
+			(u32) ((walk_state->opcode ==
+				AML_CREATE_FIELD_OP) ? 3 : 2))) {
 			obj_desc =
 			    ACPI_CAST_PTR(union acpi_operand_object,
 					  walk_state->deferred_node);
@@ -520,10 +522,9 @@ acpi_ds_create_operand(struct acpi_walk_state *walk_state,
 			op_info =
 			    acpi_ps_get_opcode_info(parent_op->common.
 						    aml_opcode);
-
-			if ((op_info->flags & AML_NSNODE) &&
-			    (parent_op->common.aml_opcode !=
-			     AML_INT_METHODCALL_OP)
+			if ((op_info->flags & AML_NSNODE)
+			    && (parent_op->common.aml_opcode !=
+				AML_INT_METHODCALL_OP)
 			    && (parent_op->common.aml_opcode != AML_REGION_OP)
 			    && (parent_op->common.aml_opcode !=
 				AML_INT_NAMEPATH_OP)) {
@@ -551,7 +552,7 @@ acpi_ds_create_operand(struct acpi_walk_state *walk_state,
 			 */
 			if (status == AE_NOT_FOUND) {
 				if (parent_op->common.aml_opcode ==
-				    AML_CONDITIONAL_REF_OF_OP) {
+				    AML_COND_REF_OF_OP) {
 					/*
 					 * For the Conditional Reference op, it's OK if
 					 * the name is not found;  We just need a way to
@@ -563,16 +564,6 @@ acpi_ds_create_operand(struct acpi_walk_state *walk_state,
 								 acpi_operand_object,
 								 acpi_gbl_root_node);
 					status = AE_OK;
-				} else if (parent_op->common.aml_opcode ==
-					   AML_EXTERNAL_OP) {
-					/*
-					 * This opcode should never appear here. It is used only
-					 * by AML disassemblers and is surrounded by an If(0)
-					 * by the ASL compiler.
-					 *
-					 * Therefore, if we see it here, it is a serious error.
-					 */
-					status = AE_AML_BAD_OPCODE;
 				} else {
 					/*
 					 * We just plain didn't find it -- which is a
@@ -603,8 +594,8 @@ acpi_ds_create_operand(struct acpi_walk_state *walk_state,
 		if (ACPI_FAILURE(status)) {
 			return_ACPI_STATUS(status);
 		}
-
-		acpi_db_display_argument_object(obj_desc, walk_state);
+		ACPI_DEBUGGER_EXEC(acpi_db_display_argument_object
+				   (obj_desc, walk_state));
 	} else {
 		/* Check for null name case */
 
@@ -631,16 +622,15 @@ acpi_ds_create_operand(struct acpi_walk_state *walk_state,
 			return_ACPI_STATUS(AE_NOT_IMPLEMENTED);
 		}
 
-		if ((op_info->flags & AML_HAS_RETVAL) ||
-		    (arg->common.flags & ACPI_PARSEOP_IN_STACK)) {
+		if ((op_info->flags & AML_HAS_RETVAL)
+		    || (arg->common.flags & ACPI_PARSEOP_IN_STACK)) {
 			ACPI_DEBUG_PRINT((ACPI_DB_DISPATCH,
 					  "Argument previously created, already stacked\n"));
 
-			acpi_db_display_argument_object(walk_state->
-							operands[walk_state->
-								 num_operands -
-								 1],
-							walk_state);
+			ACPI_DEBUGGER_EXEC(acpi_db_display_argument_object
+					   (walk_state->
+					    operands[walk_state->num_operands -
+						     1], walk_state));
 
 			/*
 			 * Use value that was already previously returned
@@ -684,7 +674,8 @@ acpi_ds_create_operand(struct acpi_walk_state *walk_state,
 			return_ACPI_STATUS(status);
 		}
 
-		acpi_db_display_argument_object(obj_desc, walk_state);
+		ACPI_DEBUGGER_EXEC(acpi_db_display_argument_object
+				   (obj_desc, walk_state));
 	}
 
 	return_ACPI_STATUS(AE_OK);
@@ -806,7 +797,7 @@ acpi_status acpi_ds_evaluate_name_path(struct acpi_walk_state *walk_state)
 	}
 
 	if ((op->common.parent->common.aml_opcode == AML_PACKAGE_OP) ||
-	    (op->common.parent->common.aml_opcode == AML_VARIABLE_PACKAGE_OP) ||
+	    (op->common.parent->common.aml_opcode == AML_VAR_PACKAGE_OP) ||
 	    (op->common.parent->common.aml_opcode == AML_REF_OF_OP)) {
 
 		/* TBD: Should we specify this feature as a bit of op_info->Flags of these opcodes? */

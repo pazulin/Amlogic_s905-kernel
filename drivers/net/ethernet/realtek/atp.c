@@ -170,7 +170,7 @@ struct net_local {
     spinlock_t lock;
     struct net_device *next_module;
     struct timer_list timer;	/* Media selection timer. */
-    unsigned long last_rx_time;	/* Last Rx, in jiffies, to handle Rx hang. */
+    long last_rx_time;		/* Last Rx, in jiffies, to handle Rx hang. */
     int saved_tx_size;
     unsigned int tx_unit_busy:1;
     unsigned char re_tx,	/* Number of packet retransmissions. */
@@ -245,6 +245,7 @@ static const struct net_device_ops atp_netdev_ops = {
 	.ndo_start_xmit		= atp_send_packet,
 	.ndo_set_rx_mode	= set_rx_mode,
 	.ndo_tx_timeout		= tx_timeout,
+	.ndo_change_mtu		= eth_change_mtu,
 	.ndo_set_mac_address 	= eth_mac_addr,
 	.ndo_validate_addr	= eth_validate_addr,
 };
@@ -543,7 +544,7 @@ static void tx_timeout(struct net_device *dev)
 	dev->stats.tx_errors++;
 	/* Try to restart the adapter. */
 	hardware_init(dev);
-	netif_trans_update(dev); /* prevent tx timeout */
+	dev->trans_start = jiffies; /* prevent tx timeout */
 	netif_wake_queue(dev);
 	dev->stats.tx_errors++;
 }
@@ -668,11 +669,11 @@ static irqreturn_t atp_interrupt(int irq, void *dev_instance)
 			}
 			num_tx_since_rx++;
 		} else if (num_tx_since_rx > 8 &&
-			   time_after(jiffies, lp->last_rx_time + HZ)) {
+			   time_after(jiffies, dev->last_rx + HZ)) {
 			if (net_debug > 2)
 				printk(KERN_DEBUG "%s: Missed packet? No Rx after %d Tx and "
 					   "%ld jiffies status %02x  CMR1 %02x.\n", dev->name,
-					   num_tx_since_rx, jiffies - lp->last_rx_time, status,
+					   num_tx_since_rx, jiffies - dev->last_rx, status,
 					   (read_nibble(ioaddr, CMR1) >> 3) & 15);
 			dev->stats.rx_missed_errors++;
 			hardware_init(dev);
@@ -789,6 +790,7 @@ static void net_rx(struct net_device *dev)
 		read_block(ioaddr, pkt_len, skb_put(skb,pkt_len), dev->if_port);
 		skb->protocol = eth_type_trans(skb, dev);
 		netif_rx(skb);
+		dev->last_rx = jiffies;
 		dev->stats.rx_packets++;
 		dev->stats.rx_bytes += pkt_len;
 	}

@@ -23,18 +23,9 @@
 /*
  * For UniCore syscalls, we encode the syscall number into the instruction.
  */
-#ifdef CONFIG_UNICORE32_OLDABI
-#define SWI_SYS_SIGRETURN	(0xff000000 | (__NR_SYSCALL_BASE)	\
-					| (__NR_sigreturn))
-#define SWI_SYS_RT_SIGRETURN	(0xff000000 | (__NR_SYSCALL_BASE)	\
-					| (__NR_rt_sigreturn))
-#define SWI_SYS_RESTART		(0xff000000 | (__NR_SYSCALL_BASE)	\
-					| (__NR_restart_syscall))
-#else
 #define SWI_SYS_SIGRETURN	(0xff000000) /* error number for new abi */
 #define SWI_SYS_RT_SIGRETURN	(0xff000000 | (__NR_rt_sigreturn))
 #define SWI_SYS_RESTART		(0xff000000 | (__NR_restart_syscall))
-#endif
 
 #define KERN_SIGRETURN_CODE	(KUSER_VECPAGE_BASE + 0x00000500)
 #define KERN_RESTART_CODE	(KERN_SIGRETURN_CODE + sizeof(sigreturn_codes))
@@ -109,44 +100,12 @@ static int restore_sigframe(struct pt_regs *regs, struct sigframe __user *sf)
 	return err;
 }
 
-#ifdef CONFIG_UNICORE32_OLDABI
-asmlinkage int __sys_sigreturn(struct pt_regs *regs)
-{
-	struct sigframe __user *frame;
-
-	/* Always make any pending restarted system calls return -EINTR */
-	current->restart_block.fn = do_no_restart_syscall;
-
-	/*
-	 * Since we stacked the signal on a 64-bit boundary,
-	 * then 'sp' should be word aligned here.  If it's
-	 * not, then the user is trying to mess with us.
-	 */
-	if (regs->UCreg_sp & 7)
-		goto badframe;
-
-	frame = (struct sigframe __user *)regs->UCreg_sp;
-
-	if (!access_ok(VERIFY_READ, frame, sizeof(*frame)))
-		goto badframe;
-
-	if (restore_sigframe(regs, frame))
-		goto badframe;
-
-	return regs->UCreg_00;
-
-badframe:
-	force_sig(SIGSEGV, current);
-	return 0;
-}
-#endif
-
 asmlinkage int __sys_rt_sigreturn(struct pt_regs *regs)
 {
 	struct rt_sigframe __user *frame;
 
 	/* Always make any pending restarted system calls return -EINTR */
-	current->restart_block.fn = do_no_restart_syscall;
+	current_thread_info()->restart_block.fn = do_no_restart_syscall;
 
 	/*
 	 * Since we stacked the signal on a 64-bit boundary,
@@ -279,10 +238,10 @@ static int setup_return(struct pt_regs *regs, struct k_sigaction *ka,
 	return 0;
 }
 
-static int setup_frame(struct ksignal *ksig, sigset_t *set,
-		       struct pt_regs *regs)
+static int setup_frame(int usig, struct k_sigaction *ka,
+		sigset_t *set, struct pt_regs *regs)
 {
-	struct sigframe __user *frame = get_sigframe(&ksig->ka, regs, sizeof(*frame));
+	struct sigframe __user *frame = get_sigframe(ka, regs, sizeof(*frame));
 	int err = 0;
 
 	if (!frame)
@@ -295,31 +254,29 @@ static int setup_frame(struct ksignal *ksig, sigset_t *set,
 
 	err |= setup_sigframe(frame, regs, set);
 	if (err == 0)
-		err |= setup_return(regs, &ksig->ka, frame->retcode, frame,
-				    ksig->sig);
+		err |= setup_return(regs, ka, frame->retcode, frame, usig);
 
 	return err;
 }
 
-static int setup_rt_frame(struct ksignal *ksig, sigset_t *set,
-			  struct pt_regs *regs)
+static int setup_rt_frame(int usig, struct k_sigaction *ka, siginfo_t *info,
+	       sigset_t *set, struct pt_regs *regs)
 {
 	struct rt_sigframe __user *frame =
-			get_sigframe(&ksig->ka, regs, sizeof(*frame));
+			get_sigframe(ka, regs, sizeof(*frame));
 	int err = 0;
 
 	if (!frame)
 		return 1;
 
-	err |= copy_siginfo_to_user(&frame->info, &ksig->info);
+	err |= copy_siginfo_to_user(&frame->info, info);
 
 	err |= __put_user(0, &frame->sig.uc.uc_flags);
 	err |= __put_user(NULL, &frame->sig.uc.uc_link);
 	err |= __save_altstack(&frame->sig.uc.uc_stack, regs->UCreg_sp);
 	err |= setup_sigframe(&frame->sig, regs, set);
 	if (err == 0)
-		err |= setup_return(regs, &ksig->ka, frame->sig.retcode, frame,
-				    ksig->sig);
+		err |= setup_return(regs, ka, frame->sig.retcode, frame, usig);
 
 	if (err == 0) {
 		/*
@@ -342,12 +299,13 @@ static inline void setup_syscall_restart(struct pt_regs *regs)
 /*
  * OK, we're invoking a handler
  */
-static void handle_signal(struct ksignal *ksig, struct pt_regs *regs,
-			  int syscall)
+static void handle_signal(unsigned long sig, struct k_sigaction *ka,
+	      siginfo_t *info, struct pt_regs *regs, int syscall)
 {
 	struct thread_info *thread = current_thread_info();
+	struct task_struct *tsk = current;
 	sigset_t *oldset = sigmask_to_save();
-	int usig = ksig->sig;
+	int usig = sig;
 	int ret;
 
 	/*
@@ -360,7 +318,7 @@ static void handle_signal(struct ksignal *ksig, struct pt_regs *regs,
 			regs->UCreg_00 = -EINTR;
 			break;
 		case -ERESTARTSYS:
-			if (!(ksig->ka.sa.sa_flags & SA_RESTART)) {
+			if (!(ka->sa.sa_flags & SA_RESTART)) {
 				regs->UCreg_00 = -EINTR;
 				break;
 			}
@@ -371,19 +329,31 @@ static void handle_signal(struct ksignal *ksig, struct pt_regs *regs,
 	}
 
 	/*
+	 * translate the signal
+	 */
+	if (usig < 32 && thread->exec_domain
+			&& thread->exec_domain->signal_invmap)
+		usig = thread->exec_domain->signal_invmap[usig];
+
+	/*
 	 * Set up the stack frame
 	 */
-	if (ksig->ka.sa.sa_flags & SA_SIGINFO)
-		ret = setup_rt_frame(ksig, oldset, regs);
+	if (ka->sa.sa_flags & SA_SIGINFO)
+		ret = setup_rt_frame(usig, ka, info, oldset, regs);
 	else
-		ret = setup_frame(ksig, oldset, regs);
+		ret = setup_frame(usig, ka, oldset, regs);
 
 	/*
 	 * Check that the resulting registers are actually sane.
 	 */
 	ret |= !valid_user_regs(regs);
 
-	signal_setup_done(ret, ksig, 0);
+	if (ret != 0) {
+		force_sigsegv(sig, tsk);
+		return;
+	}
+
+	signal_delivered(sig, info, ka, regs, 0);
 }
 
 /*
@@ -397,7 +367,9 @@ static void handle_signal(struct ksignal *ksig, struct pt_regs *regs,
  */
 static void do_signal(struct pt_regs *regs, int syscall)
 {
-	struct ksignal ksig;
+	struct k_sigaction ka;
+	siginfo_t info;
+	int signr;
 
 	/*
 	 * We want the common case to go fast, which
@@ -408,8 +380,9 @@ static void do_signal(struct pt_regs *regs, int syscall)
 	if (!user_mode(regs))
 		return;
 
-	if (get_signal(&ksig)) {
-		handle_signal(&ksig, regs, syscall);
+	signr = get_signal_to_deliver(&info, &ka, regs, NULL);
+	if (signr > 0) {
+		handle_signal(signr, &ka, &info, regs, syscall);
 		return;
 	}
 

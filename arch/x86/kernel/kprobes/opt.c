@@ -24,20 +24,18 @@
 #include <linux/slab.h>
 #include <linux/hardirq.h>
 #include <linux/preempt.h>
-#include <linux/extable.h>
+#include <linux/module.h>
 #include <linux/kdebug.h>
 #include <linux/kallsyms.h>
 #include <linux/ftrace.h>
 
-#include <asm/text-patching.h>
 #include <asm/cacheflush.h>
 #include <asm/desc.h>
 #include <asm/pgtable.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/alternative.h>
 #include <asm/insn.h>
 #include <asm/debugreg.h>
-#include <asm/set_memory.h>
 
 #include "common.h"
 
@@ -66,10 +64,7 @@ found:
 	 * overwritten by jump destination address. In this case, original
 	 * bytes must be recovered from op->optinsn.copied_insn buffer.
 	 */
-	if (probe_kernel_read(buf, (void *)addr,
-		MAX_INSN_SIZE * sizeof(kprobe_opcode_t)))
-		return 0UL;
-
+	memcpy(buf, (void *)addr, MAX_INSN_SIZE * sizeof(kprobe_opcode_t));
 	if (addr == (unsigned long)kp->addr) {
 		buf[0] = kp->opcode;
 		memcpy(buf + 1, op->optinsn.copied_insn, RELATIVE_ADDR_SIZE);
@@ -82,7 +77,7 @@ found:
 }
 
 /* Insert a move instruction which sets a pointer to eax/rdi (1st arg). */
-static void synthesize_set_arg1(kprobe_opcode_t *addr, unsigned long val)
+static void __kprobes synthesize_set_arg1(kprobe_opcode_t *addr, unsigned long val)
 {
 #ifdef CONFIG_X86_64
 	*addr++ = 0x48;
@@ -143,8 +138,7 @@ asm (
 #define INT3_SIZE sizeof(kprobe_opcode_t)
 
 /* Optimized kprobe call back function: called from optinsn */
-static void
-optimized_callback(struct optimized_kprobe *op, struct pt_regs *regs)
+static void __kprobes optimized_callback(struct optimized_kprobe *op, struct pt_regs *regs)
 {
 	struct kprobe_ctlblk *kcb = get_kprobe_ctlblk();
 	unsigned long flags;
@@ -174,16 +168,14 @@ optimized_callback(struct optimized_kprobe *op, struct pt_regs *regs)
 	}
 	local_irq_restore(flags);
 }
-NOKPROBE_SYMBOL(optimized_callback);
 
-static int copy_optimized_instructions(u8 *dest, u8 *src)
+static int __kprobes copy_optimized_instructions(u8 *dest, u8 *src)
 {
-	struct insn insn;
 	int len = 0, ret;
 
 	while (len < RELATIVEJUMP_SIZE) {
-		ret = __copy_instruction(dest + len, src + len, &insn);
-		if (!ret || !can_boost(&insn, src + len))
+		ret = __copy_instruction(dest + len, src + len);
+		if (!ret || !can_boost(dest + len))
 			return -EINVAL;
 		len += ret;
 	}
@@ -197,7 +189,7 @@ static int copy_optimized_instructions(u8 *dest, u8 *src)
 }
 
 /* Check whether insn is indirect jump */
-static int insn_is_indirect_jump(struct insn *insn)
+static int __kprobes insn_is_indirect_jump(struct insn *insn)
 {
 	return ((insn->opcode.bytes[0] == 0xff &&
 		(X86_MODRM_REG(insn->modrm.value) & 6) == 4) || /* Jump */
@@ -232,7 +224,7 @@ static int insn_jump_into_range(struct insn *insn, unsigned long start, int len)
 }
 
 /* Decode whole function to ensure any instructions don't jump into target */
-static int can_optimize(unsigned long paddr)
+static int __kprobes can_optimize(unsigned long paddr)
 {
 	unsigned long addr, size = 0, offset = 0;
 	struct insn insn;
@@ -257,17 +249,13 @@ static int can_optimize(unsigned long paddr)
 	/* Decode instructions */
 	addr = paddr - offset;
 	while (addr < paddr - offset + size) { /* Decode until function end */
-		unsigned long recovered_insn;
 		if (search_exception_tables(addr))
 			/*
 			 * Since some fixup code will jumps into this function,
 			 * we can't optimize kprobe in this function.
 			 */
 			return 0;
-		recovered_insn = recover_probed_instruction(buf, addr);
-		if (!recovered_insn)
-			return 0;
-		kernel_insn_init(&insn, (void *)recovered_insn, MAX_INSN_SIZE);
+		kernel_insn_init(&insn, (void *)recover_probed_instruction(buf, addr));
 		insn_get_length(&insn);
 		/* Another subsystem puts a breakpoint */
 		if (insn.opcode.bytes[0] == BREAKPOINT_INSTRUCTION)
@@ -287,7 +275,7 @@ static int can_optimize(unsigned long paddr)
 }
 
 /* Check optimized_kprobe can actually be optimized. */
-int arch_check_optimized_kprobe(struct optimized_kprobe *op)
+int __kprobes arch_check_optimized_kprobe(struct optimized_kprobe *op)
 {
 	int i;
 	struct kprobe *p;
@@ -302,15 +290,15 @@ int arch_check_optimized_kprobe(struct optimized_kprobe *op)
 }
 
 /* Check the addr is within the optimized instructions. */
-int arch_within_optimized_kprobe(struct optimized_kprobe *op,
-				 unsigned long addr)
+int __kprobes
+arch_within_optimized_kprobe(struct optimized_kprobe *op, unsigned long addr)
 {
 	return ((unsigned long)op->kp.addr <= addr &&
 		(unsigned long)op->kp.addr + op->optinsn.size > addr);
 }
 
 /* Free optimized instruction slot */
-static
+static __kprobes
 void __arch_remove_optimized_kprobe(struct optimized_kprobe *op, int dirty)
 {
 	if (op->optinsn.insn) {
@@ -320,7 +308,7 @@ void __arch_remove_optimized_kprobe(struct optimized_kprobe *op, int dirty)
 	}
 }
 
-void arch_remove_optimized_kprobe(struct optimized_kprobe *op)
+void __kprobes arch_remove_optimized_kprobe(struct optimized_kprobe *op)
 {
 	__arch_remove_optimized_kprobe(op, 1);
 }
@@ -330,8 +318,7 @@ void arch_remove_optimized_kprobe(struct optimized_kprobe *op)
  * Target instructions MUST be relocatable (checked inside)
  * This is called when new aggr(opt)probe is allocated or reused.
  */
-int arch_prepare_optimized_kprobe(struct optimized_kprobe *op,
-				  struct kprobe *__unused)
+int __kprobes arch_prepare_optimized_kprobe(struct optimized_kprobe *op)
 {
 	u8 *buf;
 	int ret;
@@ -349,13 +336,10 @@ int arch_prepare_optimized_kprobe(struct optimized_kprobe *op,
 	 * a relative jump.
 	 */
 	rel = (long)op->optinsn.insn - (long)op->kp.addr + RELATIVEJUMP_SIZE;
-	if (abs(rel) > 0x7fffffff) {
-		__arch_remove_optimized_kprobe(op, 0);
+	if (abs(rel) > 0x7fffffff)
 		return -ERANGE;
-	}
 
 	buf = (u8 *)op->optinsn.insn;
-	set_memory_rw((unsigned long)buf & PAGE_MASK, 1);
 
 	/* Copy instructions into the out-of-line buffer */
 	ret = copy_optimized_instructions(buf + TMPL_END_IDX, op->kp.addr);
@@ -378,8 +362,6 @@ int arch_prepare_optimized_kprobe(struct optimized_kprobe *op,
 	synthesize_reljump(buf + TMPL_END_IDX + op->optinsn.size,
 			   (u8 *)op->kp.addr + op->optinsn.size);
 
-	set_memory_ro((unsigned long)buf & PAGE_MASK, 1);
-
 	flush_icache_range((unsigned long) buf,
 			   (unsigned long) buf + TMPL_END_IDX +
 			   op->optinsn.size + RELATIVEJUMP_SIZE);
@@ -390,7 +372,7 @@ int arch_prepare_optimized_kprobe(struct optimized_kprobe *op,
  * Replace breakpoints (int3) with relative jumps.
  * Caller must call with locking kprobe_mutex and text_mutex.
  */
-void arch_optimize_kprobes(struct list_head *oplist)
+void __kprobes arch_optimize_kprobes(struct list_head *oplist)
 {
 	struct optimized_kprobe *op, *tmp;
 	u8 insn_buf[RELATIVEJUMP_SIZE];
@@ -416,7 +398,7 @@ void arch_optimize_kprobes(struct list_head *oplist)
 }
 
 /* Replace a relative jump with a breakpoint (int3).  */
-void arch_unoptimize_kprobe(struct optimized_kprobe *op)
+void __kprobes arch_unoptimize_kprobe(struct optimized_kprobe *op)
 {
 	u8 insn_buf[RELATIVEJUMP_SIZE];
 
@@ -442,7 +424,8 @@ extern void arch_unoptimize_kprobes(struct list_head *oplist,
 	}
 }
 
-int setup_detour_execution(struct kprobe *p, struct pt_regs *regs, int reenter)
+int  __kprobes
+setup_detour_execution(struct kprobe *p, struct pt_regs *regs, int reenter)
 {
 	struct optimized_kprobe *op;
 
@@ -458,4 +441,3 @@ int setup_detour_execution(struct kprobe *p, struct pt_regs *regs, int reenter)
 	}
 	return 0;
 }
-NOKPROBE_SYMBOL(setup_detour_execution);

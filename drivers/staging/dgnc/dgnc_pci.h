@@ -11,13 +11,18 @@
  * but WITHOUT ANY WARRANTY, EXPRESS OR IMPLIED; without even the
  * implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
  * PURPOSE.  See the GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *
+ *	NOTE: THIS IS A SHARED HEADER. DO NOT CHANGE CODING STYLE!!!
  */
 
-#ifndef _DGNC_PCI_H
-#define _DGNC_PCI_H
+#ifndef __DGNC_PCI_H
+#define __DGNC_PCI_H
 
-/* Maximum number of PCI boards */
-#define PCIMAX 32
+#define PCIMAX 32			/* maximum number of PCI boards */
 
 #define DIGI_VID				0x114F
 
@@ -60,10 +65,11 @@
 #define PCI_DEVICE_NEO_EXPRESS_8RJ45_PCI_NAME	"Neo 8 PCI Express RJ45"
 #define PCI_DEVICE_NEO_EXPRESS_4_IBM_PCI_NAME	"Neo 4 PCI Express IBM"
 
-/* Size of memory and I/O for PCI (4 K) */
+
+/* Size of Memory and I/O for PCI (4 K) */
 #define PCI_RAM_SIZE				0x1000
 
-/* Size of memory (2MB) */
+/* Size of Memory (2MB) */
 #define PCI_MEM_SIZE				0x1000
 
-#endif	/* _DGNC_PCI_H */
+#endif

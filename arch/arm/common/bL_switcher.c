@@ -13,8 +13,7 @@
 #include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
-#include <linux/sched/signal.h>
-#include <uapi/linux/sched/types.h>
+#include <linux/sched.h>
 #include <linux/interrupt.h>
 #include <linux/cpu_pm.h>
 #include <linux/cpu.h>
@@ -56,6 +55,16 @@ static int read_mpidr(void)
 	unsigned int id;
 	asm volatile ("mrc p15, 0, %0, c0, c0, 5" : "=r" (id));
 	return id & MPIDR_HWID_BITMASK;
+}
+
+/*
+ * Get a global nanosecond time stamp for tracing.
+ */
+static s64 get_ns(void)
+{
+	struct timespec ts;
+	getnstimeofday(&ts);
+	return timespec_to_ns(&ts);
 }
 
 /*
@@ -152,6 +161,8 @@ static int bL_switch_to(unsigned int new_cluster_id)
 	unsigned int mpidr, this_cpu, that_cpu;
 	unsigned int ob_mpidr, ob_cpu, ob_cluster, ib_mpidr, ib_cpu, ib_cluster;
 	struct completion inbound_alive;
+	struct tick_device *tdev;
+	enum clock_event_mode tdev_mode;
 	long volatile *handshake_ptr;
 	int ipi_nr, ret;
 
@@ -213,12 +224,18 @@ static int bL_switch_to(unsigned int new_cluster_id)
 	 */
 	local_irq_disable();
 	local_fiq_disable();
-	trace_cpu_migrate_begin(ktime_get_real_ns(), ob_mpidr);
+	trace_cpu_migrate_begin(get_ns(), ob_mpidr);
 
 	/* redirect GIC's SGIs to our counterpart */
 	gic_migrate_target(bL_gic_id[ib_cpu][ib_cluster]);
 
-	tick_suspend_local();
+	tdev = tick_get_device(this_cpu);
+	if (tdev && !cpumask_equal(tdev->evtdev->cpumask, cpumask_of(this_cpu)))
+		tdev = NULL;
+	if (tdev) {
+		tdev_mode = tdev->evtdev->mode;
+		clockevents_set_mode(tdev->evtdev, CLOCK_EVT_MODE_SHUTDOWN);
+	}
 
 	ret = cpu_pm_enter();
 
@@ -244,9 +261,13 @@ static int bL_switch_to(unsigned int new_cluster_id)
 
 	ret = cpu_pm_exit();
 
-	tick_resume_local();
+	if (tdev) {
+		clockevents_set_mode(tdev->evtdev, tdev_mode);
+		clockevents_program_event(tdev->evtdev,
+					  tdev->evtdev->next_event, 1);
+	}
 
-	trace_cpu_migrate_finish(ktime_get_real_ns(), ib_mpidr);
+	trace_cpu_migrate_finish(get_ns(), ib_mpidr);
 	local_fiq_enable();
 	local_irq_enable();
 
@@ -412,12 +433,8 @@ static void bL_switcher_restore_cpus(void)
 {
 	int i;
 
-	for_each_cpu(i, &bL_switcher_removed_logical_cpus) {
-		struct device *cpu_dev = get_cpu_device(i);
-		int ret = device_online(cpu_dev);
-		if (ret)
-			dev_err(cpu_dev, "switcher: unable to restore CPU\n");
-	}
+	for_each_cpu(i, &bL_switcher_removed_logical_cpus)
+		cpu_up(i);
 }
 
 static int bL_switcher_halve_cpus(void)
@@ -504,7 +521,7 @@ static int bL_switcher_halve_cpus(void)
 			continue;
 		}
 
-		ret = device_offline(get_cpu_device(i));
+		ret = cpu_down(i);
 		if (ret) {
 			bL_switcher_restore_cpus();
 			return ret;
@@ -537,7 +554,7 @@ int bL_switcher_get_logical_index(u32 mpidr)
 
 static void bL_switcher_trace_trigger_cpu(void *__always_unused info)
 {
-	trace_cpu_migrate_current(ktime_get_real_ns(), read_mpidr());
+	trace_cpu_migrate_current(get_ns(), read_mpidr());
 }
 
 int bL_switcher_trace_trigger(void)
@@ -758,18 +775,19 @@ EXPORT_SYMBOL_GPL(bL_switcher_put_enabled);
  * while the switcher is active.
  * We're just not ready to deal with that given the trickery involved.
  */
-static int bL_switcher_cpu_pre(unsigned int cpu)
+static int bL_switcher_hotplug_callback(struct notifier_block *nfb,
+					unsigned long action, void *hcpu)
 {
-	int pairing;
-
-	if (!bL_switcher_active)
-		return 0;
-
-	pairing = bL_switcher_cpu_pairing[cpu];
-
-	if (pairing == -1)
-		return -EINVAL;
-	return 0;
+	if (bL_switcher_active) {
+		int pairing = bL_switcher_cpu_pairing[(unsigned long)hcpu];
+		switch (action & 0xf) {
+		case CPU_UP_PREPARE:
+		case CPU_DOWN_PREPARE:
+			if (pairing == -1)
+				return NOTIFY_BAD;
+		}
+	}
+	return NOTIFY_DONE;
 }
 
 static bool no_bL_switcher;
@@ -779,18 +797,13 @@ static int __init bL_switcher_init(void)
 {
 	int ret;
 
-	if (!mcpm_is_available())
-		return -ENODEV;
-
-	cpuhp_setup_state_nocalls(CPUHP_ARM_BL_PREPARE, "arm/bl:prepare",
-				  bL_switcher_cpu_pre, NULL);
-	ret = cpuhp_setup_state_nocalls(CPUHP_AP_ONLINE_DYN, "arm/bl:predown",
-					NULL, bL_switcher_cpu_pre);
-	if (ret < 0) {
-		cpuhp_remove_state_nocalls(CPUHP_ARM_BL_PREPARE);
-		pr_err("bL_switcher: Failed to allocate a hotplug state\n");
-		return ret;
+	if (MAX_NR_CLUSTERS != 2) {
+		pr_err("%s: only dual cluster systems are supported\n", __func__);
+		return -EINVAL;
 	}
+
+	cpu_notifier(bL_switcher_hotplug_callback, 0);
+
 	if (!no_bL_switcher) {
 		ret = bL_switcher_enable();
 		if (ret)

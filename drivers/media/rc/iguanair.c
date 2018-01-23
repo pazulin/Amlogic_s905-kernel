@@ -12,6 +12,10 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
 
 #include <linux/device.h>
@@ -282,10 +286,10 @@ static int iguanair_receiver(struct iguanair *ir, bool enable)
 }
 
 /*
- * The iguanair creates the carrier by busy spinning after each half period.
- * This is counted in CPU cycles, with the CPU running at 24MHz. It is
+ * The iguana ir creates the carrier by busy spinning after each pulse or
+ * space. This is counted in CPU cycles, with the CPU running at 24MHz. It is
  * broken down into 7-cycles and 4-cyles delays, with a preference for
- * 4-cycle delays, minus the overhead of the loop itself (cycle_overhead).
+ * 4-cycle delays.
  */
 static int iguanair_set_tx_carrier(struct rc_dev *dev, uint32_t carrier)
 {
@@ -312,21 +316,14 @@ static int iguanair_set_tx_carrier(struct rc_dev *dev, uint32_t carrier)
 		sevens = (4 - cycles) & 3;
 		fours = (cycles - sevens * 7) / 4;
 
-		/*
-		 * The firmware interprets these values as a relative offset
-		 * for a branch. Immediately following the branches, there
-		 * 4 instructions of 7 cycles (2 bytes each) and 110
-		 * instructions of 4 cycles (1 byte each). A relative branch
-		 * of 0 will execute all of them, branch further for less
-		 * cycle burning.
-		 */
+		/* magic happens here */
 		ir->packet->busy7 = (4 - sevens) * 2;
 		ir->packet->busy4 = 110 - fours;
 	}
 
 	mutex_unlock(&ir->lock);
 
-	return 0;
+	return carrier;
 }
 
 static int iguanair_set_tx_mask(struct rc_dev *dev, uint32_t mask)
@@ -360,12 +357,18 @@ static int iguanair_tx(struct rc_dev *dev, unsigned *txbuf, unsigned count)
 			rc = -EINVAL;
 			goto out;
 		}
-		while (periods) {
-			unsigned p = min(periods, 127u);
-			ir->packet->payload[size++] = p | space;
-			periods -= p;
+		while (periods > 127) {
+			ir->packet->payload[size++] = 127 | space;
+			periods -= 127;
 		}
+
+		ir->packet->payload[size++] = periods | space;
 		space ^= 0x80;
+	}
+
+	if (count == 0) {
+		rc = -EINVAL;
+		goto out;
 	}
 
 	ir->packet->header.start = 0;
@@ -427,7 +430,7 @@ static int iguanair_probe(struct usb_interface *intf,
 	struct usb_host_interface *idesc;
 
 	ir = kzalloc(sizeof(*ir), GFP_KERNEL);
-	rc = rc_allocate_device(RC_DRIVER_IR_RAW);
+	rc = rc_allocate_device();
 	if (!ir || !rc) {
 		ret = -ENOMEM;
 		goto out;
@@ -490,7 +493,8 @@ static int iguanair_probe(struct usb_interface *intf,
 	rc->input_phys = ir->phys;
 	usb_to_input_id(ir->udev, &rc->input_id);
 	rc->dev.parent = &intf->dev;
-	rc->allowed_protocols = RC_BIT_ALL_IR_DECODER;
+	rc->driver_type = RC_DRIVER_IR_RAW;
+	rc->allowed_protos = RC_BIT_ALL;
 	rc->priv = ir;
 	rc->open = iguanair_open;
 	rc->close = iguanair_close;
@@ -499,9 +503,7 @@ static int iguanair_probe(struct usb_interface *intf,
 	rc->tx_ir = iguanair_tx;
 	rc->driver_name = DRIVER_NAME;
 	rc->map_name = RC_MAP_RC6_MCE;
-	rc->min_timeout = 1;
-	rc->timeout = IR_DEFAULT_TIMEOUT;
-	rc->max_timeout = 10 * IR_DEFAULT_TIMEOUT;
+	rc->timeout = MS_TO_NS(100);
 	rc->rx_resolution = RX_RESOLUTION;
 
 	iguanair_set_tx_carrier(rc, 38000);

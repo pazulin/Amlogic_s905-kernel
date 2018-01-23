@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2017, Intel Corp.
+ * Copyright (C) 2000 - 2013, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -45,7 +45,6 @@
 #include "accommon.h"
 #include "acparser.h"
 #include "amlcode.h"
-#include "acconvert.h"
 
 #define _COMPONENT          ACPI_PARSER
 ACPI_MODULE_NAME("psobject")
@@ -67,11 +66,12 @@ static acpi_status acpi_ps_get_aml_opcode(struct acpi_walk_state *walk_state);
 
 static acpi_status acpi_ps_get_aml_opcode(struct acpi_walk_state *walk_state)
 {
-	u32 aml_offset;
 
 	ACPI_FUNCTION_TRACE_PTR(ps_get_aml_opcode, walk_state);
 
-	walk_state->aml = walk_state->parser_state.aml;
+	walk_state->aml_offset =
+	    (u32)ACPI_PTR_DIFF(walk_state->parser_state.aml,
+			       walk_state->parser_state.aml_start);
 	walk_state->opcode = acpi_ps_peek_opcode(&(walk_state->parser_state));
 
 	/*
@@ -98,14 +98,10 @@ static acpi_status acpi_ps_get_aml_opcode(struct acpi_walk_state *walk_state)
 		/* The opcode is unrecognized. Complain and skip unknown opcodes */
 
 		if (walk_state->pass_number == 2) {
-			aml_offset = (u32)ACPI_PTR_DIFF(walk_state->aml,
-							walk_state->
-							parser_state.aml_start);
-
 			ACPI_ERROR((AE_INFO,
 				    "Unknown opcode 0x%.2X at table offset 0x%.4X, ignoring",
 				    walk_state->opcode,
-				    (u32)(aml_offset +
+				    (u32)(walk_state->aml_offset +
 					  sizeof(struct acpi_table_header))));
 
 			ACPI_DUMP_BUFFER((walk_state->parser_state.aml - 16),
@@ -119,14 +115,14 @@ static acpi_status acpi_ps_get_aml_opcode(struct acpi_walk_state *walk_state)
 			acpi_os_printf
 			    ("/*\nError: Unknown opcode 0x%.2X at table offset 0x%.4X, context:\n",
 			     walk_state->opcode,
-			     (u32)(aml_offset +
+			     (u32)(walk_state->aml_offset +
 				   sizeof(struct acpi_table_header)));
 
 			/* Dump the context surrounding the invalid opcode */
 
 			acpi_ut_dump_buffer(((u8 *)walk_state->parser_state.
 					     aml - 16), 48, DB_BYTE_DISPLAY,
-					    (aml_offset +
+					    (walk_state->aml_offset +
 					     sizeof(struct acpi_table_header) -
 					     16));
 			acpi_os_printf(" */\n");
@@ -191,7 +187,6 @@ acpi_ps_build_named_op(struct acpi_walk_state *walk_state,
 	 */
 	while (GET_CURRENT_ARG_TYPE(walk_state->arg_types) &&
 	       (GET_CURRENT_ARG_TYPE(walk_state->arg_types) != ARGP_NAME)) {
-		ASL_CV_CAPTURE_COMMENTS(walk_state);
 		status =
 		    acpi_ps_get_next_arg(walk_state,
 					 &(walk_state->parser_state),
@@ -204,18 +199,6 @@ acpi_ps_build_named_op(struct acpi_walk_state *walk_state,
 		acpi_ps_append_arg(unnamed_op, arg);
 		INCREMENT_ARG_LIST(walk_state->arg_types);
 	}
-
-	/* are there any inline comments associated with the name_seg?? If so, save this. */
-
-	ASL_CV_CAPTURE_COMMENTS(walk_state);
-
-#ifdef ACPI_ASL_COMPILER
-	if (acpi_gbl_current_inline_comment != NULL) {
-		unnamed_op->common.name_comment =
-		    acpi_gbl_current_inline_comment;
-		acpi_gbl_current_inline_comment = NULL;
-	}
-#endif
 
 	/*
 	 * Make sure that we found a NAME and didn't run out of arguments
@@ -236,10 +219,7 @@ acpi_ps_build_named_op(struct acpi_walk_state *walk_state,
 
 	status = walk_state->descending_callback(walk_state, op);
 	if (ACPI_FAILURE(status)) {
-		if (status != AE_CTRL_TERMINATE) {
-			ACPI_EXCEPTION((AE_INFO, status,
-					"During name lookup/catalog"));
-		}
+		ACPI_EXCEPTION((AE_INFO, status, "During name lookup/catalog"));
 		return_ACPI_STATUS(status);
 	}
 
@@ -250,36 +230,12 @@ acpi_ps_build_named_op(struct acpi_walk_state *walk_state,
 	status = acpi_ps_next_parse_state(walk_state, *op, status);
 	if (ACPI_FAILURE(status)) {
 		if (status == AE_CTRL_PENDING) {
-			status = AE_CTRL_PARSE_PENDING;
+			return_ACPI_STATUS(AE_CTRL_PARSE_PENDING);
 		}
 		return_ACPI_STATUS(status);
 	}
 
 	acpi_ps_append_arg(*op, unnamed_op->common.value.arg);
-
-#ifdef ACPI_ASL_COMPILER
-
-	/* save any comments that might be associated with unnamed_op. */
-
-	(*op)->common.inline_comment = unnamed_op->common.inline_comment;
-	(*op)->common.end_node_comment = unnamed_op->common.end_node_comment;
-	(*op)->common.close_brace_comment =
-	    unnamed_op->common.close_brace_comment;
-	(*op)->common.name_comment = unnamed_op->common.name_comment;
-	(*op)->common.comment_list = unnamed_op->common.comment_list;
-	(*op)->common.end_blk_comment = unnamed_op->common.end_blk_comment;
-	(*op)->common.cv_filename = unnamed_op->common.cv_filename;
-	(*op)->common.cv_parent_filename =
-	    unnamed_op->common.cv_parent_filename;
-	(*op)->named.aml = unnamed_op->common.aml;
-
-	unnamed_op->common.inline_comment = NULL;
-	unnamed_op->common.end_node_comment = NULL;
-	unnamed_op->common.close_brace_comment = NULL;
-	unnamed_op->common.name_comment = NULL;
-	unnamed_op->common.comment_list = NULL;
-	unnamed_op->common.end_blk_comment = NULL;
-#endif
 
 	if ((*op)->common.aml_opcode == AML_REGION_OP ||
 	    (*op)->common.aml_opcode == AML_DATA_REGION_OP) {
@@ -335,7 +291,7 @@ acpi_ps_create_op(struct acpi_walk_state *walk_state,
 	/* Create Op structure and append to parent's argument list */
 
 	walk_state->op_info = acpi_ps_get_opcode_info(walk_state->opcode);
-	op = acpi_ps_alloc_op(walk_state->opcode, aml_op_start);
+	op = acpi_ps_alloc_op(walk_state->opcode);
 	if (!op) {
 		return_ACPI_STATUS(AE_NO_MEMORY);
 	}
@@ -386,15 +342,7 @@ acpi_ps_create_op(struct acpi_walk_state *walk_state,
 			    argument_count) {
 				op->common.flags |= ACPI_PARSEOP_TARGET;
 			}
-		}
-
-		/*
-		 * Special case for both Increment() and Decrement(), where
-		 * the lone argument is both a source and a target.
-		 */
-		else if ((parent_scope->common.aml_opcode == AML_INCREMENT_OP)
-			 || (parent_scope->common.aml_opcode ==
-			     AML_DECREMENT_OP)) {
+		} else if (parent_scope->common.aml_opcode == AML_INCREMENT_OP) {
 			op->common.flags |= ACPI_PARSEOP_TARGET;
 		}
 	}

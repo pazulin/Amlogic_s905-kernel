@@ -5,8 +5,6 @@
  */
 
 #include <linux/slab.h>
-#include <linux/rculist.h>
-
 #include "common.h"
 
 /**

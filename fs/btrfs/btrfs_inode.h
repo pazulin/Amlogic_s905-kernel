@@ -55,11 +55,7 @@ struct btrfs_inode {
 	 */
 	struct btrfs_key location;
 
-	/*
-	 * Lock for counters and all fields used to determine if the inode is in
-	 * the log or not (last_trans, last_sub_trans, last_log_commit,
-	 * logged_trans).
-	 */
+	/* Lock for counters */
 	spinlock_t lock;
 
 	/* the extent_tree has caches of all the extent mappings to disk */
@@ -88,6 +84,12 @@ struct btrfs_inode {
 	 */
 	struct list_head delalloc_inodes;
 
+	/*
+	 * list for tracking inodes that must be sent to disk before a
+	 * rename or truncate commit
+	 */
+	struct list_head ordered_operations;
+
 	/* node for the red-black tree that links inodes in subvolume root */
 	struct rb_node rb_node;
 
@@ -107,35 +109,19 @@ struct btrfs_inode {
 	u64 last_trans;
 
 	/*
+	 * log transid when this inode was last modified
+	 */
+	u64 last_sub_trans;
+
+	/*
 	 * transid that last logged this inode
 	 */
 	u64 logged_trans;
-
-	/*
-	 * log transid when this inode was last modified
-	 */
-	int last_sub_trans;
-
-	/* a local copy of root's last_log_commit */
-	int last_log_commit;
 
 	/* total number of bytes pending delalloc, used by stat to calc the
 	 * real block usage of the file
 	 */
 	u64 delalloc_bytes;
-
-	/*
-	 * Total number of bytes pending delalloc that fall within a file
-	 * range that is either a hole or beyond EOF (and no prealloc extent
-	 * exists in the range). This is always <= delalloc_bytes.
-	 */
-	u64 new_delalloc_bytes;
-
-	/*
-	 * total number of bytes pending defrag, used by stat to check whether
-	 * it needs COW.
-	 */
-	u64 defrag_bytes;
 
 	/*
 	 * the size of the file stored in the metadata on disk.  data=ordered
@@ -169,6 +155,9 @@ struct btrfs_inode {
 	/* flags field from the on disk inode */
 	u32 flags;
 
+	/* a local copy of root's last_log_commit */
+	unsigned long last_log_commit;
+
 	/*
 	 * Counters to keep track of the number of extent item's we may use due
 	 * to delalloc and such.  outstanding_extents is the number of extent
@@ -184,23 +173,6 @@ struct btrfs_inode {
 	unsigned force_compress;
 
 	struct btrfs_delayed_node *delayed_node;
-
-	/* File creation time. */
-	struct timespec i_otime;
-
-	/* Hook into fs_info->delayed_iputs */
-	struct list_head delayed_iput;
-	long delayed_iput_count;
-
-	/*
-	 * To avoid races between lockless (i_mutex not held) direct IO writes
-	 * and concurrent fsync requests. Direct IO writes must acquire read
-	 * access on this semaphore for creating an extent map and its
-	 * corresponding ordered extent. The fast fsync path must acquire write
-	 * access on this semaphore before it collects ordered extents and
-	 * extent maps.
-	 */
-	struct rw_semaphore dio_sem;
 
 	struct inode vfs_inode;
 };
@@ -231,64 +203,50 @@ static inline void btrfs_insert_inode_hash(struct inode *inode)
 	__insert_inode_hash(inode, h);
 }
 
-static inline u64 btrfs_ino(struct btrfs_inode *inode)
+static inline u64 btrfs_ino(struct inode *inode)
 {
-	u64 ino = inode->location.objectid;
+	u64 ino = BTRFS_I(inode)->location.objectid;
 
 	/*
 	 * !ino: btree_inode
 	 * type == BTRFS_ROOT_ITEM_KEY: subvol dir
 	 */
-	if (!ino || inode->location.type == BTRFS_ROOT_ITEM_KEY)
-		ino = inode->vfs_inode.i_ino;
+	if (!ino || BTRFS_I(inode)->location.type == BTRFS_ROOT_ITEM_KEY)
+		ino = inode->i_ino;
 	return ino;
 }
 
-static inline void btrfs_i_size_write(struct btrfs_inode *inode, u64 size)
+static inline void btrfs_i_size_write(struct inode *inode, u64 size)
 {
-	i_size_write(&inode->vfs_inode, size);
-	inode->disk_i_size = size;
+	i_size_write(inode, size);
+	BTRFS_I(inode)->disk_i_size = size;
 }
 
-static inline bool btrfs_is_free_space_inode(struct btrfs_inode *inode)
+static inline bool btrfs_is_free_space_inode(struct inode *inode)
 {
-	struct btrfs_root *root = inode->root;
+	struct btrfs_root *root = BTRFS_I(inode)->root;
 
 	if (root == root->fs_info->tree_root &&
 	    btrfs_ino(inode) != BTRFS_BTREE_INODE_OBJECTID)
 		return true;
-	if (inode->location.objectid == BTRFS_FREE_INO_OBJECTID)
+	if (BTRFS_I(inode)->location.objectid == BTRFS_FREE_INO_OBJECTID)
 		return true;
 	return false;
 }
 
-static inline int btrfs_inode_in_log(struct btrfs_inode *inode, u64 generation)
+static inline int btrfs_inode_in_log(struct inode *inode, u64 generation)
 {
-	int ret = 0;
-
-	spin_lock(&inode->lock);
-	if (inode->logged_trans == generation &&
-	    inode->last_sub_trans <= inode->last_log_commit &&
-	    inode->last_sub_trans <= inode->root->last_log_commit) {
-		/*
-		 * After a ranged fsync we might have left some extent maps
-		 * (that fall outside the fsync's range). So return false
-		 * here if the list isn't empty, to make sure btrfs_log_inode()
-		 * will be called and process those extent maps.
-		 */
-		smp_mb();
-		if (list_empty(&inode->extent_tree.modified_extents))
-			ret = 1;
-	}
-	spin_unlock(&inode->lock);
-	return ret;
+	if (BTRFS_I(inode)->logged_trans == generation &&
+	    BTRFS_I(inode)->last_sub_trans <=
+	    BTRFS_I(inode)->last_log_commit &&
+	    BTRFS_I(inode)->last_sub_trans <=
+	    BTRFS_I(inode)->root->last_log_commit)
+		return 1;
+	return 0;
 }
-
-#define BTRFS_DIO_ORIG_BIO_SUBMITTED	0x1
 
 struct btrfs_dio_private {
 	struct inode *inode;
-	unsigned long flags;
 	u64 logical_offset;
 	u64 disk_bytenr;
 	u64 bytes;
@@ -305,12 +263,7 @@ struct btrfs_dio_private {
 
 	/* dio_bio came from fs/direct-io.c */
 	struct bio *dio_bio;
-
-	/*
-	 * The original bio may be split to several sub-bios, this is
-	 * done during endio of sub-bios
-	 */
-	int (*subio_endio)(struct inode *, struct btrfs_io_bio *, int);
+	u8 csum[0];
 };
 
 /*
@@ -318,36 +271,17 @@ struct btrfs_dio_private {
  * to grab i_mutex. It is used to avoid the endless truncate due to
  * nonlocked dio read.
  */
-static inline void btrfs_inode_block_unlocked_dio(struct btrfs_inode *inode)
+static inline void btrfs_inode_block_unlocked_dio(struct inode *inode)
 {
-	set_bit(BTRFS_INODE_READDIO_NEED_LOCK, &inode->runtime_flags);
+	set_bit(BTRFS_INODE_READDIO_NEED_LOCK, &BTRFS_I(inode)->runtime_flags);
 	smp_mb();
 }
 
-static inline void btrfs_inode_resume_unlocked_dio(struct btrfs_inode *inode)
+static inline void btrfs_inode_resume_unlocked_dio(struct inode *inode)
 {
-	smp_mb__before_atomic();
-	clear_bit(BTRFS_INODE_READDIO_NEED_LOCK, &inode->runtime_flags);
+	smp_mb__before_clear_bit();
+	clear_bit(BTRFS_INODE_READDIO_NEED_LOCK,
+		  &BTRFS_I(inode)->runtime_flags);
 }
-
-static inline void btrfs_print_data_csum_error(struct btrfs_inode *inode,
-		u64 logical_start, u32 csum, u32 csum_expected, int mirror_num)
-{
-	struct btrfs_root *root = inode->root;
-
-	/* Output minus objectid, which is more meaningful */
-	if (root->objectid >= BTRFS_LAST_FREE_OBJECTID)
-		btrfs_warn_rl(root->fs_info,
-	"csum failed root %lld ino %lld off %llu csum 0x%08x expected csum 0x%08x mirror %d",
-			root->objectid, btrfs_ino(inode),
-			logical_start, csum, csum_expected, mirror_num);
-	else
-		btrfs_warn_rl(root->fs_info,
-	"csum failed root %llu ino %llu off %llu csum 0x%08x expected csum 0x%08x mirror %d",
-			root->objectid, btrfs_ino(inode),
-			logical_start, csum, csum_expected, mirror_num);
-}
-
-bool btrfs_page_exists_in_range(struct inode *inode, loff_t start, loff_t end);
 
 #endif

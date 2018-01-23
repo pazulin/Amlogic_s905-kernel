@@ -23,17 +23,12 @@
  * 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#include <linux/extable.h>
-#include <linux/ptrace.h>
-#include <linux/sched/mm.h>
-#include <linux/sched/signal.h>
-#include <linux/sched/debug.h>
-#include <linux/mm_types.h>
+#include <linux/module.h>
+#include <linux/sched.h>
 
 #include <asm/cacheflush.h>
 #include <asm/irq.h>
 #include <asm/irq_regs.h>
-#include <linux/uaccess.h>
 
 unsigned long exception_handlers[32];
 
@@ -340,7 +335,7 @@ void __init trap_init(void)
 	set_except_vector(18, handle_dbe);
 	flush_icache_range(DEBUG_VECTOR_BASE_ADDR, IRQ_VECTOR_BASE_ADDR);
 
-	mmgrab(&init_mm);
+	atomic_inc(&init_mm.mm_count);
 	current->active_mm = &init_mm;
 	cpu_cache_init();
 }

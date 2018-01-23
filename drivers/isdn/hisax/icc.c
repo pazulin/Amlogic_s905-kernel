@@ -425,7 +425,7 @@ afterXPR:
 				if (cs->debug & L1_DEB_MONITOR)
 					debugl1(cs, "ICC %02x -> MOX1", cs->dc.icc.mon_tx[cs->dc.icc.mon_txp - 1]);
 			}
-		AfterMOX1: ;
+		AfterMOX1:
 #endif
 		}
 	}
@@ -676,5 +676,7 @@ clear_pending_icc_ints(struct IsdnCardState *cs)
 void setup_icc(struct IsdnCardState *cs)
 {
 	INIT_WORK(&cs->tqueue, icc_bh);
-	setup_timer(&cs->dbusytimer, (void *)dbusy_timer_handler, (long)cs);
+	cs->dbusytimer.function = (void *) dbusy_timer_handler;
+	cs->dbusytimer.data = (long) cs;
+	init_timer(&cs->dbusytimer);
 }

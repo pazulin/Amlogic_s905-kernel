@@ -152,5 +152,6 @@ void __init mmu_init(unsigned long mem_end)
 
 		p_swapper_pg_dir++;
 		addr += PGDIR_SIZE;
+		entry++;
 	}
 }

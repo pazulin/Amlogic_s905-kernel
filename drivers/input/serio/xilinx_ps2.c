@@ -243,17 +243,18 @@ static int xps2_of_probe(struct platform_device *ofdev)
 	unsigned int irq;
 	int error;
 
-	dev_info(dev, "Device Tree Probing \'%s\'\n", dev->of_node->name);
+	dev_info(dev, "Device Tree Probing \'%s\'\n",
+			ofdev->dev.of_node->name);
 
 	/* Get iospace for the device */
-	error = of_address_to_resource(dev->of_node, 0, &r_mem);
+	error = of_address_to_resource(ofdev->dev.of_node, 0, &r_mem);
 	if (error) {
 		dev_err(dev, "invalid address\n");
 		return error;
 	}
 
 	/* Get IRQ for the device */
-	irq = irq_of_parse_and_map(dev->of_node, 0);
+	irq = irq_of_parse_and_map(ofdev->dev.of_node, 0);
 	if (!irq) {
 		dev_err(dev, "no IRQ found\n");
 		return -ENODEV;
@@ -362,6 +363,7 @@ MODULE_DEVICE_TABLE(of, xps2_of_match);
 static struct platform_driver xps2_of_driver = {
 	.driver = {
 		.name = DRIVER_NAME,
+		.owner = THIS_MODULE,
 		.of_match_table = xps2_of_match,
 	},
 	.probe		= xps2_of_probe,

@@ -114,14 +114,14 @@ struct i5k_amb_data {
 	unsigned int num_attrs;
 };
 
-static ssize_t name_show(struct device *dev, struct device_attribute *devattr,
+static ssize_t show_name(struct device *dev, struct device_attribute *devattr,
 			 char *buf)
 {
 	return sprintf(buf, "%s\n", DRVNAME);
 }
 
 
-static DEVICE_ATTR_RO(name);
+static DEVICE_ATTR(name, S_IRUGO, show_name, NULL);
 
 static struct platform_device *amb_pdev;
 
@@ -581,6 +581,7 @@ static int i5k_amb_remove(struct platform_device *pdev)
 
 static struct platform_driver i5k_amb_driver = {
 	.driver = {
+		.owner = THIS_MODULE,
 		.name = DRVNAME,
 	},
 	.probe = i5k_amb_probe,

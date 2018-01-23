@@ -11,6 +11,7 @@
  */
 
 #include <linux/platform_device.h>
+#include <linux/module.h>
 #include <linux/slab.h>
 #include <linux/io.h>
 #include <linux/of.h>
@@ -22,8 +23,6 @@
 #include <linux/pinctrl/pinconf.h>
 #include <linux/pinctrl/pinctrl.h>
 #include <linux/pinctrl/pinmux.h>
-#include <linux/mfd/syscon.h>
-#include <linux/regmap.h>
 
 #include "pinctrl-mvebu.h"
 
@@ -39,8 +38,7 @@ struct mvebu_pinctrl_function {
 
 struct mvebu_pinctrl_group {
 	const char *name;
-	const struct mvebu_mpp_ctrl *ctrl;
-	struct mvebu_mpp_ctrl_data *data;
+	struct mvebu_mpp_ctrl *ctrl;
 	struct mvebu_mpp_ctrl_setting *settings;
 	unsigned num_settings;
 	unsigned gid;
@@ -52,36 +50,13 @@ struct mvebu_pinctrl {
 	struct device *dev;
 	struct pinctrl_dev *pctldev;
 	struct pinctrl_desc desc;
+	void __iomem *base;
 	struct mvebu_pinctrl_group *groups;
 	unsigned num_groups;
 	struct mvebu_pinctrl_function *functions;
 	unsigned num_functions;
 	u8 variant;
 };
-
-int mvebu_mmio_mpp_ctrl_get(struct mvebu_mpp_ctrl_data *data,
-			     unsigned int pid, unsigned long *config)
-{
-	unsigned off = (pid / MVEBU_MPPS_PER_REG) * MVEBU_MPP_BITS;
-	unsigned shift = (pid % MVEBU_MPPS_PER_REG) * MVEBU_MPP_BITS;
-
-	*config = (readl(data->base + off) >> shift) & MVEBU_MPP_MASK;
-
-	return 0;
-}
-
-int mvebu_mmio_mpp_ctrl_set(struct mvebu_mpp_ctrl_data *data,
-			     unsigned int pid, unsigned long config)
-{
-	unsigned off = (pid / MVEBU_MPPS_PER_REG) * MVEBU_MPP_BITS;
-	unsigned shift = (pid % MVEBU_MPPS_PER_REG) * MVEBU_MPP_BITS;
-	unsigned long reg;
-
-	reg = readl(data->base + off) & ~(MVEBU_MPP_MASK << shift);
-	writel(reg | (config << shift), data->base + off);
-
-	return 0;
-}
 
 static struct mvebu_pinctrl_group *mvebu_pinctrl_find_group_by_pid(
 	struct mvebu_pinctrl *pctl, unsigned pid)
@@ -163,6 +138,43 @@ static struct mvebu_pinctrl_function *mvebu_pinctrl_find_function_by_name(
 	return NULL;
 }
 
+/*
+ * Common mpp pin configuration registers on MVEBU are
+ * registers of eight 4-bit values for each mpp setting.
+ * Register offset and bit mask are calculated accordingly below.
+ */
+static int mvebu_common_mpp_get(struct mvebu_pinctrl *pctl,
+				struct mvebu_pinctrl_group *grp,
+				unsigned long *config)
+{
+	unsigned pin = grp->gid;
+	unsigned off = (pin / MPPS_PER_REG) * MPP_BITS;
+	unsigned shift = (pin % MPPS_PER_REG) * MPP_BITS;
+
+	*config = readl(pctl->base + off);
+	*config >>= shift;
+	*config &= MPP_MASK;
+
+	return 0;
+}
+
+static int mvebu_common_mpp_set(struct mvebu_pinctrl *pctl,
+				struct mvebu_pinctrl_group *grp,
+				unsigned long config)
+{
+	unsigned pin = grp->gid;
+	unsigned off = (pin / MPPS_PER_REG) * MPP_BITS;
+	unsigned shift = (pin % MPPS_PER_REG) * MPP_BITS;
+	unsigned long reg;
+
+	reg = readl(pctl->base + off);
+	reg &= ~(MPP_MASK << shift);
+	reg |= (config << shift);
+	writel(reg, pctl->base + off);
+
+	return 0;
+}
+
 static int mvebu_pinconf_group_get(struct pinctrl_dev *pctldev,
 				unsigned gid, unsigned long *config)
 {
@@ -172,7 +184,10 @@ static int mvebu_pinconf_group_get(struct pinctrl_dev *pctldev,
 	if (!grp->ctrl)
 		return -EINVAL;
 
-	return grp->ctrl->mpp_get(grp->data, grp->pins[0], config);
+	if (grp->ctrl->mpp_get)
+		return grp->ctrl->mpp_get(grp->ctrl, config);
+
+	return mvebu_common_mpp_get(pctl, grp, config);
 }
 
 static int mvebu_pinconf_group_set(struct pinctrl_dev *pctldev,
@@ -187,7 +202,11 @@ static int mvebu_pinconf_group_set(struct pinctrl_dev *pctldev,
 		return -EINVAL;
 
 	for (i = 0; i < num_configs; i++) {
-		ret = grp->ctrl->mpp_set(grp->data, grp->pins[0], configs[i]);
+		if (grp->ctrl->mpp_set)
+			ret = grp->ctrl->mpp_set(grp->ctrl, configs[i]);
+		else
+			ret = mvebu_common_mpp_set(pctl, grp, configs[i]);
+
 		if (ret)
 			return ret;
 	} /* for each config */
@@ -214,19 +233,18 @@ static void mvebu_pinconf_group_dbg_show(struct pinctrl_dev *pctldev,
 		if (curr->subname)
 			seq_printf(s, "(%s)", curr->subname);
 		if (curr->flags & (MVEBU_SETTING_GPO | MVEBU_SETTING_GPI)) {
-			seq_putc(s, '(');
+			seq_printf(s, "(");
 			if (curr->flags & MVEBU_SETTING_GPI)
-				seq_putc(s, 'i');
+				seq_printf(s, "i");
 			if (curr->flags & MVEBU_SETTING_GPO)
-				seq_putc(s, 'o');
-			seq_putc(s, ')');
+				seq_printf(s, "o");
+			seq_printf(s, ")");
 		}
-	} else {
-		seq_puts(s, "current: UNKNOWN");
-	}
+	} else
+		seq_printf(s, "current: UNKNOWN");
 
 	if (grp->num_settings > 1) {
-		seq_puts(s, ", available = [");
+		seq_printf(s, ", available = [");
 		for (n = 0; n < grp->num_settings; n++) {
 			if (curr == &grp->settings[n])
 				continue;
@@ -241,16 +259,17 @@ static void mvebu_pinconf_group_dbg_show(struct pinctrl_dev *pctldev,
 				seq_printf(s, "(%s)", grp->settings[n].subname);
 			if (grp->settings[n].flags &
 				(MVEBU_SETTING_GPO | MVEBU_SETTING_GPI)) {
-				seq_putc(s, '(');
+				seq_printf(s, "(");
 				if (grp->settings[n].flags & MVEBU_SETTING_GPI)
-					seq_putc(s, 'i');
+					seq_printf(s, "i");
 				if (grp->settings[n].flags & MVEBU_SETTING_GPO)
-					seq_putc(s, 'o');
-				seq_putc(s, ')');
+					seq_printf(s, "o");
+				seq_printf(s, ")");
 			}
 		}
-		seq_puts(s, " ]");
+		seq_printf(s, " ]");
 	}
+	return;
 }
 
 static const struct pinconf_ops mvebu_pinconf_ops = {
@@ -285,8 +304,8 @@ static int mvebu_pinmux_get_groups(struct pinctrl_dev *pctldev, unsigned fid,
 	return 0;
 }
 
-static int mvebu_pinmux_set(struct pinctrl_dev *pctldev, unsigned fid,
-			    unsigned gid)
+static int mvebu_pinmux_enable(struct pinctrl_dev *pctldev, unsigned fid,
+			unsigned gid)
 {
 	struct mvebu_pinctrl *pctl = pinctrl_dev_get_drvdata(pctldev);
 	struct mvebu_pinctrl_function *func = &pctl->functions[fid];
@@ -328,7 +347,7 @@ static int mvebu_pinmux_gpio_request_enable(struct pinctrl_dev *pctldev,
 		return -EINVAL;
 
 	if (grp->ctrl->mpp_gpio_req)
-		return grp->ctrl->mpp_gpio_req(grp->data, offset);
+		return grp->ctrl->mpp_gpio_req(grp->ctrl, offset);
 
 	setting = mvebu_pinctrl_find_gpio_setting(pctl, grp);
 	if (!setting)
@@ -351,7 +370,7 @@ static int mvebu_pinmux_gpio_set_direction(struct pinctrl_dev *pctldev,
 		return -EINVAL;
 
 	if (grp->ctrl->mpp_gpio_dir)
-		return grp->ctrl->mpp_gpio_dir(grp->data, offset, input);
+		return grp->ctrl->mpp_gpio_dir(grp->ctrl, offset, input);
 
 	setting = mvebu_pinctrl_find_gpio_setting(pctl, grp);
 	if (!setting)
@@ -370,7 +389,7 @@ static const struct pinmux_ops mvebu_pinmux_ops = {
 	.get_function_groups = mvebu_pinmux_get_groups,
 	.gpio_request_enable = mvebu_pinmux_gpio_request_enable,
 	.gpio_set_direction = mvebu_pinmux_gpio_set_direction,
-	.set_mux = mvebu_pinmux_set,
+	.enable = mvebu_pinmux_enable,
 };
 
 static int mvebu_pinctrl_get_groups_count(struct pinctrl_dev *pctldev)
@@ -424,9 +443,13 @@ static int mvebu_pinctrl_dt_node_to_map(struct pinctrl_dev *pctldev,
 		return 0;
 	}
 
-	*map = kmalloc_array(nmaps, sizeof(**map), GFP_KERNEL);
-	if (!*map)
+	*map = kmalloc(nmaps * sizeof(struct pinctrl_map), GFP_KERNEL);
+	if (*map == NULL) {
+		dev_err(pctl->dev,
+			"cannot allocate pinctrl_map memory for %s\n",
+			np->name);
 		return -ENOMEM;
+	}
 
 	n = 0;
 	of_property_for_each_string(np, "marvell,pins", prop, group) {
@@ -570,12 +593,11 @@ static int mvebu_pinctrl_build_functions(struct platform_device *pdev,
 int mvebu_pinctrl_probe(struct platform_device *pdev)
 {
 	struct mvebu_pinctrl_soc_info *soc = dev_get_platdata(&pdev->dev);
+	struct resource *res;
 	struct mvebu_pinctrl *pctl;
+	void __iomem *base;
 	struct pinctrl_pin_desc *pdesc;
 	unsigned gid, n, k;
-	unsigned size, noname = 0;
-	char *noname_buf;
-	void *p;
 	int ret;
 
 	if (!soc || !soc->controls || !soc->modes) {
@@ -583,10 +605,17 @@ int mvebu_pinctrl_probe(struct platform_device *pdev)
 		return -EINVAL;
 	}
 
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	base = devm_ioremap_resource(&pdev->dev, res);
+	if (IS_ERR(base))
+		return PTR_ERR(base);
+
 	pctl = devm_kzalloc(&pdev->dev, sizeof(struct mvebu_pinctrl),
 			GFP_KERNEL);
-	if (!pctl)
+	if (!pctl) {
+		dev_err(&pdev->dev, "unable to alloc driver\n");
 		return -ENOMEM;
+	}
 
 	pctl->desc.name = dev_name(&pdev->dev);
 	pctl->desc.owner = THIS_MODULE;
@@ -594,6 +623,7 @@ int mvebu_pinctrl_probe(struct platform_device *pdev)
 	pctl->desc.pmxops = &mvebu_pinmux_ops;
 	pctl->desc.confops = &mvebu_pinconf_ops;
 	pctl->variant = soc->variant;
+	pctl->base = base;
 	pctl->dev = &pdev->dev;
 	platform_set_drvdata(pdev, pctl);
 
@@ -602,82 +632,75 @@ int mvebu_pinctrl_probe(struct platform_device *pdev)
 	pctl->num_groups = 0;
 	pctl->desc.npins = 0;
 	for (n = 0; n < soc->ncontrols; n++) {
-		const struct mvebu_mpp_ctrl *ctrl = &soc->controls[n];
+		struct mvebu_mpp_ctrl *ctrl = &soc->controls[n];
+		char *names;
 
 		pctl->desc.npins += ctrl->npins;
-		/* initialize control's pins[] array */
+		/* initial control pins */
 		for (k = 0; k < ctrl->npins; k++)
 			ctrl->pins[k] = ctrl->pid + k;
 
-		/*
-		 * We allow to pass controls with NULL name that we treat
-		 * as a range of one-pin groups with generic mvebu register
-		 * controls.
-		 */
-		if (!ctrl->name) {
-			pctl->num_groups += ctrl->npins;
-			noname += ctrl->npins;
-		} else {
+		/* special soc specific control */
+		if (ctrl->mpp_get || ctrl->mpp_set) {
+			if (!ctrl->name || !ctrl->mpp_get || !ctrl->mpp_set) {
+				dev_err(&pdev->dev, "wrong soc control info\n");
+				return -EINVAL;
+			}
 			pctl->num_groups += 1;
+			continue;
 		}
+
+		/* generic mvebu register control */
+		names = devm_kzalloc(&pdev->dev, ctrl->npins * 8, GFP_KERNEL);
+		if (!names) {
+			dev_err(&pdev->dev, "failed to alloc mpp names\n");
+			return -ENOMEM;
+		}
+		for (k = 0; k < ctrl->npins; k++)
+			sprintf(names + 8*k, "mpp%d", ctrl->pid+k);
+		ctrl->name = names;
+		pctl->num_groups += ctrl->npins;
 	}
 
 	pdesc = devm_kzalloc(&pdev->dev, pctl->desc.npins *
 			     sizeof(struct pinctrl_pin_desc), GFP_KERNEL);
-	if (!pdesc)
+	if (!pdesc) {
+		dev_err(&pdev->dev, "failed to alloc pinctrl pins\n");
 		return -ENOMEM;
+	}
 
 	for (n = 0; n < pctl->desc.npins; n++)
 		pdesc[n].number = n;
 	pctl->desc.pins = pdesc;
 
-	/*
-	 * allocate groups and name buffers for unnamed groups.
-	 */
-	size = pctl->num_groups * sizeof(*pctl->groups) + noname * 8;
-	p = devm_kzalloc(&pdev->dev, size, GFP_KERNEL);
-	if (!p) {
-		dev_err(&pdev->dev, "failed to alloc group data\n");
+	pctl->groups = devm_kzalloc(&pdev->dev, pctl->num_groups *
+			     sizeof(struct mvebu_pinctrl_group), GFP_KERNEL);
+	if (!pctl->groups) {
+		dev_err(&pdev->dev, "failed to alloc pinctrl groups\n");
 		return -ENOMEM;
 	}
-	pctl->groups = p;
-	noname_buf = p + pctl->num_groups * sizeof(*pctl->groups);
 
 	/* assign mpp controls to groups */
 	gid = 0;
 	for (n = 0; n < soc->ncontrols; n++) {
-		const struct mvebu_mpp_ctrl *ctrl = &soc->controls[n];
-		struct mvebu_mpp_ctrl_data *data = soc->control_data ?
-						   &soc->control_data[n] : NULL;
-
+		struct mvebu_mpp_ctrl *ctrl = &soc->controls[n];
 		pctl->groups[gid].gid = gid;
 		pctl->groups[gid].ctrl = ctrl;
-		pctl->groups[gid].data = data;
 		pctl->groups[gid].name = ctrl->name;
 		pctl->groups[gid].pins = ctrl->pins;
 		pctl->groups[gid].npins = ctrl->npins;
 
-		/*
-		 * We treat unnamed controls as a range of one-pin groups
-		 * with generic mvebu register controls. Use one group for
-		 * each in this range and assign a default group name.
-		 */
-		if (!ctrl->name) {
-			pctl->groups[gid].name = noname_buf;
+		/* generic mvebu register control maps to a number of groups */
+		if (!ctrl->mpp_get && !ctrl->mpp_set) {
 			pctl->groups[gid].npins = 1;
-			sprintf(noname_buf, "mpp%d", ctrl->pid+0);
-			noname_buf += 8;
 
 			for (k = 1; k < ctrl->npins; k++) {
 				gid++;
 				pctl->groups[gid].gid = gid;
 				pctl->groups[gid].ctrl = ctrl;
-				pctl->groups[gid].data = data;
-				pctl->groups[gid].name = noname_buf;
+				pctl->groups[gid].name = &ctrl->name[8*k];
 				pctl->groups[gid].pins = &ctrl->pins[k];
 				pctl->groups[gid].npins = 1;
-				sprintf(noname_buf, "mpp%d", ctrl->pid+k);
-				noname_buf += 8;
 			}
 		}
 		gid++;
@@ -686,22 +709,27 @@ int mvebu_pinctrl_probe(struct platform_device *pdev)
 	/* assign mpp modes to groups */
 	for (n = 0; n < soc->nmodes; n++) {
 		struct mvebu_mpp_mode *mode = &soc->modes[n];
-		struct mvebu_mpp_ctrl_setting *set = &mode->settings[0];
-		struct mvebu_pinctrl_group *grp;
+		struct mvebu_pinctrl_group *grp =
+			mvebu_pinctrl_find_group_by_pid(pctl, mode->pid);
 		unsigned num_settings;
-		unsigned supp_settings;
 
-		for (num_settings = 0, supp_settings = 0; ; set++) {
+		if (!grp) {
+			dev_warn(&pdev->dev, "unknown pinctrl group %d\n",
+				mode->pid);
+			continue;
+		}
+
+		for (num_settings = 0; ;) {
+			struct mvebu_mpp_ctrl_setting *set =
+				&mode->settings[num_settings];
+
 			if (!set->name)
 				break;
-
 			num_settings++;
 
 			/* skip unsupported settings for this variant */
 			if (pctl->variant && !(pctl->variant & set->variant))
 				continue;
-
-			supp_settings++;
 
 			/* find gpio/gpo/gpi settings */
 			if (strcmp(set->name, "gpio") == 0)
@@ -711,17 +739,6 @@ int mvebu_pinctrl_probe(struct platform_device *pdev)
 				set->flags = MVEBU_SETTING_GPO;
 			else if (strcmp(set->name, "gpi") == 0)
 				set->flags = MVEBU_SETTING_GPI;
-		}
-
-		/* skip modes with no settings for this variant */
-		if (!supp_settings)
-			continue;
-
-		grp = mvebu_pinctrl_find_group_by_pid(pctl, mode->pid);
-		if (!grp) {
-			dev_warn(&pdev->dev, "unknown pinctrl group %d\n",
-				mode->pid);
-			continue;
 		}
 
 		grp->settings = mode->settings;
@@ -734,10 +751,10 @@ int mvebu_pinctrl_probe(struct platform_device *pdev)
 		return ret;
 	}
 
-	pctl->pctldev = devm_pinctrl_register(&pdev->dev, &pctl->desc, pctl);
-	if (IS_ERR(pctl->pctldev)) {
+	pctl->pctldev = pinctrl_register(&pctl->desc, &pdev->dev, pctl);
+	if (!pctl->pctldev) {
 		dev_err(&pdev->dev, "unable to register pinctrl driver\n");
-		return PTR_ERR(pctl->pctldev);
+		return -EINVAL;
 	}
 
 	dev_info(&pdev->dev, "registered pinctrl driver\n");
@@ -749,93 +766,9 @@ int mvebu_pinctrl_probe(struct platform_device *pdev)
 	return 0;
 }
 
-/*
- * mvebu_pinctrl_simple_mmio_probe - probe a simple mmio pinctrl
- * @pdev: platform device (with platform data already attached)
- *
- * Initialise a simple (single base address) mmio pinctrl driver,
- * assigning the MMIO base address to all mvebu mpp ctrl instances.
- */
-int mvebu_pinctrl_simple_mmio_probe(struct platform_device *pdev)
+int mvebu_pinctrl_remove(struct platform_device *pdev)
 {
-	struct mvebu_pinctrl_soc_info *soc = dev_get_platdata(&pdev->dev);
-	struct mvebu_mpp_ctrl_data *mpp_data;
-	struct resource *res;
-	void __iomem *base;
-	int i;
-
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	base = devm_ioremap_resource(&pdev->dev, res);
-	if (IS_ERR(base))
-		return PTR_ERR(base);
-
-	mpp_data = devm_kcalloc(&pdev->dev, soc->ncontrols, sizeof(*mpp_data),
-				GFP_KERNEL);
-	if (!mpp_data)
-		return -ENOMEM;
-
-	for (i = 0; i < soc->ncontrols; i++)
-		mpp_data[i].base = base;
-
-	soc->control_data = mpp_data;
-
-	return mvebu_pinctrl_probe(pdev);
-}
-
-int mvebu_regmap_mpp_ctrl_get(struct mvebu_mpp_ctrl_data *data,
-			      unsigned int pid, unsigned long *config)
-{
-	unsigned off = (pid / MVEBU_MPPS_PER_REG) * MVEBU_MPP_BITS;
-	unsigned shift = (pid % MVEBU_MPPS_PER_REG) * MVEBU_MPP_BITS;
-	unsigned int val;
-	int err;
-
-	err = regmap_read(data->regmap.map, data->regmap.offset + off, &val);
-	if (err)
-		return err;
-
-	*config = (val >> shift) & MVEBU_MPP_MASK;
-
+	struct mvebu_pinctrl *pctl = platform_get_drvdata(pdev);
+	pinctrl_unregister(pctl->pctldev);
 	return 0;
-}
-
-int mvebu_regmap_mpp_ctrl_set(struct mvebu_mpp_ctrl_data *data,
-			      unsigned int pid, unsigned long config)
-{
-	unsigned off = (pid / MVEBU_MPPS_PER_REG) * MVEBU_MPP_BITS;
-	unsigned shift = (pid % MVEBU_MPPS_PER_REG) * MVEBU_MPP_BITS;
-
-	return regmap_update_bits(data->regmap.map, data->regmap.offset + off,
-				  MVEBU_MPP_MASK << shift, config << shift);
-}
-
-int mvebu_pinctrl_simple_regmap_probe(struct platform_device *pdev,
-				      struct device *syscon_dev)
-{
-	struct mvebu_pinctrl_soc_info *soc = dev_get_platdata(&pdev->dev);
-	struct mvebu_mpp_ctrl_data *mpp_data;
-	struct regmap *regmap;
-	u32 offset;
-	int i;
-
-	regmap = syscon_node_to_regmap(syscon_dev->of_node);
-	if (IS_ERR(regmap))
-		return PTR_ERR(regmap);
-
-	if (of_property_read_u32(pdev->dev.of_node, "offset", &offset))
-		return -EINVAL;
-
-	mpp_data = devm_kcalloc(&pdev->dev, soc->ncontrols, sizeof(*mpp_data),
-				GFP_KERNEL);
-	if (!mpp_data)
-		return -ENOMEM;
-
-	for (i = 0; i < soc->ncontrols; i++) {
-		mpp_data[i].regmap.map = regmap;
-		mpp_data[i].regmap.offset = offset;
-	}
-
-	soc->control_data = mpp_data;
-
-	return mvebu_pinctrl_probe(pdev);
 }

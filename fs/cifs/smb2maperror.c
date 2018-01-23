@@ -26,7 +26,6 @@
 #include "smb2pdu.h"
 #include "smb2proto.h"
 #include "smb2status.h"
-#include "smb2glob.h"
 
 struct status_to_posix_error {
 	__le32 smb2_status;
@@ -301,7 +300,7 @@ static const struct status_to_posix_error smb2_error_map_table[] = {
 	{STATUS_INVALID_PARAMETER, -EINVAL, "STATUS_INVALID_PARAMETER"},
 	{STATUS_NO_SUCH_DEVICE, -ENODEV, "STATUS_NO_SUCH_DEVICE"},
 	{STATUS_NO_SUCH_FILE, -ENOENT, "STATUS_NO_SUCH_FILE"},
-	{STATUS_INVALID_DEVICE_REQUEST, -EOPNOTSUPP, "STATUS_INVALID_DEVICE_REQUEST"},
+	{STATUS_INVALID_DEVICE_REQUEST, -EIO, "STATUS_INVALID_DEVICE_REQUEST"},
 	{STATUS_END_OF_FILE, -ENODATA, "STATUS_END_OF_FILE"},
 	{STATUS_WRONG_VOLUME, -EIO, "STATUS_WRONG_VOLUME"},
 	{STATUS_NO_MEDIA_IN_DEVICE, -EIO, "STATUS_NO_MEDIA_IN_DEVICE"},
@@ -2450,10 +2449,10 @@ smb2_print_status(__le32 status)
 int
 map_smb2_to_linux_error(char *buf, bool log_err)
 {
-	struct smb2_sync_hdr *shdr = get_sync_hdr(buf);
+	struct smb2_hdr *hdr = (struct smb2_hdr *)buf;
 	unsigned int i;
 	int rc = -EIO;
-	__le32 smb2err = shdr->Status;
+	__le32 smb2err = hdr->Status;
 
 	if (smb2err == 0)
 		return 0;

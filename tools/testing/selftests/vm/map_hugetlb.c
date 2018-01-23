@@ -62,7 +62,7 @@ int main(void)
 	void *addr;
 	int ret;
 
-	addr = mmap(ADDR, LENGTH, PROTECTION, FLAGS, -1, 0);
+	addr = mmap(ADDR, LENGTH, PROTECTION, FLAGS, 0, 0);
 	if (addr == MAP_FAILED) {
 		perror("mmap");
 		exit(1);
@@ -73,11 +73,7 @@ int main(void)
 	write_bytes(addr);
 	ret = read_bytes(addr);
 
-	/* munmap() length of MAP_HUGETLB memory must be hugepage aligned */
-	if (munmap(addr, LENGTH)) {
-		perror("munmap");
-		exit(1);
-	}
+	munmap(addr, LENGTH);
 
 	return ret;
 }

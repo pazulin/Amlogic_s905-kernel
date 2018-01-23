@@ -12,6 +12,10 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *
  */
 
 #include <linux/module.h>
@@ -90,13 +94,14 @@ static int ix2505v_write(struct ix2505v_state *state, u8 buf[], u8 count)
 	return 0;
 }
 
-static void ix2505v_release(struct dvb_frontend *fe)
+static int ix2505v_release(struct dvb_frontend *fe)
 {
 	struct ix2505v_state *state = fe->tuner_priv;
 
 	fe->tuner_priv = NULL;
 	kfree(state);
 
+	return 0;
 }
 
 /**
@@ -253,7 +258,7 @@ static int ix2505v_get_frequency(struct dvb_frontend *fe, u32 *frequency)
 	return 0;
 }
 
-static const struct dvb_tuner_ops ix2505v_tuner_ops = {
+static struct dvb_tuner_ops ix2505v_tuner_ops = {
 	.info = {
 		.name = "Sharp IX2505V (B0017)",
 		.frequency_min = 950000,

@@ -23,8 +23,6 @@
 #define _ASM_MMU_CONTEXT_H
 
 #include <linux/atomic.h>
-#include <linux/mm_types.h>
-
 #include <asm/pgalloc.h>
 #include <asm/tlbflush.h>
 #include <asm-generic/mm_hooks.h>

@@ -18,7 +18,6 @@
 #include <linux/netfilter/xt_limit.h>
 
 struct xt_limit_priv {
-	spinlock_t lock;
 	unsigned long prev;
 	uint32_t credit;
 };
@@ -32,6 +31,8 @@ MODULE_ALIAS("ip6t_limit");
 /* The algorithm used is the Simple Token Bucket Filter (TBF)
  * see net/sched/sch_tbf.c in the linux source tree
  */
+
+static DEFINE_SPINLOCK(limit_lock);
 
 /* Rusty: This is my (non-mathematically-inclined) understanding of
    this algorithm.  The `average rate' in jiffies becomes your initial
@@ -71,7 +72,7 @@ limit_mt(const struct sk_buff *skb, struct xt_action_param *par)
 	struct xt_limit_priv *priv = r->master;
 	unsigned long now = jiffies;
 
-	spin_lock_bh(&priv->lock);
+	spin_lock_bh(&limit_lock);
 	priv->credit += (now - xchg(&priv->prev, now)) * CREDITS_PER_JIFFY;
 	if (priv->credit > r->credit_cap)
 		priv->credit = r->credit_cap;
@@ -79,11 +80,11 @@ limit_mt(const struct sk_buff *skb, struct xt_action_param *par)
 	if (priv->credit >= r->cost) {
 		/* We're not limited. */
 		priv->credit -= r->cost;
-		spin_unlock_bh(&priv->lock);
+		spin_unlock_bh(&limit_lock);
 		return true;
 	}
 
-	spin_unlock_bh(&priv->lock);
+	spin_unlock_bh(&limit_lock);
 	return false;
 }
 
@@ -125,8 +126,6 @@ static int limit_mt_check(const struct xt_mtchk_param *par)
 		r->credit_cap = priv->credit; /* Credits full. */
 		r->cost = user2credits(r->avg);
 	}
-	spin_lock_init(&priv->lock);
-
 	return 0;
 }
 
@@ -193,8 +192,6 @@ static struct xt_match limit_mt_reg __read_mostly = {
 	.compatsize       = sizeof(struct compat_xt_rateinfo),
 	.compat_from_user = limit_mt_compat_from_user,
 	.compat_to_user   = limit_mt_compat_to_user,
-#else
-	.usersize         = offsetof(struct xt_rateinfo, prev),
 #endif
 	.me               = THIS_MODULE,
 };

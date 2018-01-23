@@ -253,7 +253,9 @@ int setup_hfcs(struct IsdnCard *card)
 		outb(0x57, cs->hw.hfcD.addr | 1);
 	}
 	set_cs_func(cs);
-	setup_timer(&cs->hw.hfcD.timer, (void *)hfcs_Timer, (long)cs);
+	cs->hw.hfcD.timer.function = (void *) hfcs_Timer;
+	cs->hw.hfcD.timer.data = (long) cs;
+	init_timer(&cs->hw.hfcD.timer);
 	cs->cardmsg = &hfcs_card_msg;
 	cs->irq_func = &hfcs_interrupt;
 	return (1);

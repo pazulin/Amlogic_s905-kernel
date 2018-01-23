@@ -45,7 +45,6 @@
 #include <asm/processor.h>
 #include <linux/libata.h>
 #include <linux/mutex.h>
-#include <linux/ktime.h>
 #include <scsi/scsi.h>
 #include <scsi/scsi_host.h>
 #include <scsi/scsi_device.h>
@@ -77,7 +76,7 @@ static atomic_t pmcraid_adapter_count = ATOMIC_INIT(0);
  */
 static unsigned int pmcraid_major;
 static struct class *pmcraid_class;
-static DECLARE_BITMAP(pmcraid_minor, PMCRAID_MAX_ADAPTERS);
+DECLARE_BITMAP(pmcraid_minor, PMCRAID_MAX_ADAPTERS);
 
 /*
  * Module parameters
@@ -175,7 +174,7 @@ static int pmcraid_slave_alloc(struct scsi_device *scsi_dev)
 			if (fw_version <= PMCRAID_FW_VERSION_1)
 				target = temp->cfg_entry.unique_flags1;
 			else
-				target = le16_to_cpu(temp->cfg_entry.array_id) & 0xFF;
+				target = temp->cfg_entry.array_id & 0xFF;
 
 			if (target > PMCRAID_MAX_VSET_TARGETS)
 				continue;
@@ -238,7 +237,7 @@ static int pmcraid_slave_configure(struct scsi_device *scsi_dev)
 		     scsi_dev->host->unique_id,
 		     scsi_dev->channel,
 		     scsi_dev->id,
-		     (u8)scsi_dev->lun);
+		     scsi_dev->lun);
 
 	if (RES_IS_GSCSI(res->cfg_entry)) {
 		scsi_dev->allow_restart = 1;
@@ -250,11 +249,15 @@ static int pmcraid_slave_configure(struct scsi_device *scsi_dev)
 				      PMCRAID_VSET_MAX_SECTORS);
 	}
 
-	/*
-	 * We never want to report TCQ support for these types of devices.
-	 */
-	if (!RES_IS_GSCSI(res->cfg_entry) && !RES_IS_VSET(res->cfg_entry))
-		scsi_dev->tagged_supported = 0;
+	if (scsi_dev->tagged_supported &&
+	    (RES_IS_GSCSI(res->cfg_entry) || RES_IS_VSET(res->cfg_entry))) {
+		scsi_activate_tcq(scsi_dev, scsi_dev->queue_depth);
+		scsi_adjust_queue_depth(scsi_dev, MSG_SIMPLE_TAG,
+					scsi_dev->host->cmd_per_lun);
+	} else {
+		scsi_adjust_queue_depth(scsi_dev, 0,
+					scsi_dev->host->cmd_per_lun);
+	}
 
 	return 0;
 }
@@ -286,16 +289,53 @@ static void pmcraid_slave_destroy(struct scsi_device *scsi_dev)
  * pmcraid_change_queue_depth - Change the device's queue depth
  * @scsi_dev: scsi device struct
  * @depth: depth to set
+ * @reason: calling context
  *
  * Return value
  *	actual depth set
  */
-static int pmcraid_change_queue_depth(struct scsi_device *scsi_dev, int depth)
+static int pmcraid_change_queue_depth(struct scsi_device *scsi_dev, int depth,
+				      int reason)
 {
+	if (reason != SCSI_QDEPTH_DEFAULT)
+		return -EOPNOTSUPP;
+
 	if (depth > PMCRAID_MAX_CMD_PER_LUN)
 		depth = PMCRAID_MAX_CMD_PER_LUN;
-	return scsi_change_queue_depth(scsi_dev, depth);
+
+	scsi_adjust_queue_depth(scsi_dev, scsi_get_tag_type(scsi_dev), depth);
+
+	return scsi_dev->queue_depth;
 }
+
+/**
+ * pmcraid_change_queue_type - Change the device's queue type
+ * @scsi_dev: scsi device struct
+ * @tag: type of tags to use
+ *
+ * Return value:
+ *	actual queue type set
+ */
+static int pmcraid_change_queue_type(struct scsi_device *scsi_dev, int tag)
+{
+	struct pmcraid_resource_entry *res;
+
+	res = (struct pmcraid_resource_entry *)scsi_dev->hostdata;
+
+	if ((res) && scsi_dev->tagged_supported &&
+	    (RES_IS_GSCSI(res->cfg_entry) || RES_IS_VSET(res->cfg_entry))) {
+		scsi_set_tag_type(scsi_dev, tag);
+
+		if (tag)
+			scsi_activate_tcq(scsi_dev, scsi_dev->queue_depth);
+		else
+			scsi_deactivate_tcq(scsi_dev, scsi_dev->queue_depth);
+	} else
+		tag = 0;
+
+	return tag;
+}
+
 
 /**
  * pmcraid_init_cmdblk - initializes a command block
@@ -306,7 +346,7 @@ static int pmcraid_change_queue_depth(struct scsi_device *scsi_dev, int depth)
  * Return Value
  *	 None
  */
-static void pmcraid_init_cmdblk(struct pmcraid_cmd *cmd, int index)
+void pmcraid_init_cmdblk(struct pmcraid_cmd *cmd, int index)
 {
 	struct pmcraid_ioarcb *ioarcb = &(cmd->ioa_cb->ioarcb);
 	dma_addr_t dma_addr = cmd->ioa_cb_bus_addr;
@@ -330,7 +370,7 @@ static void pmcraid_init_cmdblk(struct pmcraid_cmd *cmd, int index)
 		ioarcb->request_flags0 = 0;
 		ioarcb->request_flags1 = 0;
 		ioarcb->cmd_timeout = 0;
-		ioarcb->ioarcb_bus_addr &= cpu_to_le64(~0x1FULL);
+		ioarcb->ioarcb_bus_addr &= (~0x1FULL);
 		ioarcb->ioadl_bus_addr = 0;
 		ioarcb->ioadl_length = 0;
 		ioarcb->data_transfer_length = 0;
@@ -345,7 +385,7 @@ static void pmcraid_init_cmdblk(struct pmcraid_cmd *cmd, int index)
 	cmd->scsi_cmd = NULL;
 	cmd->release = 0;
 	cmd->completion_req = 0;
-	cmd->sense_buffer = NULL;
+	cmd->sense_buffer = 0;
 	cmd->sense_buffer_dma = 0;
 	cmd->dma_handle = 0;
 	init_timer(&cmd->timer);
@@ -401,7 +441,7 @@ static struct pmcraid_cmd *pmcraid_get_free_cmd(
  * Return Value:
  *	nothing
  */
-static void pmcraid_return_cmd(struct pmcraid_cmd *cmd)
+void pmcraid_return_cmd(struct pmcraid_cmd *cmd)
 {
 	struct pmcraid_instance *pinstance = cmd->drv_inst;
 	unsigned long lock_flags;
@@ -898,7 +938,8 @@ static void _pmcraid_fire_command(struct pmcraid_cmd *cmd)
 
 	/* driver writes lower 32-bit value of IOARCB address only */
 	mb();
-	iowrite32(le64_to_cpu(cmd->ioa_cb->ioarcb.ioarcb_bus_addr), pinstance->ioarrin);
+	iowrite32(le32_to_cpu(cmd->ioa_cb->ioarcb.ioarcb_bus_addr),
+		  pinstance->ioarrin);
 }
 
 /**
@@ -1050,7 +1091,7 @@ static void pmcraid_get_fwversion(struct pmcraid_cmd *cmd)
 					offsetof(struct pmcraid_ioarcb,
 						add_data.u.ioadl[0]));
 	ioarcb->ioadl_length = cpu_to_le32(sizeof(struct pmcraid_ioadl_desc));
-	ioarcb->ioarcb_bus_addr &= cpu_to_le64(~(0x1FULL));
+	ioarcb->ioarcb_bus_addr &= ~(0x1FULL);
 
 	ioarcb->request_flags0 |= NO_LINK_DESCS;
 	ioarcb->data_transfer_length = cpu_to_le32(data_size);
@@ -1076,7 +1117,7 @@ static void pmcraid_identify_hrrq(struct pmcraid_cmd *cmd)
 	struct pmcraid_ioarcb *ioarcb = &cmd->ioa_cb->ioarcb;
 	int index = cmd->hrrq_index;
 	__be64 hrrq_addr = cpu_to_be64(pinstance->hrrq_start_bus_addr[index]);
-	__be32 hrrq_size = cpu_to_be32(sizeof(u32) * PMCRAID_MAX_CMD);
+	u32 hrrq_size = cpu_to_be32(sizeof(u32) * PMCRAID_MAX_CMD);
 	void (*done_function)(struct pmcraid_cmd *);
 
 	pmcraid_reinit_cmdblk(cmd);
@@ -1201,7 +1242,7 @@ static struct pmcraid_cmd *pmcraid_init_hcam
 
 	ioadl[0].flags |= IOADL_FLAGS_READ_LAST;
 	ioadl[0].data_len = cpu_to_le32(rcb_size);
-	ioadl[0].address = cpu_to_le64(dma);
+	ioadl[0].address = cpu_to_le32(dma);
 
 	cmd->cmd_done = cmd_done;
 	return cmd;
@@ -1236,13 +1277,7 @@ static void pmcraid_prepare_cancel_cmd(
 )
 {
 	struct pmcraid_ioarcb *ioarcb = &cmd->ioa_cb->ioarcb;
-	__be64 ioarcb_addr;
-
-	/* IOARCB address of the command to be cancelled is given in
-	 * cdb[2]..cdb[9] is Big-Endian format. Note that length bits in
-	 * IOARCB address are not masked.
-	 */
-	ioarcb_addr = cpu_to_be64(le64_to_cpu(cmd_to_cancel->ioa_cb->ioarcb.ioarcb_bus_addr));
+	__be64 ioarcb_addr = cmd_to_cancel->ioa_cb->ioarcb.ioarcb_bus_addr;
 
 	/* Get the resource handle to where the command to be aborted has been
 	 * sent.
@@ -1252,6 +1287,11 @@ static void pmcraid_prepare_cancel_cmd(
 	memset(ioarcb->cdb, 0, PMCRAID_MAX_CDB_LEN);
 	ioarcb->cdb[0] = PMCRAID_ABORT_CMD;
 
+	/* IOARCB address of the command to be cancelled is given in
+	 * cdb[2]..cdb[9] is Big-Endian format. Note that length bits in
+	 * IOARCB address are not masked.
+	 */
+	ioarcb_addr = cpu_to_be64(ioarcb_addr);
 	memcpy(&(ioarcb->cdb[2]), &ioarcb_addr, sizeof(ioarcb_addr));
 }
 
@@ -1368,8 +1408,13 @@ static struct genl_multicast_group pmcraid_mcgrps[] = {
 	{ .name = "events", /* not really used - see ID discussion below */ },
 };
 
-static struct genl_family pmcraid_event_family __ro_after_init = {
-	.module = THIS_MODULE,
+static struct genl_family pmcraid_event_family = {
+	/*
+	 * Due to prior multicast group abuse (the code having assumed that
+	 * the family ID can be used as a multicast group ID) we need to
+	 * statically allocate a family (and thus group) ID.
+	 */
+	.id = GENL_ID_PMCRAID,
 	.name = "pmcraid",
 	.version = 1,
 	.maxattr = PMCRAID_AEN_ATTR_MAX,
@@ -1384,7 +1429,7 @@ static struct genl_family pmcraid_event_family __ro_after_init = {
  *	0 if the pmcraid_event_family is successfully registered
  *	with netlink generic, non-zero otherwise
  */
-static int __init pmcraid_netlink_init(void)
+static int pmcraid_netlink_init(void)
 {
 	int result;
 
@@ -1469,7 +1514,13 @@ static int pmcraid_notify_aen(
 	}
 
 	/* send genetlink multicast message to notify appplications */
-	genlmsg_end(skb, msg_header);
+	result = genlmsg_end(skb, msg_header);
+
+	if (result < 0) {
+		pmcraid_err("genlmsg_end failed\n");
+		nlmsg_free(skb);
+		return result;
+	}
 
 	result = genlmsg_multicast(&pmcraid_event_family, skb,
 				   0, 0, GFP_ATOMIC);
@@ -1493,7 +1544,7 @@ static int pmcraid_notify_ccn(struct pmcraid_instance *pinstance)
 {
 	return pmcraid_notify_aen(pinstance,
 				pinstance->ccn.msg,
-				le32_to_cpu(pinstance->ccn.hcam->data_len) +
+				pinstance->ccn.hcam->data_len +
 				sizeof(struct pmcraid_hcam_hdr));
 }
 
@@ -1508,7 +1559,7 @@ static int pmcraid_notify_ldn(struct pmcraid_instance *pinstance)
 {
 	return pmcraid_notify_aen(pinstance,
 				pinstance->ldn.msg,
-				le32_to_cpu(pinstance->ldn.hcam->data_len) +
+				pinstance->ldn.hcam->data_len +
 				sizeof(struct pmcraid_hcam_hdr));
 }
 
@@ -1556,10 +1607,10 @@ static void pmcraid_handle_config_change(struct pmcraid_instance *pinstance)
 
 	pmcraid_info("CCN(%x): %x timestamp: %llx type: %x lost: %x flags: %x \
 		 res: %x:%x:%x:%x\n",
-		 le32_to_cpu(pinstance->ccn.hcam->ilid),
+		 pinstance->ccn.hcam->ilid,
 		 pinstance->ccn.hcam->op_code,
-		(le32_to_cpu(pinstance->ccn.hcam->timestamp1) |
-		((le32_to_cpu(pinstance->ccn.hcam->timestamp2) & 0xffffffffLL) << 32)),
+		((pinstance->ccn.hcam->timestamp1) |
+		((pinstance->ccn.hcam->timestamp2 & 0xffffffffLL) << 32)),
 		 pinstance->ccn.hcam->notification_type,
 		 pinstance->ccn.hcam->notification_lost,
 		 pinstance->ccn.hcam->flags,
@@ -1570,7 +1621,7 @@ static void pmcraid_handle_config_change(struct pmcraid_instance *pinstance)
 		 RES_IS_VSET(*cfg_entry) ?
 			(fw_version <= PMCRAID_FW_VERSION_1 ?
 				cfg_entry->unique_flags1 :
-				le16_to_cpu(cfg_entry->array_id) & 0xFF) :
+					cfg_entry->array_id & 0xFF) :
 			RES_TARGET(cfg_entry->resource_address),
 		 RES_LUN(cfg_entry->resource_address));
 
@@ -1658,7 +1709,7 @@ static void pmcraid_handle_config_change(struct pmcraid_instance *pinstance)
 			if (fw_version <= PMCRAID_FW_VERSION_1)
 				res->cfg_entry.unique_flags1 &= 0x7F;
 			else
-				res->cfg_entry.array_id &= cpu_to_le16(0xFF);
+				res->cfg_entry.array_id &= 0xFF;
 			res->change_detected = RES_CHANGE_DEL;
 			res->cfg_entry.resource_handle =
 				PMCRAID_INVALID_RES_HANDLE;
@@ -1705,7 +1756,7 @@ static struct pmcraid_ioasc_error *pmcraid_get_error_info(u32 ioasc)
  * @ioasc: ioasc code
  * @cmd: pointer to command that resulted in 'ioasc'
  */
-static void pmcraid_ioasc_logger(u32 ioasc, struct pmcraid_cmd *cmd)
+void pmcraid_ioasc_logger(u32 ioasc, struct pmcraid_cmd *cmd)
 {
 	struct pmcraid_ioasc_error *error_info = pmcraid_get_error_info(ioasc);
 
@@ -1716,8 +1767,8 @@ static void pmcraid_ioasc_logger(u32 ioasc, struct pmcraid_cmd *cmd)
 	/* log the error string */
 	pmcraid_err("cmd [%x] for resource %x failed with %x(%s)\n",
 		cmd->ioa_cb->ioarcb.cdb[0],
-		le32_to_cpu(cmd->ioa_cb->ioarcb.resource_handle),
-		ioasc, error_info->error_string);
+		cmd->ioa_cb->ioarcb.resource_handle,
+		le32_to_cpu(ioasc), error_info->error_string);
 }
 
 /**
@@ -2034,7 +2085,7 @@ static void pmcraid_fail_outstanding_cmds(struct pmcraid_instance *pinstance)
 		cmd->ioa_cb->ioasa.ioasc =
 			cpu_to_le32(PMCRAID_IOASC_IOA_WAS_RESET);
 		cmd->ioa_cb->ioasa.ilid =
-			cpu_to_le32(PMCRAID_DRIVER_ILID);
+			cpu_to_be32(PMCRAID_DRIVER_ILID);
 
 		/* In case the command timer is still running */
 		del_timer(&cmd->timer);
@@ -2373,43 +2424,46 @@ static int pmcraid_reset_reload(
 		spin_lock_irqsave(pinstance->host->host_lock, lock_flags);
 
 		if (pinstance->ioa_state == IOA_STATE_DEAD) {
+			spin_unlock_irqrestore(pinstance->host->host_lock,
+					       lock_flags);
 			pmcraid_info("reset_reload: IOA is dead\n");
-			goto out_unlock;
-		}
-
-		if (pinstance->ioa_state == target_state) {
+			return reset;
+		} else if (pinstance->ioa_state == target_state) {
 			reset = 0;
-			goto out_unlock;
 		}
 	}
 
-	pmcraid_info("reset_reload: proceeding with reset\n");
-	scsi_block_requests(pinstance->host);
-	reset_cmd = pmcraid_get_free_cmd(pinstance);
-	if (reset_cmd == NULL) {
-		pmcraid_err("no free cmnd for reset_reload\n");
-		goto out_unlock;
+	if (reset) {
+		pmcraid_info("reset_reload: proceeding with reset\n");
+		scsi_block_requests(pinstance->host);
+		reset_cmd = pmcraid_get_free_cmd(pinstance);
+
+		if (reset_cmd == NULL) {
+			pmcraid_err("no free cmnd for reset_reload\n");
+			spin_unlock_irqrestore(pinstance->host->host_lock,
+					       lock_flags);
+			return reset;
+		}
+
+		if (shutdown_type == SHUTDOWN_NORMAL)
+			pinstance->ioa_bringdown = 1;
+
+		pinstance->ioa_shutdown_type = shutdown_type;
+		pinstance->reset_cmd = reset_cmd;
+		pinstance->force_ioa_reset = reset;
+		pmcraid_info("reset_reload: initiating reset\n");
+		pmcraid_ioa_reset(reset_cmd);
+		spin_unlock_irqrestore(pinstance->host->host_lock, lock_flags);
+		pmcraid_info("reset_reload: waiting for reset to complete\n");
+		wait_event(pinstance->reset_wait_q,
+			   !pinstance->ioa_reset_in_progress);
+
+		pmcraid_info("reset_reload: reset is complete !!\n");
+		scsi_unblock_requests(pinstance->host);
+		if (pinstance->ioa_state == target_state)
+			reset = 0;
 	}
 
-	if (shutdown_type == SHUTDOWN_NORMAL)
-		pinstance->ioa_bringdown = 1;
-
-	pinstance->ioa_shutdown_type = shutdown_type;
-	pinstance->reset_cmd = reset_cmd;
-	pinstance->force_ioa_reset = reset;
-	pmcraid_info("reset_reload: initiating reset\n");
-	pmcraid_ioa_reset(reset_cmd);
-	spin_unlock_irqrestore(pinstance->host->host_lock, lock_flags);
-	pmcraid_info("reset_reload: waiting for reset to complete\n");
-	wait_event(pinstance->reset_wait_q,
-		   !pinstance->ioa_reset_in_progress);
-
-	pmcraid_info("reset_reload: reset is complete !!\n");
-	scsi_unblock_requests(pinstance->host);
-	return pinstance->ioa_state != target_state;
-
-out_unlock:
-	spin_unlock_irqrestore(pinstance->host->host_lock, lock_flags);
 	return reset;
 }
 
@@ -2526,7 +2580,7 @@ static void pmcraid_cancel_all(struct pmcraid_cmd *cmd, u32 sense)
 	ioarcb->ioadl_bus_addr = 0;
 	ioarcb->ioadl_length = 0;
 	ioarcb->data_transfer_length = 0;
-	ioarcb->ioarcb_bus_addr &= cpu_to_le64((~0x1FULL));
+	ioarcb->ioarcb_bus_addr &= (~0x1FULL);
 
 	/* writing to IOARRIN must be protected by host_lock, as mid-layer
 	 * schedule queuecommand while we are doing this
@@ -2689,8 +2743,8 @@ static int pmcraid_error_handler(struct pmcraid_cmd *cmd)
 		 * mid-layer
 		 */
 		if (ioasa->auto_sense_length != 0) {
-			short sense_len = le16_to_cpu(ioasa->auto_sense_length);
-			int data_size = min_t(u16, sense_len,
+			short sense_len = ioasa->auto_sense_length;
+			int data_size = min_t(u16, le16_to_cpu(sense_len),
 					      SCSI_SENSE_BUFFERSIZE);
 
 			memcpy(scsi_cmd->sense_buffer,
@@ -2912,7 +2966,7 @@ static struct pmcraid_cmd *pmcraid_abort_cmd(struct pmcraid_cmd *cmd)
 
 	pmcraid_info("aborting command CDB[0]= %x with index = %d\n",
 		cmd->ioa_cb->ioarcb.cdb[0],
-		le32_to_cpu(cmd->ioa_cb->ioarcb.response_handle) >> 2);
+		cmd->ioa_cb->ioarcb.response_handle >> 2);
 
 	init_completion(&cancel_cmd->wait_for_completion);
 	cancel_cmd->completion_req = 1;
@@ -3121,6 +3175,36 @@ static int pmcraid_eh_host_reset_handler(struct scsi_cmnd *scmd)
 }
 
 /**
+ * pmcraid_task_attributes - Translate SPI Q-Tags to task attributes
+ * @scsi_cmd:   scsi command struct
+ *
+ * Return value
+ *	  number of tags or 0 if the task is not tagged
+ */
+static u8 pmcraid_task_attributes(struct scsi_cmnd *scsi_cmd)
+{
+	char tag[2];
+	u8 rc = 0;
+
+	if (scsi_populate_tag_msg(scsi_cmd, tag)) {
+		switch (tag[0]) {
+		case MSG_SIMPLE_TAG:
+			rc = TASK_TAG_SIMPLE;
+			break;
+		case MSG_HEAD_TAG:
+			rc = TASK_TAG_QUEUE_HEAD;
+			break;
+		case MSG_ORDERED_TAG:
+			rc = TASK_TAG_ORDERED;
+			break;
+		};
+	}
+
+	return rc;
+}
+
+
+/**
  * pmcraid_init_ioadls - initializes IOADL related fields in IOARCB
  * @cmd: pmcraid command struct
  * @sgcount: count of scatter-gather elements
@@ -3129,7 +3213,7 @@ static int pmcraid_eh_host_reset_handler(struct scsi_cmnd *scmd)
  *   returns pointer pmcraid_ioadl_desc, initialized to point to internal
  *   or external IOADLs
  */
-static struct pmcraid_ioadl_desc *
+struct pmcraid_ioadl_desc *
 pmcraid_init_ioadls(struct pmcraid_cmd *cmd, int sgcount)
 {
 	struct pmcraid_ioadl_desc *ioadl;
@@ -3137,8 +3221,9 @@ pmcraid_init_ioadls(struct pmcraid_cmd *cmd, int sgcount)
 	int ioadl_count = 0;
 
 	if (ioarcb->add_cmd_param_length)
-		ioadl_count = DIV_ROUND_UP(le16_to_cpu(ioarcb->add_cmd_param_length), 16);
-	ioarcb->ioadl_length = cpu_to_le32(sizeof(struct pmcraid_ioadl_desc) * sgcount);
+		ioadl_count = DIV_ROUND_UP(ioarcb->add_cmd_param_length, 16);
+	ioarcb->ioadl_length =
+		sizeof(struct pmcraid_ioadl_desc) * sgcount;
 
 	if ((sgcount + ioadl_count) > (ARRAY_SIZE(ioarcb->add_data.u.ioadl))) {
 		/* external ioadls start at offset 0x80 from control_block
@@ -3146,7 +3231,7 @@ pmcraid_init_ioadls(struct pmcraid_cmd *cmd, int sgcount)
 		 * It is necessary to indicate to firmware that driver is
 		 * using ioadls to be treated as external to IOARCB.
 		 */
-		ioarcb->ioarcb_bus_addr &= cpu_to_le64(~(0x1FULL));
+		ioarcb->ioarcb_bus_addr &= ~(0x1FULL);
 		ioarcb->ioadl_bus_addr =
 			cpu_to_le64((cmd->ioa_cb_bus_addr) +
 				offsetof(struct pmcraid_ioarcb,
@@ -3160,7 +3245,7 @@ pmcraid_init_ioadls(struct pmcraid_cmd *cmd, int sgcount)
 
 		ioadl = &ioarcb->add_data.u.ioadl[ioadl_count];
 		ioarcb->ioarcb_bus_addr |=
-			cpu_to_le64(DIV_ROUND_CLOSEST(sgcount + ioadl_count, 8));
+				DIV_ROUND_CLOSEST(sgcount + ioadl_count, 8);
 	}
 
 	return ioadl;
@@ -3321,7 +3406,7 @@ static struct pmcraid_sglist *pmcraid_alloc_sglist(int buflen)
  */
 static int pmcraid_copy_sglist(
 	struct pmcraid_sglist *sglist,
-	void __user *buffer,
+	unsigned long buffer,
 	u32 len,
 	int direction
 )
@@ -3342,9 +3427,11 @@ static int pmcraid_copy_sglist(
 
 		kaddr = kmap(page);
 		if (direction == DMA_TO_DEVICE)
-			rc = copy_from_user(kaddr, buffer, bsize_elem);
+			rc = __copy_from_user(kaddr,
+					      (void *)buffer,
+					      bsize_elem);
 		else
-			rc = copy_to_user(buffer, kaddr, bsize_elem);
+			rc = __copy_to_user((void *)buffer, kaddr, bsize_elem);
 
 		kunmap(page);
 
@@ -3362,9 +3449,13 @@ static int pmcraid_copy_sglist(
 		kaddr = kmap(page);
 
 		if (direction == DMA_TO_DEVICE)
-			rc = copy_from_user(kaddr, buffer, len % bsize_elem);
+			rc = __copy_from_user(kaddr,
+					      (void *)buffer,
+					      len % bsize_elem);
 		else
-			rc = copy_to_user(buffer, kaddr, len % bsize_elem);
+			rc = __copy_to_user((void *)buffer,
+					    kaddr,
+					    len % bsize_elem);
 
 		kunmap(page);
 
@@ -3468,9 +3559,7 @@ static int pmcraid_queuecommand_lck(
 		}
 
 		ioarcb->request_flags0 |= NO_LINK_DESCS;
-
-		if (scsi_cmd->flags & SCMD_TAGGED)
-			ioarcb->request_flags1 |= TASK_TAG_SIMPLE;
+		ioarcb->request_flags1 |= pmcraid_task_attributes(scsi_cmd);
 
 		if (RES_IS_GSCSI(res->cfg_entry))
 			ioarcb->request_flags1 |= DELAY_AFTER_RESET;
@@ -3486,7 +3575,7 @@ static int pmcraid_queuecommand_lck(
 		     RES_IS_VSET(res->cfg_entry) ?
 			(fw_version <= PMCRAID_FW_VERSION_1 ?
 				res->cfg_entry.unique_flags1 :
-				le16_to_cpu(res->cfg_entry.array_id) & 0xFF) :
+					res->cfg_entry.array_id & 0xFF) :
 			RES_TARGET(res->cfg_entry.resource_address),
 		     RES_LUN(res->cfg_entry.resource_address));
 
@@ -3642,17 +3731,17 @@ static long pmcraid_ioctl_passthrough(
 	struct pmcraid_instance *pinstance,
 	unsigned int ioctl_cmd,
 	unsigned int buflen,
-	void __user *arg
+	unsigned long arg
 )
 {
 	struct pmcraid_passthrough_ioctl_buffer *buffer;
 	struct pmcraid_ioarcb *ioarcb;
 	struct pmcraid_cmd *cmd;
 	struct pmcraid_cmd *cancel_cmd;
-	void __user *request_buffer;
+	unsigned long request_buffer;
 	unsigned long request_offset;
 	unsigned long lock_flags;
-	void __user *ioasa;
+	void *ioasa;
 	u32 ioasc;
 	int request_size;
 	int buffer_size;
@@ -3691,10 +3780,13 @@ static long pmcraid_ioctl_passthrough(
 
 	request_buffer = arg + request_offset;
 
-	rc = copy_from_user(buffer, arg,
+	rc = __copy_from_user(buffer,
+			     (struct pmcraid_passthrough_ioctl_buffer *) arg,
 			     sizeof(struct pmcraid_passthrough_ioctl_buffer));
 
-	ioasa = arg + offsetof(struct pmcraid_passthrough_ioctl_buffer, ioasa);
+	ioasa =
+	(void *)(arg +
+		offsetof(struct pmcraid_passthrough_ioctl_buffer, ioasa));
 
 	if (rc) {
 		pmcraid_err("ioctl: can't copy passthrough buffer\n");
@@ -3702,7 +3794,7 @@ static long pmcraid_ioctl_passthrough(
 		goto out_free_buffer;
 	}
 
-	request_size = le32_to_cpu(buffer->ioarcb.data_transfer_length);
+	request_size = buffer->ioarcb.data_transfer_length;
 
 	if (buffer->ioarcb.request_flags0 & TRANSFER_DIR_WRITE) {
 		access = VERIFY_READ;
@@ -3712,14 +3804,20 @@ static long pmcraid_ioctl_passthrough(
 		direction = DMA_FROM_DEVICE;
 	}
 
-	if (request_size < 0) {
+	if (request_size > 0) {
+		rc = access_ok(access, arg, request_offset + request_size);
+
+		if (!rc) {
+			rc = -EFAULT;
+			goto out_free_buffer;
+		}
+	} else if (request_size < 0) {
 		rc = -EINVAL;
 		goto out_free_buffer;
 	}
 
 	/* check if we have any additional command parameters */
-	if (le16_to_cpu(buffer->ioarcb.add_cmd_param_length)
-	     > PMCRAID_ADD_CMD_PARAM_LEN) {
+	if (buffer->ioarcb.add_cmd_param_length > PMCRAID_ADD_CMD_PARAM_LEN) {
 		rc = -EINVAL;
 		goto out_free_buffer;
 	}
@@ -3751,7 +3849,7 @@ static long pmcraid_ioctl_passthrough(
 			buffer->ioarcb.add_cmd_param_offset;
 		memcpy(ioarcb->add_data.u.add_cmd_params,
 			buffer->ioarcb.add_data.u.add_cmd_params,
-			le16_to_cpu(buffer->ioarcb.add_cmd_param_length));
+			buffer->ioarcb.add_cmd_param_length);
 	}
 
 	/* set hrrq number where the IOA should respond to. Note that all cmds
@@ -3768,11 +3866,11 @@ static long pmcraid_ioctl_passthrough(
 						      direction);
 		if (rc) {
 			pmcraid_err("couldn't build passthrough ioadls\n");
-			goto out_free_cmd;
+			goto out_free_buffer;
 		}
 	} else if (request_size < 0) {
 		rc = -EINVAL;
-		goto out_free_cmd;
+		goto out_free_buffer;
 	}
 
 	/* If data is being written into the device, copy the data from user
@@ -3821,10 +3919,10 @@ static long pmcraid_ioctl_passthrough(
 		wait_for_completion(&cmd->wait_for_completion);
 	} else if (!wait_for_completion_timeout(
 			&cmd->wait_for_completion,
-			msecs_to_jiffies(le16_to_cpu(buffer->ioarcb.cmd_timeout) * 1000))) {
+			msecs_to_jiffies(buffer->ioarcb.cmd_timeout * 1000))) {
 
 		pmcraid_info("aborting cmd %d (CDB[0] = %x) due to timeout\n",
-			le32_to_cpu(cmd->ioa_cb->ioarcb.response_handle) >> 2,
+			le32_to_cpu(cmd->ioa_cb->ioarcb.response_handle >> 2),
 			cmd->ioa_cb->ioarcb.cdb[0]);
 
 		spin_lock_irqsave(pinstance->host->host_lock, lock_flags);
@@ -3833,7 +3931,7 @@ static long pmcraid_ioctl_passthrough(
 
 		if (cancel_cmd) {
 			wait_for_completion(&cancel_cmd->wait_for_completion);
-			ioasc = le32_to_cpu(cancel_cmd->ioa_cb->ioasa.ioasc);
+			ioasc = cancel_cmd->ioa_cb->ioasa.ioasc;
 			pmcraid_return_cmd(cancel_cmd);
 
 			/* if abort task couldn't find the command i.e it got
@@ -3889,8 +3987,6 @@ out_handle_response:
 
 out_free_sglist:
 	pmcraid_release_passthrough_ioadls(cmd, request_size, direction);
-
-out_free_cmd:
 	pmcraid_return_cmd(cmd);
 
 out_free_buffer:
@@ -3921,6 +4017,11 @@ static long pmcraid_ioctl_driver(
 )
 {
 	int rc = -ENOSYS;
+
+	if (!access_ok(VERIFY_READ, user_buffer, _IOC_SIZE(cmd))) {
+		pmcraid_err("ioctl_driver: access fault in request buffer\n");
+		return -EFAULT;
+	}
 
 	switch (cmd) {
 	case PMCRAID_IOCTL_RESET_ADAPTER:
@@ -3953,7 +4054,8 @@ static int pmcraid_check_ioctl_buffer(
 	struct pmcraid_ioctl_header *hdr
 )
 {
-	int rc;
+	int rc = 0;
+	int access = VERIFY_READ;
 
 	if (copy_from_user(hdr, arg, sizeof(struct pmcraid_ioctl_header))) {
 		pmcraid_err("couldn't copy ioctl header from user buffer\n");
@@ -3967,6 +4069,19 @@ static int pmcraid_check_ioctl_buffer(
 	if (rc) {
 		pmcraid_err("signature verification failed\n");
 		return -EINVAL;
+	}
+
+	/* check for appropriate buffer access */
+	if ((_IOC_DIR(cmd) & _IOC_READ) == _IOC_READ)
+		access = VERIFY_WRITE;
+
+	rc = access_ok(access,
+		       (arg + sizeof(struct pmcraid_ioctl_header)),
+		       hdr->buffer_length);
+	if (!rc) {
+		pmcraid_err("access failed for user buffer of size %d\n",
+			     hdr->buffer_length);
+		return -EFAULT;
 	}
 
 	return 0;
@@ -3983,7 +4098,6 @@ static long pmcraid_chr_ioctl(
 {
 	struct pmcraid_instance *pinstance = NULL;
 	struct pmcraid_ioctl_header *hdr = NULL;
-	void __user *argp = (void __user *)arg;
 	int retval = -ENOTTY;
 
 	hdr = kmalloc(sizeof(struct pmcraid_ioctl_header), GFP_KERNEL);
@@ -3993,7 +4107,7 @@ static long pmcraid_chr_ioctl(
 		return -ENOMEM;
 	}
 
-	retval = pmcraid_check_ioctl_buffer(cmd, argp, hdr);
+	retval = pmcraid_check_ioctl_buffer(cmd, (void *)arg, hdr);
 
 	if (retval) {
 		pmcraid_info("chr_ioctl: header check failed\n");
@@ -4018,8 +4132,10 @@ static long pmcraid_chr_ioctl(
 		if (cmd == PMCRAID_IOCTL_DOWNLOAD_MICROCODE)
 			scsi_block_requests(pinstance->host);
 
-		retval = pmcraid_ioctl_passthrough(pinstance, cmd,
-						   hdr->buffer_length, argp);
+		retval = pmcraid_ioctl_passthrough(pinstance,
+						   cmd,
+						   hdr->buffer_length,
+						   arg);
 
 		if (cmd == PMCRAID_IOCTL_DOWNLOAD_MICROCODE)
 			scsi_unblock_requests(pinstance->host);
@@ -4027,8 +4143,10 @@ static long pmcraid_chr_ioctl(
 
 	case PMCRAID_DRIVER_IOCTL:
 		arg += sizeof(struct pmcraid_ioctl_header);
-		retval = pmcraid_ioctl_driver(pinstance, cmd,
-					      hdr->buffer_length, argp);
+		retval = pmcraid_ioctl_driver(pinstance,
+					      cmd,
+					      hdr->buffer_length,
+					      (void __user *)arg);
 		break;
 
 	default:
@@ -4095,9 +4213,9 @@ static ssize_t pmcraid_store_log_level(
 {
 	struct Scsi_Host *shost;
 	struct pmcraid_instance *pinstance;
-	u8 val;
+	unsigned long val;
 
-	if (kstrtou8(buf, 10, &val))
+	if (strict_strtoul(buf, 10, &val))
 		return -EINVAL;
 	/* log-level should be from 0 to 2 */
 	if (val > 2)
@@ -4174,7 +4292,7 @@ static ssize_t pmcraid_show_adapter_id(
 static struct device_attribute pmcraid_adapter_id_attr = {
 	.attr = {
 		 .name = "adapter_id",
-		 .mode = S_IRUGO,
+		 .mode = S_IRUGO | S_IWUSR,
 		 },
 	.show = pmcraid_show_adapter_id,
 };
@@ -4202,6 +4320,7 @@ static struct scsi_host_template pmcraid_host_template = {
 	.slave_configure = pmcraid_slave_configure,
 	.slave_destroy = pmcraid_slave_destroy,
 	.change_queue_depth = pmcraid_change_queue_depth,
+	.change_queue_type  = pmcraid_change_queue_type,
 	.can_queue = PMCRAID_MAX_IO_CMD,
 	.this_id = -1,
 	.sg_tablesize = PMCRAID_MAX_IOADLS,
@@ -4210,7 +4329,7 @@ static struct scsi_host_template pmcraid_host_template = {
 	.cmd_per_lun = PMCRAID_MAX_CMD_PER_LUN,
 	.use_clustering = ENABLE_CLUSTERING,
 	.shost_attrs = pmcraid_host_attrs,
-	.proc_name = PMCRAID_DRIVER_NAME,
+	.proc_name = PMCRAID_DRIVER_NAME
 };
 
 /*
@@ -4429,7 +4548,7 @@ static void pmcraid_worker_function(struct work_struct *workp)
 				if (fw_version <= PMCRAID_FW_VERSION_1)
 					target = res->cfg_entry.unique_flags1;
 				else
-					target = le16_to_cpu(res->cfg_entry.array_id) & 0xFF;
+					target = res->cfg_entry.array_id & 0xFF;
 				lun = PMCRAID_VSET_LUN_ID;
 			} else {
 				bus = PMCRAID_PHYS_BUS_ID;
@@ -4468,7 +4587,7 @@ static void pmcraid_tasklet_function(unsigned long instance)
 	unsigned long host_lock_flags;
 	spinlock_t *lockp; /* hrrq buffer lock */
 	int id;
-	u32 resp;
+	__le32 resp;
 
 	hrrq_vector = (struct pmcraid_isr_param *)instance;
 	pinstance = hrrq_vector->drv_inst;
@@ -4546,14 +4665,16 @@ static void pmcraid_tasklet_function(unsigned long instance)
 static
 void pmcraid_unregister_interrupt_handler(struct pmcraid_instance *pinstance)
 {
-	struct pci_dev *pdev = pinstance->pdev;
 	int i;
 
 	for (i = 0; i < pinstance->num_hrrq; i++)
-		free_irq(pci_irq_vector(pdev, i), &pinstance->hrrq_vector[i]);
+		free_irq(pinstance->hrrq_vector[i].vector,
+			 &(pinstance->hrrq_vector[i]));
 
-	pinstance->interrupt_mode = 0;
-	pci_free_irq_vectors(pdev);
+	if (pinstance->interrupt_mode) {
+		pci_disable_msix(pinstance->pdev);
+		pinstance->interrupt_mode = 0;
+	}
 }
 
 /**
@@ -4566,52 +4687,70 @@ void pmcraid_unregister_interrupt_handler(struct pmcraid_instance *pinstance)
 static int
 pmcraid_register_interrupt_handler(struct pmcraid_instance *pinstance)
 {
+	int rc;
 	struct pci_dev *pdev = pinstance->pdev;
-	unsigned int irq_flag = PCI_IRQ_LEGACY, flag;
-	int num_hrrq, rc, i;
-	irq_handler_t isr;
 
-	if (pmcraid_enable_msix)
-		irq_flag |= PCI_IRQ_MSIX;
+	if ((pmcraid_enable_msix) &&
+		(pci_find_capability(pdev, PCI_CAP_ID_MSIX))) {
+		int num_hrrq = PMCRAID_NUM_MSIX_VECTORS;
+		struct msix_entry entries[PMCRAID_NUM_MSIX_VECTORS];
+		int i;
+		for (i = 0; i < PMCRAID_NUM_MSIX_VECTORS; i++)
+			entries[i].entry = i;
 
-	num_hrrq = pci_alloc_irq_vectors(pdev, 1, PMCRAID_NUM_MSIX_VECTORS,
-			irq_flag);
-	if (num_hrrq < 0)
-		return num_hrrq;
+		rc = pci_enable_msix(pdev, entries, num_hrrq);
+		if (rc < 0)
+			goto pmcraid_isr_legacy;
 
-	if (pdev->msix_enabled) {
-		flag = 0;
-		isr = pmcraid_isr_msix;
-	} else {
-		flag = IRQF_SHARED;
-		isr = pmcraid_isr;
-	}
+		/* Check how many MSIX vectors are allocated and register
+		 * msi-x handlers for each of them giving appropriate buffer
+		 */
+		if (rc > 0) {
+			num_hrrq = rc;
+			if (pci_enable_msix(pdev, entries, num_hrrq))
+				goto pmcraid_isr_legacy;
+		}
 
-	for (i = 0; i < num_hrrq; i++) {
-		struct pmcraid_isr_param *vec = &pinstance->hrrq_vector[i];
+		for (i = 0; i < num_hrrq; i++) {
+			pinstance->hrrq_vector[i].hrrq_id = i;
+			pinstance->hrrq_vector[i].drv_inst = pinstance;
+			pinstance->hrrq_vector[i].vector = entries[i].vector;
+			rc = request_irq(pinstance->hrrq_vector[i].vector,
+					pmcraid_isr_msix, 0,
+					PMCRAID_DRIVER_NAME,
+					&(pinstance->hrrq_vector[i]));
 
-		vec->hrrq_id = i;
-		vec->drv_inst = pinstance;
-		rc = request_irq(pci_irq_vector(pdev, i), isr, flag,
-				PMCRAID_DRIVER_NAME, vec);
-		if (rc)
-			goto out_unwind;
-	}
+			if (rc) {
+				int j;
+				for (j = 0; j < i; j++)
+					free_irq(entries[j].vector,
+						 &(pinstance->hrrq_vector[j]));
+				pci_disable_msix(pdev);
+				goto pmcraid_isr_legacy;
+			}
+		}
 
-	pinstance->num_hrrq = num_hrrq;
-	if (pdev->msix_enabled) {
+		pinstance->num_hrrq = num_hrrq;
 		pinstance->interrupt_mode = 1;
 		iowrite32(DOORBELL_INTR_MODE_MSIX,
 			  pinstance->int_regs.host_ioa_interrupt_reg);
 		ioread32(pinstance->int_regs.host_ioa_interrupt_reg);
+		goto pmcraid_isr_out;
 	}
 
-	return 0;
+pmcraid_isr_legacy:
+	/* If MSI-X registration failed fallback to legacy mode, where
+	 * only one hrrq entry will be used
+	 */
+	pinstance->hrrq_vector[0].hrrq_id = 0;
+	pinstance->hrrq_vector[0].drv_inst = pinstance;
+	pinstance->hrrq_vector[0].vector = pdev->irq;
+	pinstance->num_hrrq = 1;
+	rc = 0;
 
-out_unwind:
-	while (--i > 0)
-		free_irq(pci_irq_vector(pdev, i), &pinstance->hrrq_vector[i]);
-	pci_free_irq_vectors(pdev);
+	rc = request_irq(pdev->irq, pmcraid_isr, IRQF_SHARED,
+			 PMCRAID_DRIVER_NAME, &pinstance->hrrq_vector[0]);
+pmcraid_isr_out:
 	return rc;
 }
 
@@ -4792,7 +4931,7 @@ static int pmcraid_allocate_host_rrqs(struct pmcraid_instance *pinstance)
 					buffer_size,
 					&(pinstance->hrrq_start_bus_addr[i]));
 
-		if (!pinstance->hrrq_start[i]) {
+		if (pinstance->hrrq_start[i] == 0) {
 			pmcraid_err("pci_alloc failed for hrrq vector : %d\n",
 				    i);
 			pmcraid_release_host_rrqs(pinstance, i);
@@ -5508,9 +5647,12 @@ static void pmcraid_set_timestamp(struct pmcraid_cmd *cmd)
 	struct pmcraid_ioarcb *ioarcb = &cmd->ioa_cb->ioarcb;
 	__be32 time_stamp_len = cpu_to_be32(PMCRAID_TIMESTAMP_LEN);
 	struct pmcraid_ioadl_desc *ioadl = ioarcb->add_data.u.ioadl;
-	u64 timestamp;
 
-	timestamp = ktime_get_real_seconds() * 1000;
+	struct timeval tv;
+	__le64 timestamp;
+
+	do_gettimeofday(&tv);
+	timestamp = tv.tv_sec * 1000;
 
 	pinstance->timestamp_data->timestamp[0] = (__u8)(timestamp);
 	pinstance->timestamp_data->timestamp[1] = (__u8)((timestamp) >> 8);
@@ -5530,7 +5672,7 @@ static void pmcraid_set_timestamp(struct pmcraid_cmd *cmd)
 					offsetof(struct pmcraid_ioarcb,
 						add_data.u.ioadl[0]));
 	ioarcb->ioadl_length = cpu_to_le32(sizeof(struct pmcraid_ioadl_desc));
-	ioarcb->ioarcb_bus_addr &= cpu_to_le64(~(0x1FULL));
+	ioarcb->ioarcb_bus_addr &= ~(0x1FULL);
 
 	ioarcb->request_flags0 |= NO_LINK_DESCS;
 	ioarcb->request_flags0 |= TRANSFER_DIR_WRITE;
@@ -5589,7 +5731,7 @@ static void pmcraid_init_res_table(struct pmcraid_cmd *cmd)
 	list_for_each_entry_safe(res, temp, &pinstance->used_res_q, queue)
 		list_move_tail(&res->queue, &old_res);
 
-	for (i = 0; i < le16_to_cpu(pinstance->cfg_table->num_entries); i++) {
+	for (i = 0; i < pinstance->cfg_table->num_entries; i++) {
 		if (be16_to_cpu(pinstance->inq_data->fw_version) <=
 						PMCRAID_FW_VERSION_1)
 			cfgte = &pinstance->cfg_table->entries[i];
@@ -5644,7 +5786,7 @@ static void pmcraid_init_res_table(struct pmcraid_cmd *cmd)
 				 res->cfg_entry.resource_type,
 				 (fw_version <= PMCRAID_FW_VERSION_1 ?
 					res->cfg_entry.unique_flags1 :
-					le16_to_cpu(res->cfg_entry.array_id) & 0xFF),
+						res->cfg_entry.array_id & 0xFF),
 				 le32_to_cpu(res->cfg_entry.resource_address));
 		}
 	}
@@ -5682,7 +5824,7 @@ static void pmcraid_querycfg(struct pmcraid_cmd *cmd)
 	struct pmcraid_ioarcb *ioarcb = &cmd->ioa_cb->ioarcb;
 	struct pmcraid_ioadl_desc *ioadl = ioarcb->add_data.u.ioadl;
 	struct pmcraid_instance *pinstance = cmd->drv_inst;
-	__be32 cfg_table_size = cpu_to_be32(sizeof(struct pmcraid_config_table));
+	int cfg_table_size = cpu_to_be32(sizeof(struct pmcraid_config_table));
 
 	if (be16_to_cpu(pinstance->inq_data->fw_version) <=
 					PMCRAID_FW_VERSION_1)
@@ -5707,7 +5849,7 @@ static void pmcraid_querycfg(struct pmcraid_cmd *cmd)
 					offsetof(struct pmcraid_ioarcb,
 						add_data.u.ioadl[0]));
 	ioarcb->ioadl_length = cpu_to_le32(sizeof(struct pmcraid_ioadl_desc));
-	ioarcb->ioarcb_bus_addr &= cpu_to_le64(~0x1FULL);
+	ioarcb->ioarcb_bus_addr &= ~(0x1FULL);
 
 	ioarcb->request_flags0 |= NO_LINK_DESCS;
 	ioarcb->data_transfer_length =
@@ -5968,10 +6110,8 @@ static int __init pmcraid_init(void)
 
 	error = pmcraid_netlink_init();
 
-	if (error) {
-		class_destroy(pmcraid_class);
+	if (error)
 		goto out_unreg_chrdev;
-	}
 
 	error = pci_register_driver(&pmcraid_driver);
 

@@ -14,7 +14,6 @@
 #include <linux/slab.h>
 #include <linux/spinlock.h>
 #include <linux/sched.h>
-#include <linux/sched/debug.h>
 
 #include <asm/blackfin.h>
 #include <asm/dma.h>

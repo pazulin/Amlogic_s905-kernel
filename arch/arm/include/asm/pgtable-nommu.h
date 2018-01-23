@@ -54,6 +54,8 @@
 
 typedef pte_t *pte_addr_t;
 
+static inline int pte_file(pte_t pte) { return 0; }
+
 /*
  * ZERO_PAGE is a global shared page that is always zero: used
  * for zero-mapped memory areas etc..
@@ -63,9 +65,9 @@ typedef pte_t *pte_addr_t;
 /*
  * Mark the prot value as uncacheable and unbufferable.
  */
-#define pgprot_noncached(prot)	(prot)
-#define pgprot_writecombine(prot) (prot)
-#define pgprot_dmacoherent(prot) (prot)
+#define pgprot_noncached(prot)	__pgprot(0)
+#define pgprot_writecombine(prot) __pgprot(0)
+#define pgprot_dmacoherent(prot) __pgprot(0)
 
 
 /*
@@ -85,7 +87,7 @@ extern unsigned int kobjsize(const void *objp);
 #define	VMALLOC_START	0UL
 #define	VMALLOC_END	0xffffffffUL
 
-#define FIRST_USER_ADDRESS      0UL
+#define FIRST_USER_ADDRESS      (0)
 
 #include <asm-generic/pgtable.h>
 

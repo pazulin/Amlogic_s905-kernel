@@ -18,7 +18,6 @@
 
 #include <linux/signal.h>
 #include <linux/sched.h>
-#include <linux/sched/task.h>
 #include <linux/pagemap.h>
 #include <linux/gfp.h>
 #include <linux/swap.h>

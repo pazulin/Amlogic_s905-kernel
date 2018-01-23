@@ -3,8 +3,6 @@
 
 #ifndef __ASSEMBLY__
 
-#include <asm/ptrace.h>
-
 struct task_struct;
 
 #ifdef CONFIG_SH_FPU

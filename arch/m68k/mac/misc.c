@@ -4,6 +4,7 @@
 
 #include <linux/types.h>
 #include <linux/errno.h>
+#include <linux/miscdevice.h>
 #include <linux/kernel.h>
 #include <linux/delay.h>
 #include <linux/sched.h>
@@ -15,8 +16,9 @@
 #include <linux/cuda.h>
 #include <linux/pmu.h>
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/io.h>
+#include <asm/rtc.h>
 #include <asm/segment.h>
 #include <asm/setup.h>
 #include <asm/macintosh.h>
@@ -139,6 +141,54 @@ static void pmu_write_pram(int offset, __u8 data)
 #define pmu_write_time(n)
 #define pmu_read_pram NULL
 #define pmu_write_pram NULL
+#endif
+
+#if 0 /* def CONFIG_ADB_MACIISI */
+extern int maciisi_request(struct adb_request *req,
+			void (*done)(struct adb_request *), int nbytes, ...);
+
+static long maciisi_read_time(void)
+{
+	struct adb_request req;
+	long time;
+
+	if (maciisi_request(&req, NULL, 2, CUDA_PACKET, CUDA_GET_TIME))
+		return 0;
+
+	time = (req.reply[3] << 24) | (req.reply[4] << 16)
+		| (req.reply[5] << 8) | req.reply[6];
+	return time - RTC_OFFSET;
+}
+
+static void maciisi_write_time(long data)
+{
+	struct adb_request req;
+	data += RTC_OFFSET;
+	maciisi_request(&req, NULL, 6, CUDA_PACKET, CUDA_SET_TIME,
+			(data >> 24) & 0xFF, (data >> 16) & 0xFF,
+			(data >> 8) & 0xFF, data & 0xFF);
+}
+
+static __u8 maciisi_read_pram(int offset)
+{
+	struct adb_request req;
+	if (maciisi_request(&req, NULL, 4, CUDA_PACKET, CUDA_GET_PRAM,
+			(offset >> 8) & 0xFF, offset & 0xFF))
+		return 0;
+	return req.reply[3];
+}
+
+static void maciisi_write_pram(int offset, __u8 data)
+{
+	struct adb_request req;
+	maciisi_request(&req, NULL, 5, CUDA_PACKET, CUDA_SET_PRAM,
+			(offset >> 8) & 0xFF, offset & 0xFF, data);
+}
+#else
+#define maciisi_read_time() 0
+#define maciisi_write_time(n)
+#define maciisi_read_pram NULL
+#define maciisi_write_pram NULL
 #endif
 
 /*
@@ -281,7 +331,8 @@ static long via_read_time(void)
 		last_result.idata = result.idata;
 	}
 
-	pr_err("via_read_time: failed to read a stable value; got 0x%08lx then 0x%08lx\n",
+	pr_err("via_read_time: failed to read a stable value; "
+	       "got 0x%08lx then 0x%08lx\n",
 	       last_result.idata, result.idata);
 
 	return 0;
@@ -408,10 +459,11 @@ void mac_pram_read(int offset, __u8 *buffer, int len)
 	int i;
 
 	switch(macintosh_config->adb_type) {
+	case MAC_ADB_IISI:
+		func = maciisi_read_pram; break;
 	case MAC_ADB_PB1:
 	case MAC_ADB_PB2:
 		func = pmu_read_pram; break;
-	case MAC_ADB_EGRET:
 	case MAC_ADB_CUDA:
 		func = cuda_read_pram; break;
 	default:
@@ -430,10 +482,11 @@ void mac_pram_write(int offset, __u8 *buffer, int len)
 	int i;
 
 	switch(macintosh_config->adb_type) {
+	case MAC_ADB_IISI:
+		func = maciisi_write_pram; break;
 	case MAC_ADB_PB1:
 	case MAC_ADB_PB2:
 		func = pmu_write_pram; break;
-	case MAC_ADB_EGRET:
 	case MAC_ADB_CUDA:
 		func = cuda_write_pram; break;
 	default:
@@ -448,13 +501,17 @@ void mac_pram_write(int offset, __u8 *buffer, int len)
 
 void mac_poweroff(void)
 {
+	/*
+	 * MAC_ADB_IISI may need to be moved up here if it doesn't actually
+	 * work using the ADB packet method.  --David Kilzer
+	 */
+
 	if (oss_present) {
 		oss_shutdown();
 	} else if (macintosh_config->adb_type == MAC_ADB_II) {
 		via_shutdown();
 #ifdef CONFIG_ADB_CUDA
-	} else if (macintosh_config->adb_type == MAC_ADB_EGRET ||
-	           macintosh_config->adb_type == MAC_ADB_CUDA) {
+	} else if (macintosh_config->adb_type == MAC_ADB_CUDA) {
 		cuda_shutdown();
 #endif
 #ifdef CONFIG_ADB_PMU68K
@@ -464,7 +521,7 @@ void mac_poweroff(void)
 #endif
 	}
 	local_irq_enable();
-	pr_crit("It is now safe to turn off your Macintosh.\n");
+	printk("It is now safe to turn off your Macintosh.\n");
 	while(1);
 }
 
@@ -494,8 +551,7 @@ void mac_reset(void)
 			local_irq_restore(flags);
 		}
 #ifdef CONFIG_ADB_CUDA
-	} else if (macintosh_config->adb_type == MAC_ADB_EGRET ||
-	           macintosh_config->adb_type == MAC_ADB_CUDA) {
+	} else if (macintosh_config->adb_type == MAC_ADB_CUDA) {
 		cuda_restart();
 #endif
 #ifdef CONFIG_ADB_PMU68K
@@ -555,7 +611,7 @@ void mac_reset(void)
 
 	/* should never get here */
 	local_irq_enable();
-	pr_crit("Restart failed. Please restart manually.\n");
+	printk ("Restart failed.  Please restart manually.\n");
 	while(1);
 }
 
@@ -644,11 +700,13 @@ int mac_hwclk(int op, struct rtc_time *t)
 		case MAC_ADB_IOP:
 			now = via_read_time();
 			break;
+		case MAC_ADB_IISI:
+			now = maciisi_read_time();
+			break;
 		case MAC_ADB_PB1:
 		case MAC_ADB_PB2:
 			now = pmu_read_time();
 			break;
-		case MAC_ADB_EGRET:
 		case MAC_ADB_CUDA:
 			now = cuda_read_time();
 			break;
@@ -660,13 +718,17 @@ int mac_hwclk(int op, struct rtc_time *t)
 		unmktime(now, 0,
 			 &t->tm_year, &t->tm_mon, &t->tm_mday,
 			 &t->tm_hour, &t->tm_min, &t->tm_sec);
-		pr_debug("%s: read %04d-%02d-%-2d %02d:%02d:%02d\n",
-		         __func__, t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
-		         t->tm_hour, t->tm_min, t->tm_sec);
+#if 0
+		printk("mac_hwclk: read %04d-%02d-%-2d %02d:%02d:%02d\n",
+			t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
+			t->tm_hour, t->tm_min, t->tm_sec);
+#endif
 	} else { /* write */
-		pr_debug("%s: tried to write %04d-%02d-%-2d %02d:%02d:%02d\n",
-		         __func__, t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
-		         t->tm_hour, t->tm_min, t->tm_sec);
+#if 0
+		printk("mac_hwclk: tried to write %04d-%02d-%-2d %02d:%02d:%02d\n",
+			t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
+			t->tm_hour, t->tm_min, t->tm_sec);
+#endif
 
 		now = mktime(t->tm_year + 1900, t->tm_mon + 1, t->tm_mday,
 			     t->tm_hour, t->tm_min, t->tm_sec);
@@ -676,7 +738,6 @@ int mac_hwclk(int op, struct rtc_time *t)
 		case MAC_ADB_IOP:
 			via_write_time(now);
 			break;
-		case MAC_ADB_EGRET:
 		case MAC_ADB_CUDA:
 			cuda_write_time(now);
 			break;
@@ -684,6 +745,8 @@ int mac_hwclk(int op, struct rtc_time *t)
 		case MAC_ADB_PB2:
 			pmu_write_time(now);
 			break;
+		case MAC_ADB_IISI:
+			maciisi_write_time(now);
 		}
 	}
 	return 0;

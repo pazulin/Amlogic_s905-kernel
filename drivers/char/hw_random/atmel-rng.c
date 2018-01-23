@@ -48,40 +48,37 @@ static int atmel_trng_read(struct hwrng *rng, void *buf, size_t max,
 		return 0;
 }
 
-static void atmel_trng_enable(struct atmel_trng *trng)
-{
-	writel(TRNG_KEY | 1, trng->base + TRNG_CR);
-}
-
-static void atmel_trng_disable(struct atmel_trng *trng)
-{
-	writel(TRNG_KEY, trng->base + TRNG_CR);
-}
-
 static int atmel_trng_probe(struct platform_device *pdev)
 {
 	struct atmel_trng *trng;
 	struct resource *res;
 	int ret;
 
+	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
+	if (!res)
+		return -EINVAL;
+
 	trng = devm_kzalloc(&pdev->dev, sizeof(*trng), GFP_KERNEL);
 	if (!trng)
 		return -ENOMEM;
 
-	res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
-	trng->base = devm_ioremap_resource(&pdev->dev, res);
-	if (IS_ERR(trng->base))
-		return PTR_ERR(trng->base);
+	if (!devm_request_mem_region(&pdev->dev, res->start,
+				     resource_size(res), pdev->name))
+		return -EBUSY;
 
-	trng->clk = devm_clk_get(&pdev->dev, NULL);
+	trng->base = devm_ioremap(&pdev->dev, res->start, resource_size(res));
+	if (!trng->base)
+		return -EBUSY;
+
+	trng->clk = clk_get(&pdev->dev, NULL);
 	if (IS_ERR(trng->clk))
 		return PTR_ERR(trng->clk);
 
-	ret = clk_prepare_enable(trng->clk);
+	ret = clk_enable(trng->clk);
 	if (ret)
-		return ret;
+		goto err_enable;
 
-	atmel_trng_enable(trng);
+	writel(TRNG_KEY | 1, trng->base + TRNG_CR);
 	trng->rng.name = pdev->name;
 	trng->rng.read = atmel_trng_read;
 
@@ -94,7 +91,10 @@ static int atmel_trng_probe(struct platform_device *pdev)
 	return 0;
 
 err_register:
-	clk_disable_unprepare(trng->clk);
+	clk_disable(trng->clk);
+err_enable:
+	clk_put(trng->clk);
+
 	return ret;
 }
 
@@ -104,8 +104,9 @@ static int atmel_trng_remove(struct platform_device *pdev)
 
 	hwrng_unregister(&trng->rng);
 
-	atmel_trng_disable(trng);
-	clk_disable_unprepare(trng->clk);
+	writel(TRNG_KEY, trng->base + TRNG_CR);
+	clk_disable(trng->clk);
+	clk_put(trng->clk);
 
 	return 0;
 }
@@ -115,8 +116,7 @@ static int atmel_trng_suspend(struct device *dev)
 {
 	struct atmel_trng *trng = dev_get_drvdata(dev);
 
-	atmel_trng_disable(trng);
-	clk_disable_unprepare(trng->clk);
+	clk_disable(trng->clk);
 
 	return 0;
 }
@@ -124,15 +124,8 @@ static int atmel_trng_suspend(struct device *dev)
 static int atmel_trng_resume(struct device *dev)
 {
 	struct atmel_trng *trng = dev_get_drvdata(dev);
-	int ret;
 
-	ret = clk_prepare_enable(trng->clk);
-	if (ret)
-		return ret;
-
-	atmel_trng_enable(trng);
-
-	return 0;
+	return clk_enable(trng->clk);
 }
 
 static const struct dev_pm_ops atmel_trng_pm_ops = {
@@ -141,21 +134,15 @@ static const struct dev_pm_ops atmel_trng_pm_ops = {
 };
 #endif /* CONFIG_PM */
 
-static const struct of_device_id atmel_trng_dt_ids[] = {
-	{ .compatible = "atmel,at91sam9g45-trng" },
-	{ /* sentinel */ }
-};
-MODULE_DEVICE_TABLE(of, atmel_trng_dt_ids);
-
 static struct platform_driver atmel_trng_driver = {
 	.probe		= atmel_trng_probe,
 	.remove		= atmel_trng_remove,
 	.driver		= {
 		.name	= "atmel-trng",
+		.owner	= THIS_MODULE,
 #ifdef CONFIG_PM
 		.pm	= &atmel_trng_pm_ops,
 #endif /* CONFIG_PM */
-		.of_match_table = atmel_trng_dt_ids,
 	},
 };
 

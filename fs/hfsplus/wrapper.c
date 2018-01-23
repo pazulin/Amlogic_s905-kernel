@@ -24,14 +24,13 @@ struct hfsplus_wd {
 	u16 embed_count;
 };
 
-/**
- * hfsplus_submit_bio - Perform block I/O
+/*
+ * hfsplus_submit_bio - Perfrom block I/O
  * @sb: super block of volume for I/O
  * @sector: block to read or write, for blocks of HFSPLUS_SECTOR_SIZE bytes
  * @buf: buffer for I/O
  * @data: output pointer for location of requested data
- * @op: direction of I/O
- * @op_flags: request op flags
+ * @rw: direction of I/O
  *
  * The unit of I/O is hfsplus_min_io_size(sb), which may be bigger than
  * HFSPLUS_SECTOR_SIZE, and @buf must be sized accordingly. On reads
@@ -45,7 +44,7 @@ struct hfsplus_wd {
  * will work correctly.
  */
 int hfsplus_submit_bio(struct super_block *sb, sector_t sector,
-		       void *buf, void **data, int op, int op_flags)
+		void *buf, void **data, int rw)
 {
 	struct bio *bio;
 	int ret = 0;
@@ -66,9 +65,8 @@ int hfsplus_submit_bio(struct super_block *sb, sector_t sector,
 	bio = bio_alloc(GFP_NOIO, 1);
 	bio->bi_iter.bi_sector = sector;
 	bio->bi_bdev = sb->s_bdev;
-	bio_set_op_attrs(bio, op, op_flags);
 
-	if (op != WRITE && data)
+	if (!(rw & WRITE) && data)
 		*data = (u8 *)buf + offset;
 
 	while (io_size > 0) {
@@ -85,7 +83,7 @@ int hfsplus_submit_bio(struct super_block *sb, sector_t sector,
 		buf = (u8 *)buf + len;
 	}
 
-	ret = submit_bio_wait(bio);
+	ret = submit_bio_wait(rw, bio);
 out:
 	bio_put(bio);
 	return ret < 0 ? ret : 0;
@@ -132,7 +130,7 @@ static int hfsplus_get_last_session(struct super_block *sb,
 
 	/* default values */
 	*start = 0;
-	*size = i_size_read(sb->s_bdev->bd_inode) >> 9;
+	*size = sb->s_bdev->bd_inode->i_size >> 9;
 
 	if (HFSPLUS_SB(sb)->session >= 0) {
 		te.cdte_track = HFSPLUS_SB(sb)->session;
@@ -183,7 +181,7 @@ int hfsplus_read_wrapper(struct super_block *sb)
 reread:
 	error = hfsplus_submit_bio(sb, part_start + HFSPLUS_VOLHEAD_SECTOR,
 				   sbi->s_vhdr_buf, (void **)&sbi->s_vhdr,
-				   REQ_OP_READ, 0);
+				   READ);
 	if (error)
 		goto out_free_backup_vhdr;
 
@@ -215,8 +213,7 @@ reread:
 
 	error = hfsplus_submit_bio(sb, part_start + part_size - 2,
 				   sbi->s_backup_vhdr_buf,
-				   (void **)&sbi->s_backup_vhdr, REQ_OP_READ,
-				   0);
+				   (void **)&sbi->s_backup_vhdr, READ);
 	if (error)
 		goto out_free_backup_vhdr;
 
@@ -234,8 +231,10 @@ reread:
 	if (blocksize < HFSPLUS_SECTOR_SIZE || ((blocksize - 1) & blocksize))
 		goto out_free_backup_vhdr;
 	sbi->alloc_blksz = blocksize;
-	sbi->alloc_blksz_shift = ilog2(blocksize);
-	blocksize = min_t(u32, sbi->alloc_blksz, PAGE_SIZE);
+	sbi->alloc_blksz_shift = 0;
+	while ((blocksize >>= 1) != 0)
+		sbi->alloc_blksz_shift++;
+	blocksize = min(sbi->alloc_blksz, (u32)PAGE_SIZE);
 
 	/*
 	 * Align block size to block offset.

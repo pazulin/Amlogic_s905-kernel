@@ -4,8 +4,11 @@
  *  For licencing details see kernel-base/COPYING
  */
 
-#include <linux/uaccess.h>
-#include <linux/export.h>
+#include <linux/highmem.h>
+#include <linux/module.h>
+
+#include <asm/word-at-a-time.h>
+#include <linux/sched.h>
 
 /*
  * We rely on the nested NMI work to allow atomic faults from the NMI path; the
@@ -17,7 +20,7 @@ copy_from_user_nmi(void *to, const void __user *from, unsigned long n)
 	unsigned long ret;
 
 	if (__range_not_ok(from, n, TASK_SIZE))
-		return n;
+		return 0;
 
 	/*
 	 * Even though this function is typically called from NMI/IRQ context

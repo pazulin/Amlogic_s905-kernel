@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2012-2015, NVIDIA Corporation.
+ * Copyright (c) 2012-2013, NVIDIA Corporation.
  *
  * This program is free software; you can redistribute it and/or modify it
  * under the terms and conditions of the GNU General Public License,
@@ -17,17 +17,14 @@
 #ifndef HOST1X_DEV_H
 #define HOST1X_DEV_H
 
-#include <linux/device.h>
-#include <linux/iommu.h>
-#include <linux/iova.h>
 #include <linux/platform_device.h>
-#include <linux/reset.h>
+#include <linux/device.h>
 
-#include "cdma.h"
 #include "channel.h"
-#include "intr.h"
-#include "job.h"
 #include "syncpt.h"
+#include "intr.h"
+#include "cdma.h"
+#include "job.h"
 
 struct host1x_syncpt;
 struct host1x_syncpt_base;
@@ -48,7 +45,7 @@ struct host1x_cdma_ops {
 	void (*start)(struct host1x_cdma *cdma);
 	void (*stop)(struct host1x_cdma *cdma);
 	void (*flush)(struct  host1x_cdma *cdma);
-	int (*timeout_init)(struct host1x_cdma *cdma, unsigned int syncpt);
+	int (*timeout_init)(struct host1x_cdma *cdma, u32 syncpt_id);
 	void (*timeout_destroy)(struct host1x_cdma *cdma);
 	void (*freeze)(struct host1x_cdma *cdma);
 	void (*resume)(struct host1x_cdma *cdma, u32 getptr);
@@ -85,21 +82,20 @@ struct host1x_intr_ops {
 	int (*init_host_sync)(struct host1x *host, u32 cpm,
 		void (*syncpt_thresh_work)(struct work_struct *work));
 	void (*set_syncpt_threshold)(
-		struct host1x *host, unsigned int id, u32 thresh);
-	void (*enable_syncpt_intr)(struct host1x *host, unsigned int id);
-	void (*disable_syncpt_intr)(struct host1x *host, unsigned int id);
+		struct host1x *host, u32 id, u32 thresh);
+	void (*enable_syncpt_intr)(struct host1x *host, u32 id);
+	void (*disable_syncpt_intr)(struct host1x *host, u32 id);
 	void (*disable_all_syncpt_intrs)(struct host1x *host);
 	int (*free_syncpt_irq)(struct host1x *host);
 };
 
 struct host1x_info {
-	unsigned int nb_channels; /* host1x: number of channels supported */
-	unsigned int nb_pts; /* host1x: number of syncpoints supported */
-	unsigned int nb_bases; /* host1x: number of syncpoint bases supported */
-	unsigned int nb_mlocks; /* host1x: number of mlocks supported */
-	int (*init)(struct host1x *host1x); /* initialize per SoC ops */
-	unsigned int sync_offset; /* offset of syncpoint registers */
-	u64 dma_mask; /* mask of addressable memory */
+	int	nb_channels;		/* host1x: num channels supported */
+	int	nb_pts;			/* host1x: num syncpoints supported */
+	int	nb_bases;		/* host1x: num syncpoints supported */
+	int	nb_mlocks;		/* host1x: number of mlocks */
+	int	(*init)(struct host1x *); /* initialize per SoC ops */
+	int	sync_offset;
 };
 
 struct host1x {
@@ -110,13 +106,9 @@ struct host1x {
 	struct host1x_syncpt_base *bases;
 	struct device *dev;
 	struct clk *clk;
-	struct reset_control *rst;
-
-	struct iommu_domain *domain;
-	struct iova_domain iova;
-	dma_addr_t iova_end;
 
 	struct mutex intr_mutex;
+	struct workqueue_struct *intr_wq;
 	int intr_syncpt_irq;
 
 	const struct host1x_syncpt_ops *syncpt_op;
@@ -128,7 +120,6 @@ struct host1x {
 
 	struct host1x_syncpt *nop_sp;
 
-	struct mutex syncpt_mutex;
 	struct mutex chlist_mutex;
 	struct host1x_channel chlist;
 	unsigned long allocated_channels;
@@ -191,20 +182,19 @@ static inline int host1x_hw_intr_init_host_sync(struct host1x *host, u32 cpm,
 }
 
 static inline void host1x_hw_intr_set_syncpt_threshold(struct host1x *host,
-						       unsigned int id,
-						       u32 thresh)
+						       u32 id, u32 thresh)
 {
 	host->intr_op->set_syncpt_threshold(host, id, thresh);
 }
 
 static inline void host1x_hw_intr_enable_syncpt_intr(struct host1x *host,
-						     unsigned int id)
+						     u32 id)
 {
 	host->intr_op->enable_syncpt_intr(host, id);
 }
 
 static inline void host1x_hw_intr_disable_syncpt_intr(struct host1x *host,
-						      unsigned int id)
+						      u32 id)
 {
 	host->intr_op->disable_syncpt_intr(host, id);
 }
@@ -221,9 +211,9 @@ static inline int host1x_hw_intr_free_syncpt_irq(struct host1x *host)
 
 static inline int host1x_hw_channel_init(struct host1x *host,
 					 struct host1x_channel *channel,
-					 unsigned int id)
+					 int chid)
 {
-	return host->channel_op->init(channel, host, id);
+	return host->channel_op->init(channel, host, chid);
 }
 
 static inline int host1x_hw_channel_submit(struct host1x *host,
@@ -252,9 +242,9 @@ static inline void host1x_hw_cdma_flush(struct host1x *host,
 
 static inline int host1x_hw_cdma_timeout_init(struct host1x *host,
 					      struct host1x_cdma *cdma,
-					      unsigned int syncpt)
+					      u32 syncpt_id)
 {
-	return host->cdma_op->timeout_init(cdma, syncpt);
+	return host->cdma_op->timeout_init(cdma, syncpt_id);
 }
 
 static inline void host1x_hw_cdma_timeout_destroy(struct host1x *host,

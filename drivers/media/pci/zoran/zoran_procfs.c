@@ -21,6 +21,10 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/types.h>
@@ -153,8 +157,8 @@ static ssize_t zoran_write(struct file *file, const char __user *buffer,
 		return -EFAULT;
 	}
 	string[count] = 0;
-	dprintk(4, KERN_INFO "%s: write_proc: name=%pD count=%zu zr=%p\n",
-		ZR_DEVNAME(zr), file, count, zr);
+	dprintk(4, KERN_INFO "%s: write_proc: name=%s count=%zu zr=%p\n",
+		ZR_DEVNAME(zr), file->f_path.dentry->d_name.name, count, zr);
 	ldelim = " \t\n";
 	tdelim = "=";
 	line = strpbrk(sp, ldelim);

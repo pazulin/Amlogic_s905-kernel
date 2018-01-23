@@ -60,14 +60,11 @@ enum { SCTP_DEFAULT_INSTREAMS = SCTP_MAX_STREAM };
 
 #define SCTP_NUM_PRSCTP_CHUNK_TYPES	1
 
-#define SCTP_NUM_RECONF_CHUNK_TYPES	1
-
 #define SCTP_NUM_AUTH_CHUNK_TYPES	1
 
 #define SCTP_NUM_CHUNK_TYPES		(SCTP_NUM_BASE_CHUNK_TYPES + \
 					 SCTP_NUM_ADDIP_CHUNK_TYPES +\
 					 SCTP_NUM_PRSCTP_CHUNK_TYPES +\
-					 SCTP_NUM_RECONF_CHUNK_TYPES +\
 					 SCTP_NUM_AUTH_CHUNK_TYPES)
 
 /* These are the different flavours of event.  */
@@ -93,7 +90,6 @@ typedef enum {
 	SCTP_EVENT_TIMEOUT_T4_RTO,
 	SCTP_EVENT_TIMEOUT_T5_SHUTDOWN_GUARD,
 	SCTP_EVENT_TIMEOUT_HEARTBEAT,
-	SCTP_EVENT_TIMEOUT_RECONF,
 	SCTP_EVENT_TIMEOUT_SACK,
 	SCTP_EVENT_TIMEOUT_AUTOCLOSE,
 } sctp_event_timeout_t;
@@ -117,10 +113,9 @@ typedef enum {
 	SCTP_PRIMITIVE_SEND,
 	SCTP_PRIMITIVE_REQUESTHEARTBEAT,
 	SCTP_PRIMITIVE_ASCONF,
-	SCTP_PRIMITIVE_RECONF,
 } sctp_event_primitive_t;
 
-#define SCTP_EVENT_PRIMITIVE_MAX	SCTP_PRIMITIVE_RECONF
+#define SCTP_EVENT_PRIMITIVE_MAX	SCTP_PRIMITIVE_ASCONF
 #define SCTP_NUM_PRIMITIVE_TYPES	(SCTP_EVENT_PRIMITIVE_MAX + 1)
 
 /* We define here a utility type for manipulating subtypes.
@@ -219,7 +214,7 @@ typedef enum {
 	SCTP_SS_LISTENING      = TCP_LISTEN,
 	SCTP_SS_ESTABLISHING   = TCP_SYN_SENT,
 	SCTP_SS_ESTABLISHED    = TCP_ESTABLISHED,
-	SCTP_SS_CLOSING        = TCP_CLOSE_WAIT,
+	SCTP_SS_CLOSING        = TCP_CLOSING,
 } sctp_sock_state_t;
 
 /* These functions map various type to printable names.  */
@@ -316,7 +311,7 @@ typedef enum {
 	SCTP_XMIT_OK,
 	SCTP_XMIT_PMTU_FULL,
 	SCTP_XMIT_RWND_FULL,
-	SCTP_XMIT_DELAY,
+	SCTP_XMIT_NAGLE_DELAY,
 } sctp_xmit_t;
 
 /* These are the commands for manipulating transports.  */

@@ -197,6 +197,9 @@ static int __init amiga_zorro_probe(struct platform_device *pdev)
 			put_device(&z->dev);
 			continue;
 		}
+		error = zorro_create_sysfs_dev_files(z);
+		if (error)
+			dev_err(&z->dev, "Error creating sysfs files\n");
 	}
 
 	/* Mark all available Zorro II memory */
@@ -219,6 +222,7 @@ static int __init amiga_zorro_probe(struct platform_device *pdev)
 static struct platform_driver amiga_zorro_driver = {
 	.driver   = {
 		.name	= "amiga-zorro",
+		.owner	= THIS_MODULE,
 	},
 };
 

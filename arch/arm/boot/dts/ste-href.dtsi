@@ -19,6 +19,12 @@
 	};
 
 	soc {
+		usb_per5@a03e0000 {
+			pinctrl-names = "default", "sleep";
+			pinctrl-0 = <&musb_default_mode>;
+			pinctrl-1 = <&musb_sleep_mode>;
+		};
+
 		uart@80120000 {
 			pinctrl-names = "default", "sleep";
 			pinctrl-0 = <&uart0_default_mode>;
@@ -26,11 +32,11 @@
 			status = "okay";
 		};
 
-		/* This UART is unused and thus left disabled */
 		uart@80121000 {
 			pinctrl-names = "default", "sleep";
 			pinctrl-0 = <&uart1_default_mode>;
 			pinctrl-1 = <&uart1_sleep_mode>;
+			status = "okay";
 		};
 
 		uart@80007000 {
@@ -105,35 +111,13 @@
 			pinctrl-1 = <&i2c3_sleep_mode>;
 		};
 
-		/* ST6G3244ME level translator for 1.8/2.9 V */
-		vmmci: regulator-gpio {
-			compatible = "regulator-gpio";
-
-			regulator-min-microvolt = <1800000>;
-			regulator-max-microvolt = <2900000>;
-			regulator-name = "mmci-reg";
-			regulator-type = "voltage";
-
-			startup-delay-us = <100>;
-
-			states = <1800000 0x1
-				  2900000 0x0>;
-		};
-
 		// External Micro SD slot
 		sdi0_per1@80126000 {
 			arm,primecell-periphid = <0x10480180>;
 			max-frequency = <100000000>;
 			bus-width = <4>;
-			cap-sd-highspeed;
-			cap-mmc-highspeed;
-			sd-uhs-sdr12;
-			sd-uhs-sdr25;
-			full-pwr-cycle;
-			st,sig-dir-dat0;
-			st,sig-dir-dat2;
-			st,sig-dir-cmd;
-			st,sig-pin-fbclk;
+			mmc-cap-sd-highspeed;
+			mmc-cap-mmc-highspeed;
 			vmmc-supply = <&ab8500_ldo_aux3_reg>;
 			vqmmc-supply = <&vmmci>;
 			pinctrl-names = "default", "sleep";
@@ -148,7 +132,6 @@
 			arm,primecell-periphid = <0x10480180>;
 			max-frequency = <100000000>;
 			bus-width = <4>;
-			non-removable;
 			pinctrl-names = "default", "sleep";
 			pinctrl-0 = <&sdi1_default_mode>;
 			pinctrl-1 = <&sdi1_sleep_mode>;
@@ -161,9 +144,7 @@
 			arm,primecell-periphid = <0x10480180>;
 			max-frequency = <100000000>;
 			bus-width = <8>;
-			cap-mmc-highspeed;
-			non-removable;
-			vmmc-supply = <&db8500_vsmps2_reg>;
+			mmc-cap-mmc-highspeed;
 			pinctrl-names = "default", "sleep";
 			pinctrl-0 = <&sdi2_default_mode>;
 			pinctrl-1 = <&sdi2_sleep_mode>;
@@ -176,14 +157,20 @@
 			arm,primecell-periphid = <0x10480180>;
 		        max-frequency = <100000000>;
 			bus-width = <8>;
-			cap-mmc-highspeed;
-			non-removable;
+			mmc-cap-mmc-highspeed;
 			vmmc-supply = <&ab8500_ldo_aux2_reg>;
 			pinctrl-names = "default", "sleep";
 			pinctrl-0 = <&sdi4_default_mode>;
 			pinctrl-1 = <&sdi4_sleep_mode>;
 
 			status = "okay";
+		};
+
+		sound {
+			compatible = "stericsson,snd-soc-mop500";
+
+			stericsson,cpu-dai = <&msp1 &msp3>;
+			stericsson,audio-codec = <&codec>;
 		};
 
 		msp0: msp@80123000 {
@@ -210,12 +197,7 @@
 		prcmu@80157000 {
 			ab8500 {
 				ab8500-gpio {
-				};
-
-				ab8500_usb {
-					pinctrl-names = "default", "sleep";
-					pinctrl-0 = <&musb_default_mode>;
-					pinctrl-1 = <&musb_sleep_mode>;
+					compatible = "stericsson,ab8500-gpio";
 				};
 
 				ab8500-regulators {

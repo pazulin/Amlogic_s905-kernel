@@ -4,16 +4,11 @@
 #include <linux/kdebug.h>
 #include <linux/signal.h>
 #include <linux/sched.h>
-#include <linux/sched/debug.h>
-#include <linux/sched/task_stack.h>
 #include <linux/uaccess.h>
 #include <linux/hardirq.h>
 #include <linux/kernel.h>
 #include <linux/kexec.h>
-#include <linux/sched/signal.h>
-
-#include <linux/extable.h>
-#include <linux/module.h>	/* print_modules */
+#include <linux/module.h>
 #include <asm/unwinder.h>
 #include <asm/traps.h>
 

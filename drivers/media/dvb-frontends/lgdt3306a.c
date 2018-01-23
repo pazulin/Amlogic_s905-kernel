@@ -16,13 +16,13 @@
  *    GNU General Public License for more details.
  */
 
+#undef pr_fmt
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
 
 #include <asm/div64.h>
 #include <linux/dvb/frontend.h>
 #include "dvb_math.h"
 #include "lgdt3306a.h"
-#include <linux/i2c-mux.h>
 
 
 static int debug;
@@ -34,7 +34,7 @@ MODULE_PARM_DESC(debug, "set debug level (info=1, reg=2 (or-able))");
 #define DBG_DUMP 4 /* FGR - comment out to remove dump code */
 
 #define lg_debug(fmt, arg...) \
-	printk(KERN_DEBUG pr_fmt(fmt), ## arg)
+	pr_debug(KERN_DEBUG pr_fmt(fmt), ## arg)
 
 #define dbg_info(fmt, arg...)					\
 	do {							\
@@ -63,11 +63,9 @@ struct lgdt3306a_state {
 
 	struct dvb_frontend frontend;
 
-	enum fe_modulation current_modulation;
+	fe_modulation_t current_modulation;
 	u32 current_frequency;
 	u32 snr;
-
-	struct i2c_mux_core *muxc;
 };
 
 /*
@@ -734,7 +732,7 @@ static int lgdt3306a_set_if(struct lgdt3306a_state *state,
 
 	switch (if_freq_khz) {
 	default:
-		pr_warn("IF=%d KHz is not supported, 3250 assumed\n",
+		pr_warn("IF=%d KHz is not supportted, 3250 assumed\n",
 			if_freq_khz);
 		/* fallthrough */
 	case 3250: /* 3.25Mhz */
@@ -1043,10 +1041,10 @@ fail:
 	return ret;
 }
 
-static int lgdt3306a_get_frontend(struct dvb_frontend *fe,
-				  struct dtv_frontend_properties *p)
+static int lgdt3306a_get_frontend(struct dvb_frontend *fe)
 {
 	struct lgdt3306a_state *state = fe->demodulator_priv;
+	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
 
 	dbg_info("(%u, %d)\n",
 		 state->current_frequency, state->current_modulation);
@@ -1305,10 +1303,6 @@ static int lgdt3306a_pre_monitoring(struct lgdt3306a_state *state)
 	dbg_info("snrRef=%d mainStrong=%d aiccrejStatus=%d currChDiffACQ=0x%x\n",
 		snrRef, mainStrong, aiccrejStatus, currChDiffACQ);
 
-#if 0
-	/* Dynamic ghost exists */
-	if ((mainStrong == 0) && (currChDiffACQ > 0x70))
-#endif
 	if (mainStrong == 0) {
 		ret = lgdt3306a_read_reg(state, 0x2135, &val);
 		if (ret)
@@ -1561,8 +1555,7 @@ lgdt3306a_qam_lock_poll(struct lgdt3306a_state *state)
 	return LG3306_UNLOCK;
 }
 
-static int lgdt3306a_read_status(struct dvb_frontend *fe,
-				 enum fe_status *status)
+static int lgdt3306a_read_status(struct dvb_frontend *fe, fe_status_t *status)
 {
 	struct lgdt3306a_state *state = fe->demodulator_priv;
 	u16 strength = 0;
@@ -1709,7 +1702,7 @@ static int lgdt3306a_read_ucblocks(struct dvb_frontend *fe, u32 *ucblocks)
 
 static int lgdt3306a_tune(struct dvb_frontend *fe, bool re_tune,
 			  unsigned int mode_flags, unsigned int *delay,
-			  enum fe_status *status)
+			  fe_status_t *status)
 {
 	int ret = 0;
 	struct lgdt3306a_state *state = fe->demodulator_priv;
@@ -1739,17 +1732,25 @@ static int lgdt3306a_get_tune_settings(struct dvb_frontend *fe,
 
 static int lgdt3306a_search(struct dvb_frontend *fe)
 {
-	enum fe_status status = 0;
-	int ret;
+	fe_status_t status = 0;
+	int i, ret;
 
 	/* set frontend */
 	ret = lgdt3306a_set_parameters(fe);
 	if (ret)
 		goto error;
 
-	ret = lgdt3306a_read_status(fe, &status);
-	if (ret)
-		goto error;
+	/* wait frontend lock */
+	for (i = 20; i > 0; i--) {
+		dbg_info(": loop=%d\n", i);
+		msleep(50);
+		ret = lgdt3306a_read_status(fe, &status);
+		if (ret)
+			goto error;
+
+		if (status & FE_HAS_LOCK)
+			break;
+	}
 
 	/* check if we have a valid signal */
 	if (status & FE_HAS_LOCK)
@@ -1770,7 +1771,7 @@ static void lgdt3306a_release(struct dvb_frontend *fe)
 	kfree(state);
 }
 
-static const struct dvb_frontend_ops lgdt3306a_ops;
+static struct dvb_frontend_ops lgdt3306a_ops;
 
 struct dvb_frontend *lgdt3306a_attach(const struct lgdt3306a_config *config,
 				      struct i2c_adapter *i2c_adap)
@@ -1854,7 +1855,8 @@ static const short regtab[] = {
 	0x0006, /* PLLCTRL[7:0] 11100001 */
 	0x0007, /* SYSINITWAITTIME[7:0] (msec) 00001000 */
 	0x0008, /* STDOPMODE[7:0] 10000000 */
-	0x0009, /* 1'b0 1'b0 1'b0 STDOPDETTMODE[2:0] STDOPDETCMODE[1:0] 00011110 */
+	0x0009, /* 1'b0 1'b0 1'b0 STDOPDETTMODE[2:0]
+	STDOPDETCMODE[1:0] 00011110 */
 	0x000a, /* DAFTEN 1'b1 x x SCSYSLOCK */
 	0x000b, /* SCSYSLOCKCHKTIME[7:0] (10msec) 01100100 */
 	0x000d, /* x SAMPLING4 */
@@ -1863,7 +1865,8 @@ static const short regtab[] = {
 	0x0010, /* IFFREQ[15:8] 01100000 */
 	0x0011, /* IFFREQ[7:0] 00000000 */
 	0x0012, /* AGCEN AGCREFMO */
-	0x0013, /* AGCRFFIXB AGCIFFIXB AGCLOCKDETRNGSEL[1:0] 1'b1 1'b0 1'b0 1'b0 11101000 */
+	0x0013, /* AGCRFFIXB AGCIFFIXB AGCLOCKDETRNGSEL[1:0]
+	1'b1 1'b0 1'b0 1'b0 11101000 */
 	0x0014, /* AGCFIXVALUE[7:0] 01111111 */
 	0x0015, /* AGCREF[15:8] 00001010 */
 	0x0016, /* AGCREF[7:0] 11100100 */
@@ -1878,7 +1881,8 @@ static const short regtab[] = {
 	0x0021, /* AICCDETTH[7:0] 00000000 */
 	0x0022, /* AICCOFFTH[15:8] 00000101 */
 	0x0023, /* AICCOFFTH[7:0] 11100000 */
-	0x0024, /* AICCOPMODE3[1:0] AICCOPMODE2[1:0] AICCOPMODE1[1:0] AICCOPMODE0[1:0] 00000000 */
+	0x0024, /* AICCOPMODE3[1:0] AICCOPMODE2[1:0] AICCOPMODE1[1:0]
+	 AICCOPMODE0[1:0] 00000000 */
 	0x0025, /* AICCFIXFREQ3[23:16] 00000000 */
 	0x0026, /* AICCFIXFREQ3[15:8] 00000000 */
 	0x0027, /* AICCFIXFREQ3[7:0] 00000000 */
@@ -1969,7 +1973,8 @@ static const short regtab[] = {
 	0x101a, /* x 1'b1 1'b0 1'b0 x QMDQAMMODE[2:0] x100x010 */
 	0x1036, /* 1'b0 1'b1 1'b0 1'b0 SAMGSEND_CQS[3:0] 01001110 */
 	0x103c, /* SAMGSAUTOSTL_V[3:0] SAMGSAUTOEDL_V[3:0] 01000110 */
-	0x103d, /* 1'b1 1'b1 SAMCNORMBP_V[1:0] 1'b0 1'b0 SAMMODESEL_V[1:0] 11100001 */
+	0x103d, /* 1'b1 1'b1 SAMCNORMBP_V[1:0] 1'b0 1'b0
+	SAMMODESEL_V[1:0] 11100001 */
 	0x103f, /* SAMZTEDSE */
 	0x105d, /* EQSTATUSE */
 	0x105f, /* x PMAPG2_V[2:0] x DMAPG2_V[2:0] x001x011 */
@@ -2049,7 +2054,8 @@ static const short regtab[] = {
 	0x2162, /* AICCCTRLE */
 	0x2173, /* PHNCNFCNT[7:0] 00000100 */
 	0x2179, /* 1'b0 1'b0 1'b0 1'b1 x BADSINGLEDYNTRACKFBF[2:0] 0001x001 */
-	0x217a, /* 1'b0 1'b0 1'b0 1'b1 x BADSLOWSINGLEDYNTRACKFBF[2:0] 0001x001 */
+	0x217a, /* 1'b0 1'b0 1'b0 1'b1 x BADSLOWSINGLEDYNTRACKFBF[2:0]
+	 0001x001 */
 	0x217e, /* CNFCNTTPIF[7:0] 00001000 */
 	0x217f, /* TPERRCNTTPIF[7:0] 00000001 */
 	0x2180, /* x x x x x x FBDLYCIR[9:8] */
@@ -2106,7 +2112,7 @@ static void lgdt3306a_DumpRegs(struct lgdt3306a_state *state)
 
 
 
-static const struct dvb_frontend_ops lgdt3306a_ops = {
+static struct dvb_frontend_ops lgdt3306a_ops = {
 	.delsys = { SYS_ATSC, SYS_DVBC_ANNEX_B },
 	.info = {
 		.name = "LG Electronics LGDT3306A VSB/QAM Frontend",
@@ -2133,111 +2139,6 @@ static const struct dvb_frontend_ops lgdt3306a_ops = {
 	.ts_bus_ctrl          = lgdt3306a_ts_bus_ctrl,
 	.search               = lgdt3306a_search,
 };
-
-static int lgdt3306a_select(struct i2c_mux_core *muxc, u32 chan)
-{
-	struct i2c_client *client = i2c_mux_priv(muxc);
-	struct lgdt3306a_state *state = i2c_get_clientdata(client);
-
-	return lgdt3306a_i2c_gate_ctrl(&state->frontend, 1);
-}
-
-static int lgdt3306a_deselect(struct i2c_mux_core *muxc, u32 chan)
-{
-	struct i2c_client *client = i2c_mux_priv(muxc);
-	struct lgdt3306a_state *state = i2c_get_clientdata(client);
-
-	return lgdt3306a_i2c_gate_ctrl(&state->frontend, 0);
-}
-
-static int lgdt3306a_probe(struct i2c_client *client,
-		const struct i2c_device_id *id)
-{
-	struct lgdt3306a_config *config;
-	struct lgdt3306a_state *state;
-	struct dvb_frontend *fe;
-	int ret;
-
-	config = kzalloc(sizeof(struct lgdt3306a_config), GFP_KERNEL);
-	if (config == NULL) {
-		ret = -ENOMEM;
-		goto fail;
-	}
-
-	memcpy(config, client->dev.platform_data,
-			sizeof(struct lgdt3306a_config));
-
-	config->i2c_addr = client->addr;
-	fe = lgdt3306a_attach(config, client->adapter);
-	if (fe == NULL) {
-		ret = -ENODEV;
-		goto err_fe;
-	}
-
-	i2c_set_clientdata(client, fe->demodulator_priv);
-	state = fe->demodulator_priv;
-
-	/* create mux i2c adapter for tuner */
-	state->muxc = i2c_mux_alloc(client->adapter, &client->dev,
-				  1, 0, I2C_MUX_LOCKED,
-				  lgdt3306a_select, lgdt3306a_deselect);
-	if (!state->muxc) {
-		ret = -ENOMEM;
-		goto err_kfree;
-	}
-	state->muxc->priv = client;
-	ret = i2c_mux_add_adapter(state->muxc, 0, 0, 0);
-	if (ret)
-		goto err_kfree;
-
-	/* create dvb_frontend */
-	fe->ops.i2c_gate_ctrl = NULL;
-	*config->i2c_adapter = state->muxc->adapter[0];
-	*config->fe = fe;
-
-	return 0;
-
-err_kfree:
-	kfree(state);
-err_fe:
-	kfree(config);
-fail:
-	dev_dbg(&client->dev, "failed=%d\n", ret);
-	return ret;
-}
-
-static int lgdt3306a_remove(struct i2c_client *client)
-{
-	struct lgdt3306a_state *state = i2c_get_clientdata(client);
-
-	i2c_mux_del_adapters(state->muxc);
-
-	state->frontend.ops.release = NULL;
-	state->frontend.demodulator_priv = NULL;
-
-	kfree(state->cfg);
-	kfree(state);
-
-	return 0;
-}
-
-static const struct i2c_device_id lgdt3306a_id_table[] = {
-	{"lgdt3306a", 0},
-	{}
-};
-MODULE_DEVICE_TABLE(i2c, lgdt3306a_id_table);
-
-static struct i2c_driver lgdt3306a_driver = {
-	.driver = {
-		.name                = "lgdt3306a",
-		.suppress_bind_attrs = true,
-	},
-	.probe		= lgdt3306a_probe,
-	.remove		= lgdt3306a_remove,
-	.id_table	= lgdt3306a_id_table,
-};
-
-module_i2c_driver(lgdt3306a_driver);
 
 MODULE_DESCRIPTION("LG Electronics LGDT3306A ATSC/QAM-B Demodulator Driver");
 MODULE_AUTHOR("Fred Richter <frichter@hauppauge.com>");

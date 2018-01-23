@@ -32,7 +32,8 @@ fill_fixup:
 	 rd	%pc, %g7
 	call	do_sparc64_fault
 	 add	%sp, PTREGS_OFF, %o0
-	ba,a,pt	%xcc, rtrap
+	ba,pt	%xcc, rtrap
+	 nop
 
 	/* Be very careful about usage of the trap globals here.
 	 * You cannot touch %g5 as that has the fault information.
@@ -152,8 +153,6 @@ fill_fixup_dax:
 	call	sun4v_data_access_exception
 	 nop
 	ba,a,pt	%xcc, rtrap
-	 nop
 1:	call	spitfire_data_access_exception
 	 nop
 	ba,a,pt	%xcc, rtrap
-	 nop

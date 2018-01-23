@@ -535,8 +535,7 @@ int ath9k_hw_rxprocdesc(struct ath_hw *ah, struct ath_desc *ds,
 
 	rs->rs_status = 0;
 	rs->rs_flags = 0;
-	rs->enc_flags = 0;
-	rs->bw = RATE_INFO_BW_20;
+	rs->flag = 0;
 
 	rs->rs_datalen = ads.ds_rxstatus1 & AR_DataLen;
 	rs->rs_tstamp = ads.AR_RcvTimestamp;
@@ -578,15 +577,15 @@ int ath9k_hw_rxprocdesc(struct ath_hw *ah, struct ath_desc *ds,
 	rs->rs_antenna = MS(ads.ds_rxstatus3, AR_RxAntenna);
 
 	/* directly mapped flags for ieee80211_rx_status */
-	rs->enc_flags |=
-		(ads.ds_rxstatus3 & AR_GI) ? RX_ENC_FLAG_SHORT_GI : 0;
-	rs->enc_flags |=
-		(ads.ds_rxstatus3 & AR_2040) ? RX_ENC_FLAG_40MHZ : 0;
+	rs->flag |=
+		(ads.ds_rxstatus3 & AR_GI) ? RX_FLAG_SHORT_GI : 0;
+	rs->flag |=
+		(ads.ds_rxstatus3 & AR_2040) ? RX_FLAG_40MHZ : 0;
 	if (AR_SREV_9280_20_OR_LATER(ah))
-		rs->enc_flags |=
+		rs->flag |=
 			(ads.ds_rxstatus3 & AR_STBC) ?
 				/* we can only Nss=1 STBC */
-				(1 << RX_ENC_FLAG_STBC_SHIFT) : 0;
+				(1 << RX_FLAG_STBC_SHIFT) : 0;
 
 	if (ads.ds_rxstatus8 & AR_PreDelimCRCErr)
 		rs->rs_flags |= ATH9K_RX_DELIM_CRC_PRE;
@@ -806,14 +805,22 @@ void ath9k_hw_disable_interrupts(struct ath_hw *ah)
 }
 EXPORT_SYMBOL(ath9k_hw_disable_interrupts);
 
-static void __ath9k_hw_enable_interrupts(struct ath_hw *ah)
+void ath9k_hw_enable_interrupts(struct ath_hw *ah)
 {
 	struct ath_common *common = ath9k_hw_common(ah);
 	u32 sync_default = AR_INTR_SYNC_DEFAULT;
 	u32 async_mask;
 
-	if (AR_SREV_9340(ah) || AR_SREV_9550(ah) || AR_SREV_9531(ah) ||
-	    AR_SREV_9561(ah))
+	if (!(ah->imask & ATH9K_INT_GLOBAL))
+		return;
+
+	if (!atomic_inc_and_test(&ah->intr_ref_cnt)) {
+		ath_dbg(common, INTERRUPT, "Do not enable IER ref count %d\n",
+			atomic_read(&ah->intr_ref_cnt));
+		return;
+	}
+
+	if (AR_SREV_9340(ah) || AR_SREV_9550(ah))
 		sync_default &= ~AR_INTR_SYNC_HOST1_FATAL;
 
 	async_mask = AR_INTR_MAC_IRQ;
@@ -832,39 +839,6 @@ static void __ath9k_hw_enable_interrupts(struct ath_hw *ah)
 	}
 	ath_dbg(common, INTERRUPT, "AR_IMR 0x%x IER 0x%x\n",
 		REG_READ(ah, AR_IMR), REG_READ(ah, AR_IER));
-}
-
-void ath9k_hw_resume_interrupts(struct ath_hw *ah)
-{
-	struct ath_common *common = ath9k_hw_common(ah);
-
-	if (!(ah->imask & ATH9K_INT_GLOBAL))
-		return;
-
-	if (atomic_read(&ah->intr_ref_cnt) != 0) {
-		ath_dbg(common, INTERRUPT, "Do not enable IER ref count %d\n",
-			atomic_read(&ah->intr_ref_cnt));
-		return;
-	}
-
-	__ath9k_hw_enable_interrupts(ah);
-}
-EXPORT_SYMBOL(ath9k_hw_resume_interrupts);
-
-void ath9k_hw_enable_interrupts(struct ath_hw *ah)
-{
-	struct ath_common *common = ath9k_hw_common(ah);
-
-	if (!(ah->imask & ATH9K_INT_GLOBAL))
-		return;
-
-	if (!atomic_inc_and_test(&ah->intr_ref_cnt)) {
-		ath_dbg(common, INTERRUPT, "Do not enable IER ref count %d\n",
-			atomic_read(&ah->intr_ref_cnt));
-		return;
-	}
-
-	__ath9k_hw_enable_interrupts(ah);
 }
 EXPORT_SYMBOL(ath9k_hw_enable_interrupts);
 
@@ -977,25 +951,3 @@ void ath9k_hw_set_interrupts(struct ath_hw *ah)
 	return;
 }
 EXPORT_SYMBOL(ath9k_hw_set_interrupts);
-
-#define ATH9K_HW_MAX_DCU       10
-#define ATH9K_HW_SLICE_PER_DCU 16
-#define ATH9K_HW_BIT_IN_SLICE  16
-void ath9k_hw_set_tx_filter(struct ath_hw *ah, u8 destidx, bool set)
-{
-	int dcu_idx;
-	u32 filter;
-
-	for (dcu_idx = 0; dcu_idx < 10; dcu_idx++) {
-		filter = SM(set, AR_D_TXBLK_WRITE_COMMAND);
-		filter |= SM(dcu_idx, AR_D_TXBLK_WRITE_DCU);
-		filter |= SM((destidx / ATH9K_HW_SLICE_PER_DCU),
-			     AR_D_TXBLK_WRITE_SLICE);
-		filter |= BIT(destidx % ATH9K_HW_BIT_IN_SLICE);
-		ath_dbg(ath9k_hw_common(ah), PS,
-			"DCU%d staid %d set %d txfilter %08x\n",
-			dcu_idx, destidx, set, filter);
-		REG_WRITE(ah, AR_D_TXBLK_BASE, filter);
-	}
-}
-EXPORT_SYMBOL(ath9k_hw_set_tx_filter);

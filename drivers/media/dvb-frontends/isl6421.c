@@ -15,11 +15,14 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * To obtain the license, point your browser to
- * http://www.gnu.org/copyleft/gpl.html
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+ * Or, point your browser to http://www.gnu.org/copyleft/gpl.html
  *
  *
- * the project's page is at https://linuxtv.org
+ * the project's page is at http://www.linuxtv.org
  */
 #include <linux/delay.h>
 #include <linux/errno.h>
@@ -40,8 +43,7 @@ struct isl6421 {
 	u8			i2c_addr;
 };
 
-static int isl6421_set_voltage(struct dvb_frontend *fe,
-			       enum fe_sec_voltage voltage)
+static int isl6421_set_voltage(struct dvb_frontend *fe, fe_sec_voltage_t voltage)
 {
 	struct isl6421 *isl6421 = (struct isl6421 *) fe->sec_priv;
 	struct i2c_msg msg = {	.addr = isl6421->i2c_addr, .flags = 0,
@@ -87,8 +89,7 @@ static int isl6421_enable_high_lnb_voltage(struct dvb_frontend *fe, long arg)
 	return (i2c_transfer(isl6421->i2c, &msg, 1) == 1) ? 0 : -EIO;
 }
 
-static int isl6421_set_tone(struct dvb_frontend *fe,
-			    enum fe_sec_tone_mode tone)
+static int isl6421_set_tone(struct dvb_frontend* fe, fe_sec_tone_mode_t tone)
 {
 	struct isl6421 *isl6421 = (struct isl6421 *) fe->sec_priv;
 	struct i2c_msg msg = { .addr = isl6421->i2c_addr, .flags = 0,

@@ -30,7 +30,6 @@ struct veno {
 	u32 basertt;		/* the min of all Veno rtt measurements seen (in usec) */
 	u32 inc;		/* decide whether to increase cwnd */
 	u32 diff;		/* calculate the diff rate */
-	u32 loss_cwnd;		/* cwnd when loss occured */
 };
 
 /* There are several situations when we must "re-start" Veno:
@@ -70,17 +69,16 @@ static void tcp_veno_init(struct sock *sk)
 }
 
 /* Do rtt sampling needed for Veno. */
-static void tcp_veno_pkts_acked(struct sock *sk,
-				const struct ack_sample *sample)
+static void tcp_veno_pkts_acked(struct sock *sk, u32 cnt, s32 rtt_us)
 {
 	struct veno *veno = inet_csk_ca(sk);
 	u32 vrtt;
 
-	if (sample->rtt_us < 0)
+	if (rtt_us < 0)
 		return;
 
 	/* Never allow zero rtt or baseRTT */
-	vrtt = sample->rtt_us + 1;
+	vrtt = rtt_us + 1;
 
 	/* Filter to find propagation delay: */
 	if (vrtt < veno->basertt)
@@ -116,18 +114,19 @@ static void tcp_veno_cwnd_event(struct sock *sk, enum tcp_ca_event event)
 		tcp_veno_init(sk);
 }
 
-static void tcp_veno_cong_avoid(struct sock *sk, u32 ack, u32 acked)
+static void tcp_veno_cong_avoid(struct sock *sk, u32 ack, u32 acked,
+				u32 in_flight)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
 	struct veno *veno = inet_csk_ca(sk);
 
 	if (!veno->doing_veno_now) {
-		tcp_reno_cong_avoid(sk, ack, acked);
+		tcp_reno_cong_avoid(sk, ack, acked, in_flight);
 		return;
 	}
 
 	/* limited by applications */
-	if (!tcp_is_cwnd_limited(sk))
+	if (!tcp_is_cwnd_limited(sk, in_flight))
 		return;
 
 	/* We do the Veno calculations only if we got enough rtt samples */
@@ -135,7 +134,7 @@ static void tcp_veno_cong_avoid(struct sock *sk, u32 ack, u32 acked)
 		/* We don't have enough rtt samples to do the Veno
 		 * calculation, so we'll behave like Reno.
 		 */
-		tcp_reno_cong_avoid(sk, ack, acked);
+		tcp_reno_cong_avoid(sk, ack, acked, in_flight);
 	} else {
 		u64 target_cwnd;
 		u32 rtt;
@@ -152,7 +151,7 @@ static void tcp_veno_cong_avoid(struct sock *sk, u32 ack, u32 acked)
 
 		veno->diff = (tp->snd_cwnd << V_PARAM_SHIFT) - target_cwnd;
 
-		if (tcp_in_slow_start(tp)) {
+		if (tp->snd_cwnd <= tp->snd_ssthresh) {
 			/* Slow start.  */
 			tcp_slow_start(tp, acked);
 		} else {
@@ -161,7 +160,7 @@ static void tcp_veno_cong_avoid(struct sock *sk, u32 ack, u32 acked)
 				/* In the "non-congestive state", increase cwnd
 				 *  every rtt.
 				 */
-				tcp_cong_avoid_ai(tp, tp->snd_cwnd, 1);
+				tcp_cong_avoid_ai(tp, tp->snd_cwnd);
 			} else {
 				/* In the "congestive state", increase cwnd
 				 * every other rtt.
@@ -177,6 +176,7 @@ static void tcp_veno_cong_avoid(struct sock *sk, u32 ack, u32 acked)
 				} else
 					tp->snd_cwnd_cnt++;
 			}
+
 		}
 		if (tp->snd_cwnd < 2)
 			tp->snd_cwnd = 2;
@@ -194,7 +194,6 @@ static u32 tcp_veno_ssthresh(struct sock *sk)
 	const struct tcp_sock *tp = tcp_sk(sk);
 	struct veno *veno = inet_csk_ca(sk);
 
-	veno->loss_cwnd = tp->snd_cwnd;
 	if (veno->diff < beta)
 		/* in "non-congestive state", cut cwnd by 1/5 */
 		return max(tp->snd_cwnd * 4 / 5, 2U);
@@ -203,17 +202,10 @@ static u32 tcp_veno_ssthresh(struct sock *sk)
 		return max(tp->snd_cwnd >> 1U, 2U);
 }
 
-static u32 tcp_veno_cwnd_undo(struct sock *sk)
-{
-	const struct veno *veno = inet_csk_ca(sk);
-
-	return max(tcp_sk(sk)->snd_cwnd, veno->loss_cwnd);
-}
-
 static struct tcp_congestion_ops tcp_veno __read_mostly = {
+	.flags		= TCP_CONG_RTT_STAMP,
 	.init		= tcp_veno_init,
 	.ssthresh	= tcp_veno_ssthresh,
-	.undo_cwnd	= tcp_veno_cwnd_undo,
 	.cong_avoid	= tcp_veno_cong_avoid,
 	.pkts_acked	= tcp_veno_pkts_acked,
 	.set_state	= tcp_veno_state,

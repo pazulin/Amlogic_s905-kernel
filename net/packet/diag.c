@@ -73,7 +73,8 @@ static int pdiag_put_ring(struct packet_ring_buffer *ring, int ver, int nl_type,
 {
 	struct packet_diag_ring pdr;
 
-	if (!ring->pg_vec)
+	if (!ring->pg_vec || ((ver > TPACKET_V2) &&
+				(nl_type == PACKET_DIAG_TX_RING)))
 		return 0;
 
 	pdr.pdr_block_size = ring->pg_vec_pages << PAGE_SHIFT;
@@ -176,8 +177,7 @@ static int sk_diag_fill(struct sock *sk, struct sk_buff *skb,
 				     PACKET_DIAG_FILTER))
 		goto out_nlmsg_trim;
 
-	nlmsg_end(skb, nlh);
-	return 0;
+	return nlmsg_end(skb, nlh);
 
 out_nlmsg_trim:
 	nlmsg_cancel(skb, nlh);

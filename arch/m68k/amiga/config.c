@@ -35,6 +35,7 @@
 #include <asm/amigahw.h>
 #include <asm/amigaints.h>
 #include <asm/irq.h>
+#include <asm/rtc.h>
 #include <asm/machdep.h>
 #include <asm/io.h>
 
@@ -182,7 +183,7 @@ int __init amiga_parse_bootinfo(const struct bi_record *record)
 			dev->boardaddr = be32_to_cpu(cd->cd_BoardAddr);
 			dev->boardsize = be32_to_cpu(cd->cd_BoardSize);
 		} else
-			pr_warn("amiga_parse_bootinfo: too many AutoConfig devices\n");
+			printk("amiga_parse_bootinfo: too many AutoConfig devices\n");
 #endif /* CONFIG_ZORRO */
 		break;
 
@@ -208,9 +209,9 @@ static void __init amiga_identify(void)
 
 	memset(&amiga_hw_present, 0, sizeof(amiga_hw_present));
 
-	pr_info("Amiga hardware found: ");
+	printk("Amiga hardware found: ");
 	if (amiga_model >= AMI_500 && amiga_model <= AMI_DRACO) {
-		pr_cont("[%s] ", amiga_models[amiga_model-AMI_500]);
+		printk("[%s] ", amiga_models[amiga_model-AMI_500]);
 		strcat(amiga_model_name, amiga_models[amiga_model-AMI_500]);
 	}
 
@@ -321,7 +322,7 @@ static void __init amiga_identify(void)
 
 #define AMIGAHW_ANNOUNCE(name, str)		\
 	if (AMIGAHW_PRESENT(name))		\
-		pr_cont(str)
+		printk(str)
 
 	AMIGAHW_ANNOUNCE(AMI_VIDEO, "VIDEO ");
 	AMIGAHW_ANNOUNCE(AMI_BLITTER, "BLITTER ");
@@ -353,8 +354,8 @@ static void __init amiga_identify(void)
 	AMIGAHW_ANNOUNCE(MAGIC_REKICK, "MAGIC_REKICK ");
 	AMIGAHW_ANNOUNCE(PCMCIA, "PCMCIA ");
 	if (AMIGAHW_PRESENT(ZORRO))
-		pr_cont("ZORRO%s ", AMIGAHW_PRESENT(ZORRO3) ? "3" : "");
-	pr_cont("\n");
+		printk("ZORRO%s ", AMIGAHW_PRESENT(ZORRO3) ? "3" : "");
+	printk("\n");
 
 #undef AMIGAHW_ANNOUNCE
 }
@@ -396,7 +397,7 @@ void __init config_amiga(void)
 	mach_max_dma_address = 0xffffffff;
 
 	mach_reset           = amiga_reset;
-#if IS_ENABLED(CONFIG_INPUT_M68K_BEEP)
+#if defined(CONFIG_INPUT_M68K_BEEP) || defined(CONFIG_INPUT_M68K_BEEP_MODULE)
 	mach_beep            = amiga_mksound;
 #endif
 
@@ -423,7 +424,7 @@ void __init config_amiga(void)
 			if (m68k_memory[i].addr < 16*1024*1024) {
 				if (i == 0) {
 					/* don't cut off the branch we're sitting on */
-					pr_warn("Warning: kernel runs in Zorro II memory\n");
+					printk("Warning: kernel runs in Zorro II memory\n");
 					continue;
 				}
 				disabled_z2mem += m68k_memory[i].size;
@@ -434,8 +435,8 @@ void __init config_amiga(void)
 			}
 		}
 		if (disabled_z2mem)
-			pr_info("%dK of Zorro II memory will not be used as system memory\n",
-				disabled_z2mem>>10);
+		printk("%dK of Zorro II memory will not be used as system memory\n",
+		disabled_z2mem>>10);
 	}
 
 	/* request all RAM */
@@ -474,7 +475,7 @@ static void __init amiga_sched_init(irq_handler_t timer_routine)
 	jiffy_ticks = DIV_ROUND_CLOSEST(amiga_eclock, HZ);
 
 	if (request_resource(&mb_resources._ciab, &sched_res))
-		pr_warn("Cannot allocate ciab.ta{lo,hi}\n");
+		printk("Cannot allocate ciab.ta{lo,hi}\n");
 	ciab.cra &= 0xC0;   /* turn off timer A, continuous mode, from Eclk */
 	ciab.talo = jiffy_ticks % 256;
 	ciab.tahi = jiffy_ticks / 256;
@@ -786,7 +787,8 @@ static void amiga_get_hardware_list(struct seq_file *m)
 	if (AMIGAHW_PRESENT(name))			\
 		seq_printf (m, "\t%s\n", str)
 
-	seq_puts(m, "Detected hardware:\n");
+	seq_printf (m, "Detected hardware:\n");
+
 	AMIGAHW_ANNOUNCE(AMI_VIDEO, "Amiga Video");
 	AMIGAHW_ANNOUNCE(AMI_BLITTER, "Blitter");
 	AMIGAHW_ANNOUNCE(AMBER_FF, "Amber Flicker Fixer");

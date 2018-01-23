@@ -119,6 +119,7 @@ static void mmp_sspa_shutdown(struct snd_pcm_substream *substream,
 	clk_disable(priv->sspa->clk);
 	clk_disable(priv->sysclk);
 
+	return;
 }
 
 /*
@@ -471,6 +472,7 @@ static int asoc_mmp_sspa_remove(struct platform_device *pdev)
 static struct platform_driver asoc_mmp_sspa_driver = {
 	.driver = {
 		.name = "mmp-sspa-dai",
+		.owner = THIS_MODULE,
 	},
 	.probe = asoc_mmp_sspa_probe,
 	.remove = asoc_mmp_sspa_remove,
@@ -481,4 +483,3 @@ module_platform_driver(asoc_mmp_sspa_driver);
 MODULE_AUTHOR("Leo Yan <leoy@marvell.com>");
 MODULE_DESCRIPTION("MMP SSPA SoC Interface");
 MODULE_LICENSE("GPL");
-MODULE_ALIAS("platform:mmp-sspa-dai");

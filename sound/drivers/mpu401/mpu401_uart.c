@@ -28,7 +28,7 @@
  *
  */
 
-#include <linux/io.h>
+#include <asm/io.h>
 #include <linux/delay.h>
 #include <linux/init.h>
 #include <linux/slab.h>
@@ -176,7 +176,8 @@ static void snd_mpu401_uart_timer(unsigned long data)
 
 	spin_lock_irqsave(&mpu->timer_lock, flags);
 	/*mpu->mode |= MPU401_MODE_TIMER;*/
-	mod_timer(&mpu->timer,  1 + jiffies);
+	mpu->timer.expires = 1 + jiffies;
+	add_timer(&mpu->timer);
 	spin_unlock_irqrestore(&mpu->timer_lock, flags);
 	if (mpu->rmidi)
 		_snd_mpu401_uart_interrupt(mpu);
@@ -191,9 +192,11 @@ static void snd_mpu401_uart_add_timer (struct snd_mpu401 *mpu, int input)
 
 	spin_lock_irqsave (&mpu->timer_lock, flags);
 	if (mpu->timer_invoked == 0) {
-		setup_timer(&mpu->timer, snd_mpu401_uart_timer,
-			    (unsigned long)mpu);
-		mod_timer(&mpu->timer, 1 + jiffies);
+		init_timer(&mpu->timer);
+		mpu->timer.data = (unsigned long)mpu;
+		mpu->timer.function = snd_mpu401_uart_timer;
+		mpu->timer.expires = 1 + jiffies;
+		add_timer(&mpu->timer);
 	} 
 	mpu->timer_invoked |= input ? MPU401_MODE_INPUT_TIMER :
 		MPU401_MODE_OUTPUT_TIMER;
@@ -481,14 +484,14 @@ snd_mpu401_uart_output_trigger(struct snd_rawmidi_substream *substream, int up)
 
  */
 
-static const struct snd_rawmidi_ops snd_mpu401_uart_output =
+static struct snd_rawmidi_ops snd_mpu401_uart_output =
 {
 	.open =		snd_mpu401_uart_output_open,
 	.close =	snd_mpu401_uart_output_close,
 	.trigger =	snd_mpu401_uart_output_trigger,
 };
 
-static const struct snd_rawmidi_ops snd_mpu401_uart_input =
+static struct snd_rawmidi_ops snd_mpu401_uart_input =
 {
 	.open =		snd_mpu401_uart_input_open,
 	.close =	snd_mpu401_uart_input_close,

@@ -11,7 +11,6 @@
 #include <linux/module.h>
 #include <linux/kernel.h>
 #include <linux/cpufreq.h>
-#include <linux/cpu_cooling.h>
 #include <linux/delay.h>
 #include <linux/slab.h>
 #include <linux/platform_device.h>
@@ -19,7 +18,6 @@
 
 static struct cpufreq_frequency_table *freq_table;
 static struct clk *armss_clk;
-static struct thermal_cooling_device *cdev;
 
 static int dbx500_cpufreq_target(struct cpufreq_policy *policy,
 				unsigned int index)
@@ -34,22 +32,6 @@ static int dbx500_cpufreq_init(struct cpufreq_policy *policy)
 	return cpufreq_generic_init(policy, freq_table, 20 * 1000);
 }
 
-static int dbx500_cpufreq_exit(struct cpufreq_policy *policy)
-{
-	if (!IS_ERR(cdev))
-		cpufreq_cooling_unregister(cdev);
-	return 0;
-}
-
-static void dbx500_cpufreq_ready(struct cpufreq_policy *policy)
-{
-	cdev = cpufreq_cooling_register(policy->cpus);
-	if (IS_ERR(cdev))
-		pr_err("Failed to register cooling device %ld\n", PTR_ERR(cdev));
-	else
-		pr_info("Cooling device registered: %s\n", cdev->type);
-}
-
 static struct cpufreq_driver dbx500_cpufreq_driver = {
 	.flags  = CPUFREQ_STICKY | CPUFREQ_CONST_LOOPS |
 			CPUFREQ_NEED_INITIAL_FREQ_CHECK,
@@ -57,15 +39,13 @@ static struct cpufreq_driver dbx500_cpufreq_driver = {
 	.target_index = dbx500_cpufreq_target,
 	.get    = cpufreq_generic_get,
 	.init   = dbx500_cpufreq_init,
-	.exit  = dbx500_cpufreq_exit,
-	.ready  = dbx500_cpufreq_ready,
 	.name   = "DBX500",
 	.attr   = cpufreq_generic_attr,
 };
 
 static int dbx500_cpufreq_probe(struct platform_device *pdev)
 {
-	struct cpufreq_frequency_table *pos;
+	int i = 0;
 
 	freq_table = dev_get_platdata(&pdev->dev);
 	if (!freq_table) {
@@ -80,8 +60,10 @@ static int dbx500_cpufreq_probe(struct platform_device *pdev)
 	}
 
 	pr_info("dbx500-cpufreq: Available frequencies:\n");
-	cpufreq_for_each_entry(pos, freq_table)
-		pr_info("  %d Mhz\n", pos->frequency / 1000);
+	while (freq_table[i].frequency != CPUFREQ_TABLE_END) {
+		pr_info("  %d Mhz\n", freq_table[i].frequency/1000);
+		i++;
+	}
 
 	return cpufreq_register_driver(&dbx500_cpufreq_driver);
 }
@@ -89,6 +71,7 @@ static int dbx500_cpufreq_probe(struct platform_device *pdev)
 static struct platform_driver dbx500_cpufreq_plat_driver = {
 	.driver = {
 		.name = "cpufreq-ux500",
+		.owner = THIS_MODULE,
 	},
 	.probe = dbx500_cpufreq_probe,
 };

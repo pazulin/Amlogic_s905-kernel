@@ -1073,6 +1073,8 @@ set_cs_func(struct IsdnCardState *cs)
 	cs->writeisacfifo = &dummyf;
 	cs->BC_Read_Reg = &ReadReg;
 	cs->BC_Write_Reg = &WriteReg;
-	setup_timer(&cs->dbusytimer, (void *)hfc_dbusy_timer, (long)cs);
+	cs->dbusytimer.function = (void *) hfc_dbusy_timer;
+	cs->dbusytimer.data = (long) cs;
+	init_timer(&cs->dbusytimer);
 	INIT_WORK(&cs->tqueue, hfcd_bh);
 }

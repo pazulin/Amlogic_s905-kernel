@@ -28,9 +28,10 @@
 #include <linux/io.h>
 #include <linux/of.h>
 #include <linux/input.h>
-#include <linux/input/matrix_keypad.h>
 #include <linux/slab.h>
 #include <linux/pm_runtime.h>
+
+#include <linux/platform_data/omap4-keypad.h>
 
 /* OMAP4 registers */
 #define OMAP4_KBD_REVISION		0x00
@@ -217,14 +218,15 @@ static void omap4_keypad_close(struct input_dev *input)
 	pm_runtime_put_sync(input->dev.parent);
 }
 
+#ifdef CONFIG_OF
 static int omap4_keypad_parse_dt(struct device *dev,
 				 struct omap4_keypad *keypad_data)
 {
 	struct device_node *np = dev->of_node;
 	int err;
 
-	err = matrix_keypad_parse_properties(dev, &keypad_data->rows,
-					     &keypad_data->cols);
+	err = matrix_keypad_parse_of_params(dev, &keypad_data->rows,
+					    &keypad_data->cols);
 	if (err)
 		return err;
 
@@ -233,9 +235,20 @@ static int omap4_keypad_parse_dt(struct device *dev,
 
 	return 0;
 }
+#else
+static inline int omap4_keypad_parse_dt(struct device *dev,
+					struct omap4_keypad *keypad_data)
+{
+	return -ENOSYS;
+}
+#endif
 
 static int omap4_keypad_probe(struct platform_device *pdev)
 {
+	const struct omap4_keypad_platform_data *pdata =
+				dev_get_platdata(&pdev->dev);
+	const struct matrix_keymap_data *keymap_data =
+				pdata ? pdata->keymap_data : NULL;
 	struct omap4_keypad *keypad_data;
 	struct input_dev *input_dev;
 	struct resource *res;
@@ -264,9 +277,14 @@ static int omap4_keypad_probe(struct platform_device *pdev)
 
 	keypad_data->irq = irq;
 
-	error = omap4_keypad_parse_dt(&pdev->dev, keypad_data);
-	if (error)
-		goto err_free_keypad;
+	if (pdata) {
+		keypad_data->rows = pdata->rows;
+		keypad_data->cols = pdata->cols;
+	} else {
+		error = omap4_keypad_parse_dt(&pdev->dev, keypad_data);
+		if (error)
+			return error;
+	}
 
 	res = request_mem_region(res->start, resource_size(res), pdev->name);
 	if (!res) {
@@ -345,7 +363,7 @@ static int omap4_keypad_probe(struct platform_device *pdev)
 		goto err_free_input;
 	}
 
-	error = matrix_keypad_build_keymap(NULL, NULL,
+	error = matrix_keypad_build_keymap(keymap_data, NULL,
 					   keypad_data->rows, keypad_data->cols,
 					   keypad_data->keymap, input_dev);
 	if (error) {
@@ -358,7 +376,7 @@ static int omap4_keypad_probe(struct platform_device *pdev)
 				     "omap4-keypad", keypad_data);
 	if (error) {
 		dev_err(&pdev->dev, "failed to register interrupt\n");
-		goto err_free_keymap;
+		goto err_free_input;
 	}
 
 	device_init_wakeup(&pdev->dev, true);
@@ -375,6 +393,7 @@ static int omap4_keypad_probe(struct platform_device *pdev)
 
 err_pm_disable:
 	pm_runtime_disable(&pdev->dev);
+	device_init_wakeup(&pdev->dev, false);
 	free_irq(keypad_data->irq, keypad_data);
 err_free_keymap:
 	kfree(keypad_data->keymap);
@@ -400,6 +419,8 @@ static int omap4_keypad_remove(struct platform_device *pdev)
 
 	pm_runtime_disable(&pdev->dev);
 
+	device_init_wakeup(&pdev->dev, false);
+
 	input_unregister_device(keypad_data->input);
 
 	iounmap(keypad_data->base);
@@ -413,11 +434,13 @@ static int omap4_keypad_remove(struct platform_device *pdev)
 	return 0;
 }
 
+#ifdef CONFIG_OF
 static const struct of_device_id omap_keypad_dt_match[] = {
 	{ .compatible = "ti,omap4-keypad" },
 	{},
 };
 MODULE_DEVICE_TABLE(of, omap_keypad_dt_match);
+#endif
 
 #ifdef CONFIG_PM_SLEEP
 static int omap4_keypad_suspend(struct device *dev)
@@ -457,8 +480,9 @@ static struct platform_driver omap4_keypad_driver = {
 	.remove		= omap4_keypad_remove,
 	.driver		= {
 		.name	= "omap4-keypad",
+		.owner	= THIS_MODULE,
 		.pm	= &omap4_keypad_pm_ops,
-		.of_match_table = omap_keypad_dt_match,
+		.of_match_table = of_match_ptr(omap_keypad_dt_match),
 	},
 };
 module_platform_driver(omap4_keypad_driver);

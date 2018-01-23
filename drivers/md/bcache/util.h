@@ -5,7 +5,6 @@
 #include <linux/blkdev.h>
 #include <linux/errno.h>
 #include <linux/kernel.h>
-#include <linux/sched/clock.h>
 #include <linux/llist.h>
 #include <linux/ratelimit.h>
 #include <linux/vmalloc.h>
@@ -43,13 +42,20 @@ struct closure;
 	(heap)->used = 0;						\
 	(heap)->size = (_size);						\
 	_bytes = (heap)->size * sizeof(*(heap)->data);			\
-	(heap)->data = kvmalloc(_bytes, (gfp) & GFP_KERNEL);		\
+	(heap)->data = NULL;						\
+	if (_bytes < KMALLOC_MAX_SIZE)					\
+		(heap)->data = kmalloc(_bytes, (gfp));			\
+	if ((!(heap)->data) && ((gfp) & GFP_KERNEL))			\
+		(heap)->data = vmalloc(_bytes);				\
 	(heap)->data;							\
 })
 
 #define free_heap(heap)							\
 do {									\
-	kvfree((heap)->data);						\
+	if (is_vmalloc_addr((heap)->data))				\
+		vfree((heap)->data);					\
+	else								\
+		kfree((heap)->data);					\
 	(heap)->data = NULL;						\
 } while (0)
 
@@ -132,8 +138,12 @@ do {									\
 									\
 	(fifo)->mask = _allocated_size - 1;				\
 	(fifo)->front = (fifo)->back = 0;				\
+	(fifo)->data = NULL;						\
 									\
-	(fifo)->data = kvmalloc(_bytes, (gfp) & GFP_KERNEL);		\
+	if (_bytes < KMALLOC_MAX_SIZE)					\
+		(fifo)->data = kmalloc(_bytes, (gfp));			\
+	if ((!(fifo)->data) && ((gfp) & GFP_KERNEL))			\
+		(fifo)->data = vmalloc(_bytes);				\
 	(fifo)->data;							\
 })
 
@@ -153,7 +163,10 @@ do {									\
 
 #define free_fifo(fifo)							\
 do {									\
-	kvfree((fifo)->data);						\
+	if (is_vmalloc_addr((fifo)->data))				\
+		vfree((fifo)->data);					\
+	else								\
+		kfree((fifo)->data);					\
 	(fifo)->data = NULL;						\
 } while (0)
 
@@ -403,8 +416,8 @@ do {									\
 			  average_frequency,	frequency_units);	\
 	__print_time_stat(stats, name,					\
 			  average_duration,	duration_units);	\
-	sysfs_print(name ## _ ##max_duration ## _ ## duration_units,	\
-			div_u64((stats)->max_duration, NSEC_PER_ ## duration_units));\
+	__print_time_stat(stats, name,					\
+			  max_duration,		duration_units);	\
 									\
 	sysfs_print(name ## _last_ ## frequency_units, (stats)->last	\
 		    ? div_s64(local_clock() - (stats)->last,		\
@@ -563,10 +576,10 @@ static inline sector_t bdev_sectors(struct block_device *bdev)
 	return bdev->bd_inode->i_size >> 9;
 }
 
-#define closure_bio_submit(bio, cl)					\
+#define closure_bio_submit(bio, cl, dev)				\
 do {									\
 	closure_get(cl);						\
-	generic_make_request(bio);					\
+	bch_generic_make_request(bio, &(dev)->bio_split_hook);		\
 } while (0)
 
 uint64_t bch_crc64_update(uint64_t, const void *, size_t);

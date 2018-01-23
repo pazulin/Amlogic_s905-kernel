@@ -22,16 +22,13 @@
 #include <linux/errno.h>
 #include <linux/kvm_host.h>
 #include <linux/kvm.h>
-#include <linux/hw_breakpoint.h>
 
 #include <kvm/arm_arch_timer.h>
 
 #include <asm/cputype.h>
 #include <asm/ptrace.h>
 #include <asm/kvm_arm.h>
-#include <asm/kvm_asm.h>
 #include <asm/kvm_coproc.h>
-#include <asm/kvm_mmu.h>
 
 /*
  * ARMv8 Reset Values
@@ -46,11 +43,6 @@ static const struct kvm_regs default_regs_reset32 = {
 			COMPAT_PSR_I_BIT | COMPAT_PSR_F_BIT),
 };
 
-static const struct kvm_irq_level default_ptimer_irq = {
-	.irq	= 30,
-	.level	= 1,
-};
-
 static const struct kvm_irq_level default_vtimer_irq = {
 	.irq	= 27,
 	.level	= 1,
@@ -60,36 +52,17 @@ static bool cpu_has_32bit_el1(void)
 {
 	u64 pfr0;
 
-	pfr0 = read_sanitised_ftr_reg(SYS_ID_AA64PFR0_EL1);
+	pfr0 = read_cpuid(ID_AA64PFR0_EL1);
 	return !!(pfr0 & 0x20);
 }
 
-/**
- * kvm_arch_dev_ioctl_check_extension
- *
- * We currently assume that the number of HW registers is uniform
- * across all CPUs (see cpuinfo_sanity_check).
- */
-int kvm_arch_dev_ioctl_check_extension(struct kvm *kvm, long ext)
+int kvm_arch_dev_ioctl_check_extension(long ext)
 {
 	int r;
 
 	switch (ext) {
 	case KVM_CAP_ARM_EL1_32BIT:
 		r = cpu_has_32bit_el1();
-		break;
-	case KVM_CAP_GUEST_DEBUG_HW_BPS:
-		r = get_num_brps();
-		break;
-	case KVM_CAP_GUEST_DEBUG_HW_WPS:
-		r = get_num_wrps();
-		break;
-	case KVM_CAP_ARM_PMU_V3:
-		r = kvm_arm_support_pmu_v3();
-		break;
-	case KVM_CAP_SET_GUEST_DEBUG:
-	case KVM_CAP_VCPU_ATTRIBUTES:
-		r = 1;
 		break;
 	default:
 		r = 0;
@@ -103,13 +76,12 @@ int kvm_arch_dev_ioctl_check_extension(struct kvm *kvm, long ext)
  * @vcpu: The VCPU pointer
  *
  * This function finds the right table above and sets the registers on
- * the virtual CPU struct to their architecturally defined reset
+ * the virtual CPU struct to their architectually defined reset
  * values.
  */
 int kvm_reset_vcpu(struct kvm_vcpu *vcpu)
 {
 	const struct kvm_irq_level *cpu_vtimer_irq;
-	const struct kvm_irq_level *cpu_ptimer_irq;
 	const struct kvm_regs *cpu_reset;
 
 	switch (vcpu->arch.target) {
@@ -118,12 +90,12 @@ int kvm_reset_vcpu(struct kvm_vcpu *vcpu)
 			if (!cpu_has_32bit_el1())
 				return -EINVAL;
 			cpu_reset = &default_regs_reset32;
+			vcpu->arch.hcr_el2 &= ~HCR_RW;
 		} else {
 			cpu_reset = &default_regs_reset;
 		}
 
 		cpu_vtimer_irq = &default_vtimer_irq;
-		cpu_ptimer_irq = &default_ptimer_irq;
 		break;
 	}
 
@@ -133,9 +105,8 @@ int kvm_reset_vcpu(struct kvm_vcpu *vcpu)
 	/* Reset system registers */
 	kvm_reset_sys_regs(vcpu);
 
-	/* Reset PMU */
-	kvm_pmu_vcpu_reset(vcpu);
-
 	/* Reset timer */
-	return kvm_timer_vcpu_reset(vcpu, cpu_vtimer_irq, cpu_ptimer_irq);
+	kvm_timer_vcpu_reset(vcpu, cpu_vtimer_irq);
+
+	return 0;
 }

@@ -23,9 +23,7 @@
  * 51 Franklin St, Fifth Floor, Boston, MA  02110-1301  USA
  */
 
-#include <linux/extable.h>
-#include <linux/ptrace.h>
-#include <asm/extable.h>
+#include <linux/module.h>
 
 int fixup_exception(struct pt_regs *regs)
 {

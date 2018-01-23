@@ -6,7 +6,6 @@
 
 #include <linux/module.h>
 #include <linux/sched.h>
-#include <linux/mm_types.h>
 #include <linux/flat.h>
 
 #define FLAT_BFIN_RELOC_TYPE_16_BIT 0

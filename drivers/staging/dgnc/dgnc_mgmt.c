@@ -11,88 +11,129 @@
  * but WITHOUT ANY WARRANTY, EXPRESS OR IMPLIED; without even the
  * implied warranty of MERCHANTABILITY or FITNESS FOR A PARTICULAR
  * PURPOSE.  See the GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *
+ *
+ *	NOTE TO LINUX KERNEL HACKERS:  DO NOT REFORMAT THIS CODE!
+ *
+ *	This is shared code between Digi's CVS archive and the
+ *	Linux Kernel sources.
+ *	Changing the source just for reformatting needlessly breaks
+ *	our CVS diff history.
+ *
+ *	Send any bug fixes/changes to:  Eng.Linux at digi dot com.
+ *	Thank you.
+ *
  */
 
-/*
+/************************************************************************
+ *
  * This file implements the mgmt functionality for the
  * Neo and ClassicBoard based product lines.
+ *
+ ************************************************************************
  */
-
 #include <linux/kernel.h>
 #include <linux/ctype.h>
-#include <linux/sched.h>
-#include <linux/interrupt.h>
+#include <linux/sched.h>	/* For jiffies, task states */
+#include <linux/interrupt.h>	/* For tasklet and interrupt structs/defines */
 #include <linux/serial_reg.h>
 #include <linux/termios.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>	/* For copy_from_user/copy_to_user */
 
 #include "dgnc_driver.h"
 #include "dgnc_pci.h"
+#include "dgnc_kcompat.h"	/* Kernel 2.4/2.6 compat includes */
 #include "dgnc_mgmt.h"
+#include "dpacompat.h"
+
 
 /* Our "in use" variables, to enforce 1 open only */
 static int dgnc_mgmt_in_use[MAXMGMTDEVICES];
 
-/**
- * dgnc_mgmt_open() - Open the mgmt/downld/dpa device.
+
+/*
+ * dgnc_mgmt_open()
+ *
+ * Open the mgmt/downld/dpa device
  */
 int dgnc_mgmt_open(struct inode *inode, struct file *file)
 {
-	unsigned long flags;
+	unsigned long lock_flags;
 	unsigned int minor = iminor(inode);
-	int rc = 0;
 
-	spin_lock_irqsave(&dgnc_global_lock, flags);
+	DPR_MGMT(("dgnc_mgmt_open start.\n"));
 
-	if (minor >= MAXMGMTDEVICES) {
-		rc = -ENXIO;
-		goto out;
+	DGNC_LOCK(dgnc_global_lock, lock_flags);
+
+	/* mgmt device */
+	if (minor < MAXMGMTDEVICES) {
+		/* Only allow 1 open at a time on mgmt device */
+		if (dgnc_mgmt_in_use[minor]) {
+			DGNC_UNLOCK(dgnc_global_lock, lock_flags);
+			return -EBUSY;
+		}
+		dgnc_mgmt_in_use[minor]++;
 	}
-	/* Only allow 1 open at a time on mgmt device */
-	if (dgnc_mgmt_in_use[minor]) {
-		rc = -EBUSY;
-		goto out;
+	else {
+		DGNC_UNLOCK(dgnc_global_lock, lock_flags);
+		return -ENXIO;
 	}
-	dgnc_mgmt_in_use[minor]++;
 
-out:
-	spin_unlock_irqrestore(&dgnc_global_lock, flags);
+	DGNC_UNLOCK(dgnc_global_lock, lock_flags);
 
-	return rc;
+	DPR_MGMT(("dgnc_mgmt_open finish.\n"));
+
+	return 0;
 }
 
-/**
- * dgnc_mgmt_close() - Close the mgmt/dpa device
+
+/*
+ * dgnc_mgmt_close()
+ *
+ * Open the mgmt/dpa device
  */
 int dgnc_mgmt_close(struct inode *inode, struct file *file)
 {
-	unsigned long flags;
+	unsigned long lock_flags;
 	unsigned int minor = iminor(inode);
-	int rc = 0;
 
-	spin_lock_irqsave(&dgnc_global_lock, flags);
+	DPR_MGMT(("dgnc_mgmt_close start.\n"));
 
-	if (minor >= MAXMGMTDEVICES) {
-		rc = -ENXIO;
-		goto out;
+	DGNC_LOCK(dgnc_global_lock, lock_flags);
+
+	/* mgmt device */
+	if (minor < MAXMGMTDEVICES) {
+		if (dgnc_mgmt_in_use[minor]) {
+			dgnc_mgmt_in_use[minor] = 0;
+		}
 	}
-	dgnc_mgmt_in_use[minor] = 0;
+	DGNC_UNLOCK(dgnc_global_lock, lock_flags);
 
-out:
-	spin_unlock_irqrestore(&dgnc_global_lock, flags);
+	DPR_MGMT(("dgnc_mgmt_close finish.\n"));
 
-	return rc;
+	return 0;
 }
 
-/**
- * dgnc_mgmt_ioctl() - Ioctl the mgmt/dpa device.
+
+/*
+ * dgnc_mgmt_ioctl()
+ *
+ * ioctl the mgmt/dpa device
  */
+
 long dgnc_mgmt_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 {
-	unsigned long flags;
-	void __user *uarg = (void __user *)arg;
+	unsigned long lock_flags;
+	void __user *uarg = (void __user *) arg;
+
+	DPR_MGMT(("dgnc_mgmt_ioctl start.\n"));
 
 	switch (cmd) {
+
 	case DIGI_GETDD:
 	{
 		/*
@@ -102,15 +143,17 @@ long dgnc_mgmt_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		 */
 		struct digi_dinfo ddi;
 
-		spin_lock_irqsave(&dgnc_global_lock, flags);
+		DGNC_LOCK(dgnc_global_lock, lock_flags);
 
-		memset(&ddi, 0, sizeof(ddi));
-		ddi.dinfo_nboards = dgnc_num_boards;
+		ddi.dinfo_nboards = dgnc_NumBoards;
 		sprintf(ddi.dinfo_version, "%s", DG_PART);
 
-		spin_unlock_irqrestore(&dgnc_global_lock, flags);
+		DGNC_UNLOCK(dgnc_global_lock, lock_flags);
 
-		if (copy_to_user(uarg, &ddi, sizeof(ddi)))
+		DPR_MGMT(("DIGI_GETDD returning numboards: %d version: %s\n",
+			ddi.dinfo_nboards, ddi.dinfo_version));
+
+		if (copy_to_user(uarg, &ddi, sizeof (ddi)))
 			return -EFAULT;
 
 		break;
@@ -122,32 +165,37 @@ long dgnc_mgmt_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 		struct digi_info di;
 
-		if (copy_from_user(&brd, uarg, sizeof(int)))
+		if (copy_from_user(&brd, uarg, sizeof(int))) {
 			return -EFAULT;
+		}
 
-		if (brd < 0 || brd >= dgnc_num_boards)
+		DPR_MGMT(("DIGI_GETBD asking about board: %d\n", brd));
+
+		if ((brd < 0) || (brd > dgnc_NumBoards) || (dgnc_NumBoards == 0))
 			return -ENODEV;
 
 		memset(&di, 0, sizeof(di));
 
 		di.info_bdnum = brd;
 
-		spin_lock_irqsave(&dgnc_board[brd]->bd_lock, flags);
+		DGNC_LOCK(dgnc_Board[brd]->bd_lock, lock_flags);
 
-		di.info_bdtype = dgnc_board[brd]->dpatype;
-		di.info_bdstate = dgnc_board[brd]->dpastatus;
+		di.info_bdtype = dgnc_Board[brd]->dpatype;
+		di.info_bdstate = dgnc_Board[brd]->dpastatus;
 		di.info_ioport = 0;
-		di.info_physaddr = (ulong)dgnc_board[brd]->membase;
-		di.info_physsize = (ulong)dgnc_board[brd]->membase
-			- dgnc_board[brd]->membase_end;
-		if (dgnc_board[brd]->state != BOARD_FAILED)
-			di.info_nports = dgnc_board[brd]->nasync;
+		di.info_physaddr = (ulong) dgnc_Board[brd]->membase;
+		di.info_physsize = (ulong) dgnc_Board[brd]->membase - dgnc_Board[brd]->membase_end;
+		if (dgnc_Board[brd]->state != BOARD_FAILED)
+			di.info_nports = dgnc_Board[brd]->nasync;
 		else
 			di.info_nports = 0;
 
-		spin_unlock_irqrestore(&dgnc_board[brd]->bd_lock, flags);
+		DGNC_UNLOCK(dgnc_Board[brd]->bd_lock, lock_flags);
 
-		if (copy_to_user(uarg, &di, sizeof(di)))
+		DPR_MGMT(("DIGI_GETBD returning type: %x state: %x ports: %x size: %x\n",
+			di.info_bdtype, di.info_bdstate, di.info_nports, di.info_physsize));
+
+		if (copy_to_user(uarg, &di, sizeof (di)))
 			return -EFAULT;
 
 		break;
@@ -157,34 +205,40 @@ long dgnc_mgmt_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 	{
 		struct channel_t *ch;
 		struct ni_info ni;
-		unsigned char mstat = 0;
+		uchar mstat = 0;
 		uint board = 0;
 		uint channel = 0;
 
-		if (copy_from_user(&ni, uarg, sizeof(ni)))
+		if (copy_from_user(&ni, uarg, sizeof(ni))) {
 			return -EFAULT;
+		}
+
+		DPR_MGMT(("DIGI_GETBD asking about board: %d channel: %d\n",
+			ni.board, ni.channel));
 
 		board = ni.board;
 		channel = ni.channel;
 
-		if (board >= dgnc_num_boards)
+		/* Verify boundaries on board */
+		if ((board > dgnc_NumBoards) || (dgnc_NumBoards == 0))
 			return -ENODEV;
 
-		if (channel >= dgnc_board[board]->nasync)
+		/* Verify boundaries on channel */
+		if ((channel < 0) || (channel > dgnc_Board[board]->nasync))
 			return -ENODEV;
 
-		ch = dgnc_board[board]->channels[channel];
+		ch = dgnc_Board[board]->channels[channel];
 
-		if (!ch)
+		if (!ch || ch->magic != DGNC_CHANNEL_MAGIC)
 			return -ENODEV;
 
 		memset(&ni, 0, sizeof(ni));
 		ni.board = board;
 		ni.channel = channel;
 
-		spin_lock_irqsave(&ch->ch_lock, flags);
+		DGNC_LOCK(ch->ch_lock, lock_flags);
 
-		mstat = ch->ch_mostat | ch->ch_mistat;
+		mstat = (ch->ch_mostat | ch->ch_mistat);
 
 		if (mstat & UART_MCR_DTR) {
 			ni.mstat |= TIOCM_DTR;
@@ -214,14 +268,12 @@ long dgnc_mgmt_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 		ni.cflag = ch->ch_c_cflag;
 		ni.lflag = ch->ch_c_lflag;
 
-		if (ch->ch_digi.digi_flags & CTSPACE ||
-		    ch->ch_c_cflag & CRTSCTS)
+		if (ch->ch_digi.digi_flags & CTSPACE || ch->ch_c_cflag & CRTSCTS)
 			ni.hflow = 1;
 		else
 			ni.hflow = 0;
 
-		if ((ch->ch_flags & CH_STOPI) ||
-		    (ch->ch_flags & CH_FORCED_STOPI))
+		if ((ch->ch_flags & CH_STOPI) || (ch->ch_flags & CH_FORCED_STOPI))
 			ni.recv_stopped = 1;
 		else
 			ni.recv_stopped = 0;
@@ -236,13 +288,18 @@ long dgnc_mgmt_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
 
 		ni.baud = ch->ch_old_baud;
 
-		spin_unlock_irqrestore(&ch->ch_lock, flags);
+		DGNC_UNLOCK(ch->ch_lock, lock_flags);
 
 		if (copy_to_user(uarg, &ni, sizeof(ni)))
 			return -EFAULT;
 
 		break;
 	}
+
+
 	}
+
+	DPR_MGMT(("dgnc_mgmt_ioctl finish.\n"));
+
 	return 0;
 }

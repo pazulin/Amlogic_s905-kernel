@@ -10,8 +10,6 @@
  */
 
 #include <linux/sched.h>
-#include <linux/sched/mm.h>
-#include <linux/sched/task.h>
 #include <linux/mm.h>
 #include <asm/tlbflush.h>
 
@@ -190,7 +188,7 @@ int cxn_pin_by_pid(pid_t pid)
 		task_lock(tsk);
 		if (tsk->mm) {
 			mm = tsk->mm;
-			mmget(mm);
+			atomic_inc(&mm->mm_users);
 			ret = 0;
 		}
 		task_unlock(tsk);

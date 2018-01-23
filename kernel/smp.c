@@ -3,10 +3,6 @@
  *
  * (C) Jens Axboe <jens.axboe@oracle.com> 2008
  */
-
-#define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
-
-#include <linux/irq_work.h>
 #include <linux/rcupdate.h>
 #include <linux/rculist.h>
 #include <linux/kernel.h>
@@ -16,15 +12,12 @@
 #include <linux/gfp.h>
 #include <linux/smp.h>
 #include <linux/cpu.h>
-#include <linux/sched.h>
-#include <linux/sched/idle.h>
-#include <linux/hypervisor.h>
 
 #include "smpboot.h"
 
 enum {
 	CSD_FLAG_LOCK		= 0x01,
-	CSD_FLAG_SYNCHRONOUS	= 0x02,
+	CSD_FLAG_WAIT		= 0x02,
 };
 
 struct call_function_data {
@@ -36,56 +29,54 @@ static DEFINE_PER_CPU_SHARED_ALIGNED(struct call_function_data, cfd_data);
 
 static DEFINE_PER_CPU_SHARED_ALIGNED(struct llist_head, call_single_queue);
 
-static void flush_smp_call_function_queue(bool warn_cpu_offline);
-
-int smpcfd_prepare_cpu(unsigned int cpu)
+static int
+hotplug_cfd(struct notifier_block *nfb, unsigned long action, void *hcpu)
 {
+	long cpu = (long)hcpu;
 	struct call_function_data *cfd = &per_cpu(cfd_data, cpu);
 
-	if (!zalloc_cpumask_var_node(&cfd->cpumask, GFP_KERNEL,
-				     cpu_to_node(cpu)))
-		return -ENOMEM;
-	cfd->csd = alloc_percpu(struct call_single_data);
-	if (!cfd->csd) {
+	switch (action) {
+	case CPU_UP_PREPARE:
+	case CPU_UP_PREPARE_FROZEN:
+		if (!zalloc_cpumask_var_node(&cfd->cpumask, GFP_KERNEL,
+				cpu_to_node(cpu)))
+			return notifier_from_errno(-ENOMEM);
+		cfd->csd = alloc_percpu(struct call_single_data);
+		if (!cfd->csd) {
+			free_cpumask_var(cfd->cpumask);
+			return notifier_from_errno(-ENOMEM);
+		}
+		break;
+
+#ifdef CONFIG_HOTPLUG_CPU
+	case CPU_UP_CANCELED:
+	case CPU_UP_CANCELED_FROZEN:
+
+	case CPU_DEAD:
+	case CPU_DEAD_FROZEN:
 		free_cpumask_var(cfd->cpumask);
-		return -ENOMEM;
-	}
+		free_percpu(cfd->csd);
+		break;
+#endif
+	};
 
-	return 0;
+	return NOTIFY_OK;
 }
 
-int smpcfd_dead_cpu(unsigned int cpu)
-{
-	struct call_function_data *cfd = &per_cpu(cfd_data, cpu);
-
-	free_cpumask_var(cfd->cpumask);
-	free_percpu(cfd->csd);
-	return 0;
-}
-
-int smpcfd_dying_cpu(unsigned int cpu)
-{
-	/*
-	 * The IPIs for the smp-call-function callbacks queued by other
-	 * CPUs might arrive late, either due to hardware latencies or
-	 * because this CPU disabled interrupts (inside stop-machine)
-	 * before the IPIs were sent. So flush out any pending callbacks
-	 * explicitly (without waiting for the IPIs to arrive), to
-	 * ensure that the outgoing CPU doesn't go offline with work
-	 * still pending.
-	 */
-	flush_smp_call_function_queue(false);
-	return 0;
-}
+static struct notifier_block hotplug_cfd_notifier = {
+	.notifier_call		= hotplug_cfd,
+};
 
 void __init call_function_init(void)
 {
+	void *cpu = (void *)(long)smp_processor_id();
 	int i;
 
 	for_each_possible_cpu(i)
 		init_llist_head(&per_cpu(call_single_queue, i));
 
-	smpcfd_prepare_cpu(smp_processor_id());
+	hotplug_cfd(&hotplug_cfd_notifier, CPU_UP_PREPARE, cpu);
+	register_cpu_notifier(&hotplug_cfd_notifier);
 }
 
 /*
@@ -95,12 +86,13 @@ void __init call_function_init(void)
  * previous function call. For multi-cpu calls its even more interesting
  * as we'll have to ensure no other cpu is observing our csd.
  */
-static __always_inline void csd_lock_wait(struct call_single_data *csd)
+static void csd_lock_wait(struct call_single_data *csd)
 {
-	smp_cond_load_acquire(&csd->flags, !(VAL & CSD_FLAG_LOCK));
+	while (csd->flags & CSD_FLAG_LOCK)
+		cpu_relax();
 }
 
-static __always_inline void csd_lock(struct call_single_data *csd)
+static void csd_lock(struct call_single_data *csd)
 {
 	csd_lock_wait(csd);
 	csd->flags |= CSD_FLAG_LOCK;
@@ -110,51 +102,30 @@ static __always_inline void csd_lock(struct call_single_data *csd)
 	 * to ->flags with any subsequent assignments to other
 	 * fields of the specified call_single_data structure:
 	 */
-	smp_wmb();
+	smp_mb();
 }
 
-static __always_inline void csd_unlock(struct call_single_data *csd)
+static void csd_unlock(struct call_single_data *csd)
 {
-	WARN_ON(!(csd->flags & CSD_FLAG_LOCK));
+	WARN_ON((csd->flags & CSD_FLAG_WAIT) && !(csd->flags & CSD_FLAG_LOCK));
 
 	/*
 	 * ensure we're all done before releasing data:
 	 */
-	smp_store_release(&csd->flags, 0);
-}
+	smp_mb();
 
-static DEFINE_PER_CPU_SHARED_ALIGNED(struct call_single_data, csd_data);
+	csd->flags &= ~CSD_FLAG_LOCK;
+}
 
 /*
  * Insert a previously allocated call_single_data element
  * for execution on the given CPU. data must already have
  * ->func, ->info, and ->flags set.
  */
-static int generic_exec_single(int cpu, struct call_single_data *csd,
-			       smp_call_func_t func, void *info)
+static void generic_exec_single(int cpu, struct call_single_data *csd, int wait)
 {
-	if (cpu == smp_processor_id()) {
-		unsigned long flags;
-
-		/*
-		 * We can unlock early even for the synchronous on-stack case,
-		 * since we're doing this from the same CPU..
-		 */
-		csd_unlock(csd);
-		local_irq_save(flags);
-		func(info);
-		local_irq_restore(flags);
-		return 0;
-	}
-
-
-	if ((unsigned)cpu >= nr_cpu_ids || !cpu_online(cpu)) {
-		csd_unlock(csd);
-		return -ENXIO;
-	}
-
-	csd->func = func;
-	csd->info = info;
+	if (wait)
+		csd->flags |= CSD_FLAG_WAIT;
 
 	/*
 	 * The list addition should be visible before sending the IPI
@@ -170,84 +141,40 @@ static int generic_exec_single(int cpu, struct call_single_data *csd,
 	if (llist_add(&csd->llist, &per_cpu(call_single_queue, cpu)))
 		arch_send_call_function_single_ipi(cpu);
 
-	return 0;
+	if (wait)
+		csd_lock_wait(csd);
 }
 
-/**
- * generic_smp_call_function_single_interrupt - Execute SMP IPI callbacks
- *
- * Invoked by arch to handle an IPI for call function single.
- * Must be called with interrupts disabled.
+/*
+ * Invoked by arch to handle an IPI for call function single. Must be
+ * called from the arch with interrupts disabled.
  */
 void generic_smp_call_function_single_interrupt(void)
 {
-	flush_smp_call_function_queue(true);
-}
-
-/**
- * flush_smp_call_function_queue - Flush pending smp-call-function callbacks
- *
- * @warn_cpu_offline: If set to 'true', warn if callbacks were queued on an
- *		      offline CPU. Skip this check if set to 'false'.
- *
- * Flush any pending smp-call-function callbacks queued on this CPU. This is
- * invoked by the generic IPI handler, as well as by a CPU about to go offline,
- * to ensure that all pending IPI callbacks are run before it goes completely
- * offline.
- *
- * Loop through the call_single_queue and run all the queued callbacks.
- * Must be called with interrupts disabled.
- */
-static void flush_smp_call_function_queue(bool warn_cpu_offline)
-{
-	struct llist_head *head;
-	struct llist_node *entry;
-	struct call_single_data *csd, *csd_next;
-	static bool warned;
-
-	WARN_ON(!irqs_disabled());
-
-	head = this_cpu_ptr(&call_single_queue);
-	entry = llist_del_all(head);
-	entry = llist_reverse_order(entry);
-
-	/* There shouldn't be any pending callbacks on an offline CPU. */
-	if (unlikely(warn_cpu_offline && !cpu_online(smp_processor_id()) &&
-		     !warned && !llist_empty(head))) {
-		warned = true;
-		WARN(1, "IPI on offline CPU %d\n", smp_processor_id());
-
-		/*
-		 * We don't have to use the _safe() variant here
-		 * because we are not invoking the IPI handlers yet.
-		 */
-		llist_for_each_entry(csd, entry, llist)
-			pr_warn("IPI callback %pS sent to offline CPU\n",
-				csd->func);
-	}
-
-	llist_for_each_entry_safe(csd, csd_next, entry, llist) {
-		smp_call_func_t func = csd->func;
-		void *info = csd->info;
-
-		/* Do we wait until *after* callback? */
-		if (csd->flags & CSD_FLAG_SYNCHRONOUS) {
-			func(info);
-			csd_unlock(csd);
-		} else {
-			csd_unlock(csd);
-			func(info);
-		}
-	}
+	struct llist_node *entry, *next;
 
 	/*
-	 * Handle irq works queued remotely by irq_work_queue_on().
-	 * Smp functions above are typically synchronous so they
-	 * better run first since some other CPUs may be busy waiting
-	 * for them.
+	 * Shouldn't receive this interrupt on a cpu that is not yet online.
 	 */
-	irq_work_run();
+	WARN_ON_ONCE(!cpu_online(smp_processor_id()));
+
+	entry = llist_del_all(&__get_cpu_var(call_single_queue));
+	entry = llist_reverse_order(entry);
+
+	while (entry) {
+		struct call_single_data *csd;
+
+		next = entry->next;
+
+		csd = llist_entry(entry, struct call_single_data, llist);
+		csd->func(csd->info);
+		csd_unlock(csd);
+
+		entry = next;
+	}
 }
+
+static DEFINE_PER_CPU_SHARED_ALIGNED(struct call_single_data, csd_data);
 
 /*
  * smp_call_function_single - Run a function on a specific CPU
@@ -260,10 +187,12 @@ static void flush_smp_call_function_queue(bool warn_cpu_offline)
 int smp_call_function_single(int cpu, smp_call_func_t func, void *info,
 			     int wait)
 {
-	struct call_single_data *csd;
-	struct call_single_data csd_stack = { .flags = CSD_FLAG_LOCK | CSD_FLAG_SYNCHRONOUS };
+	struct call_single_data d = {
+		.flags = 0,
+	};
+	unsigned long flags;
 	int this_cpu;
-	int err;
+	int err = 0;
 
 	/*
 	 * prevent preemption and reschedule on another processor,
@@ -280,58 +209,32 @@ int smp_call_function_single(int cpu, smp_call_func_t func, void *info,
 	WARN_ON_ONCE(cpu_online(this_cpu) && irqs_disabled()
 		     && !oops_in_progress);
 
-	csd = &csd_stack;
-	if (!wait) {
-		csd = this_cpu_ptr(&csd_data);
-		csd_lock(csd);
+	if (cpu == this_cpu) {
+		local_irq_save(flags);
+		func(info);
+		local_irq_restore(flags);
+	} else {
+		if ((unsigned)cpu < nr_cpu_ids && cpu_online(cpu)) {
+			struct call_single_data *csd = &d;
+
+			if (!wait)
+				csd = &__get_cpu_var(csd_data);
+
+			csd_lock(csd);
+
+			csd->func = func;
+			csd->info = info;
+			generic_exec_single(cpu, csd, wait);
+		} else {
+			err = -ENXIO;	/* CPU not online */
+		}
 	}
-
-	err = generic_exec_single(cpu, csd, func, info);
-
-	if (wait)
-		csd_lock_wait(csd);
 
 	put_cpu();
 
 	return err;
 }
 EXPORT_SYMBOL(smp_call_function_single);
-
-/**
- * smp_call_function_single_async(): Run an asynchronous function on a
- * 			         specific CPU.
- * @cpu: The CPU to run on.
- * @csd: Pre-allocated and setup data structure
- *
- * Like smp_call_function_single(), but the call is asynchonous and
- * can thus be done from contexts with disabled interrupts.
- *
- * The caller passes his own pre-allocated data structure
- * (ie: embedded in an object) and is responsible for synchronizing it
- * such that the IPIs performed on the @csd are strictly serialized.
- *
- * NOTE: Be careful, there is unfortunately no current debugging facility to
- * validate the correctness of this serialization.
- */
-int smp_call_function_single_async(int cpu, struct call_single_data *csd)
-{
-	int err = 0;
-
-	preempt_disable();
-
-	/* We could deadlock if we have to wait here with interrupts disabled! */
-	if (WARN_ON_ONCE(csd->flags & CSD_FLAG_LOCK))
-		csd_lock_wait(csd);
-
-	csd->flags = CSD_FLAG_LOCK;
-	smp_wmb();
-
-	err = generic_exec_single(cpu, csd, csd->func, csd->info);
-	preempt_enable();
-
-	return err;
-}
-EXPORT_SYMBOL_GPL(smp_call_function_single_async);
 
 /*
  * smp_call_function_any - Run a function on any of the given cpus
@@ -375,6 +278,44 @@ call:
 	return ret;
 }
 EXPORT_SYMBOL_GPL(smp_call_function_any);
+
+/**
+ * __smp_call_function_single(): Run a function on a specific CPU
+ * @cpu: The CPU to run on.
+ * @data: Pre-allocated and setup data structure
+ * @wait: If true, wait until function has completed on specified CPU.
+ *
+ * Like smp_call_function_single(), but allow caller to pass in a
+ * pre-allocated data structure. Useful for embedding @data inside
+ * other structures, for instance.
+ */
+void __smp_call_function_single(int cpu, struct call_single_data *csd,
+				int wait)
+{
+	unsigned int this_cpu;
+	unsigned long flags;
+
+	this_cpu = get_cpu();
+	/*
+	 * Can deadlock when called with interrupts disabled.
+	 * We allow cpu's that are not yet online though, as no one else can
+	 * send smp call function interrupt to this cpu and as such deadlocks
+	 * can't happen.
+	 */
+	WARN_ON_ONCE(cpu_online(smp_processor_id()) && wait && irqs_disabled()
+		     && !oops_in_progress);
+
+	if (cpu == this_cpu) {
+		local_irq_save(flags);
+		csd->func(csd->info);
+		local_irq_restore(flags);
+	} else {
+		csd_lock(csd);
+		generic_exec_single(cpu, csd, wait);
+	}
+	put_cpu();
+}
+EXPORT_SYMBOL_GPL(__smp_call_function_single);
 
 /**
  * smp_call_function_many(): Run a function on a set of other CPUs.
@@ -425,7 +366,7 @@ void smp_call_function_many(const struct cpumask *mask,
 		return;
 	}
 
-	cfd = this_cpu_ptr(&cfd_data);
+	cfd = &__get_cpu_var(cfd_data);
 
 	cpumask_and(cfd->cpumask, mask, cpu_online_mask);
 	cpumask_clear_cpu(this_cpu, cfd->cpumask);
@@ -438,8 +379,6 @@ void smp_call_function_many(const struct cpumask *mask,
 		struct call_single_data *csd = per_cpu_ptr(cfd->csd, cpu);
 
 		csd_lock(csd);
-		if (wait)
-			csd->flags |= CSD_FLAG_SYNCHRONOUS;
 		csd->func = func;
 		csd->info = info;
 		llist_add(&csd->llist, &per_cpu(call_single_queue, cpu));
@@ -547,16 +486,17 @@ void __init setup_nr_cpu_ids(void)
 	nr_cpu_ids = find_last_bit(cpumask_bits(cpu_possible_mask),NR_CPUS) + 1;
 }
 
+void __weak smp_announce(void)
+{
+	printk(KERN_INFO "Brought up %d CPUs\n", num_online_cpus());
+}
+
 /* Called by boot processor to activate the rest. */
 void __init smp_init(void)
 {
-	int num_nodes, num_cpus;
 	unsigned int cpu;
 
 	idle_threads_init();
-	cpuhp_threads_init();
-
-	pr_info("Bringing up secondary CPUs ...\n");
 
 	/* FIXME: This should be done in userspace --RR */
 	for_each_present_cpu(cpu) {
@@ -566,13 +506,8 @@ void __init smp_init(void)
 			cpu_up(cpu);
 	}
 
-	num_nodes = num_online_nodes();
-	num_cpus  = num_online_cpus();
-	pr_info("Brought up %d node%s, %d CPU%s\n",
-		num_nodes, (num_nodes > 1 ? "s" : ""),
-		num_cpus,  (num_cpus  > 1 ? "s" : ""));
-
 	/* Any cleanup work */
+	smp_announce();
 	smp_cpus_done(setup_max_cpus);
 }
 
@@ -662,7 +597,7 @@ void on_each_cpu_cond(bool (*cond_func)(int cpu, void *info),
 	cpumask_var_t cpus;
 	int cpu, ret;
 
-	might_sleep_if(gfpflags_allow_blocking(gfp_flags));
+	might_sleep_if(gfp_flags & __GFP_WAIT);
 
 	if (likely(zalloc_cpumask_var(&cpus, (gfp_flags|__GFP_NOWARN)))) {
 		preempt_disable();
@@ -711,75 +646,3 @@ void kick_all_cpus_sync(void)
 	smp_call_function(do_nothing, NULL, 1);
 }
 EXPORT_SYMBOL_GPL(kick_all_cpus_sync);
-
-/**
- * wake_up_all_idle_cpus - break all cpus out of idle
- * wake_up_all_idle_cpus try to break all cpus which is in idle state even
- * including idle polling cpus, for non-idle cpus, we will do nothing
- * for them.
- */
-void wake_up_all_idle_cpus(void)
-{
-	int cpu;
-
-	preempt_disable();
-	for_each_online_cpu(cpu) {
-		if (cpu == smp_processor_id())
-			continue;
-
-		wake_up_if_idle(cpu);
-	}
-	preempt_enable();
-}
-EXPORT_SYMBOL_GPL(wake_up_all_idle_cpus);
-
-/**
- * smp_call_on_cpu - Call a function on a specific cpu
- *
- * Used to call a function on a specific cpu and wait for it to return.
- * Optionally make sure the call is done on a specified physical cpu via vcpu
- * pinning in order to support virtualized environments.
- */
-struct smp_call_on_cpu_struct {
-	struct work_struct	work;
-	struct completion	done;
-	int			(*func)(void *);
-	void			*data;
-	int			ret;
-	int			cpu;
-};
-
-static void smp_call_on_cpu_callback(struct work_struct *work)
-{
-	struct smp_call_on_cpu_struct *sscs;
-
-	sscs = container_of(work, struct smp_call_on_cpu_struct, work);
-	if (sscs->cpu >= 0)
-		hypervisor_pin_vcpu(sscs->cpu);
-	sscs->ret = sscs->func(sscs->data);
-	if (sscs->cpu >= 0)
-		hypervisor_pin_vcpu(-1);
-
-	complete(&sscs->done);
-}
-
-int smp_call_on_cpu(unsigned int cpu, int (*func)(void *), void *par, bool phys)
-{
-	struct smp_call_on_cpu_struct sscs = {
-		.done = COMPLETION_INITIALIZER_ONSTACK(sscs.done),
-		.func = func,
-		.data = par,
-		.cpu  = phys ? cpu : -1,
-	};
-
-	INIT_WORK_ONSTACK(&sscs.work, smp_call_on_cpu_callback);
-
-	if (cpu >= nr_cpu_ids || !cpu_online(cpu))
-		return -ENXIO;
-
-	queue_work_on(cpu, system_wq, &sscs.work);
-	wait_for_completion(&sscs.done);
-
-	return sscs.ret;
-}
-EXPORT_SYMBOL_GPL(smp_call_on_cpu);

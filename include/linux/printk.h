@@ -10,15 +10,12 @@
 extern const char linux_banner[];
 extern const char linux_proc_banner[];
 
-#define PRINTK_MAX_SINGLE_HEADER_LEN 2
-
 static inline int printk_get_level(const char *buffer)
 {
 	if (buffer[0] == KERN_SOH_ASCII && buffer[1]) {
 		switch (buffer[1]) {
 		case '0' ... '7':
 		case 'd':	/* KERN_DEFAULT */
-		case 'c':	/* KERN_CONT */
 			return buffer[1];
 		}
 	}
@@ -27,37 +24,15 @@ static inline int printk_get_level(const char *buffer)
 
 static inline const char *printk_skip_level(const char *buffer)
 {
-	if (printk_get_level(buffer))
-		return buffer + 2;
-
+	if (printk_get_level(buffer)) {
+		switch (buffer[1]) {
+		case '0' ... '7':
+		case 'd':	/* KERN_DEFAULT */
+			return buffer + 2;
+		}
+	}
 	return buffer;
 }
-
-static inline const char *printk_skip_headers(const char *buffer)
-{
-	while (printk_get_level(buffer))
-		buffer = printk_skip_level(buffer);
-
-	return buffer;
-}
-
-#define CONSOLE_EXT_LOG_MAX	8192
-
-/* printk's without a loglevel use this.. */
-#define MESSAGE_LOGLEVEL_DEFAULT CONFIG_MESSAGE_LOGLEVEL_DEFAULT
-
-/* We show everything that is MORE important than this.. */
-#define CONSOLE_LOGLEVEL_SILENT  0 /* Mum's the word */
-#define CONSOLE_LOGLEVEL_MIN	 1 /* Minimum loglevel we let people use */
-#define CONSOLE_LOGLEVEL_QUIET	 4 /* Shhh ..., when booted with "quiet" */
-#define CONSOLE_LOGLEVEL_DEBUG	10 /* issue debug messages */
-#define CONSOLE_LOGLEVEL_MOTORMOUTH 15	/* You can't shut this one up */
-
-/*
- * Default used to be hard-coded at 7, we're now allowing it to be set from
- * kernel config.
- */
-#define CONSOLE_LOGLEVEL_DEFAULT CONFIG_CONSOLE_LOGLEVEL_DEFAULT
 
 extern int console_printk[];
 
@@ -68,19 +43,14 @@ extern int console_printk[];
 
 static inline void console_silent(void)
 {
-	console_loglevel = CONSOLE_LOGLEVEL_SILENT;
+	console_loglevel = 0;
 }
 
 static inline void console_verbose(void)
 {
 	if (console_loglevel)
-		console_loglevel = CONSOLE_LOGLEVEL_MOTORMOUTH;
+		console_loglevel = 15;
 }
-
-/* strlen("ratelimit") + 1 */
-#define DEVKMSG_STR_MAX_SIZE 10
-extern char devkmsg_log_str[];
-struct ctl_table;
 
 struct va_format {
 	const char *fmt;
@@ -127,32 +97,22 @@ struct va_format {
 
 /*
  * Dummy printk for disabled debugging statements to use whilst maintaining
- * gcc's format checking.
+ * gcc's format and side-effect checking.
  */
-#define no_printk(fmt, ...)				\
-({							\
-	do {						\
-		if (0)					\
-			printk(fmt, ##__VA_ARGS__);	\
-	} while (0);					\
-	0;						\
-})
+static inline __printf(1, 2)
+int no_printk(const char *fmt, ...)
+{
+	return 0;
+}
 
 #ifdef CONFIG_EARLY_PRINTK
 extern asmlinkage __printf(1, 2)
 void early_printk(const char *fmt, ...);
+void early_vprintk(const char *fmt, va_list ap);
 #else
 static inline __printf(1, 2) __cold
 void early_printk(const char *s, ...) { }
 #endif
-
-#ifdef CONFIG_PRINTK_NMI
-extern void printk_nmi_enter(void);
-extern void printk_nmi_exit(void);
-#else
-static inline void printk_nmi_enter(void) { }
-static inline void printk_nmi_exit(void) { }
-#endif /* PRINTK_NMI */
 
 #ifdef CONFIG_PRINTK
 asmlinkage __printf(5, 0)
@@ -164,9 +124,9 @@ asmlinkage __printf(1, 0)
 int vprintk(const char *fmt, va_list args);
 
 asmlinkage __printf(5, 6) __cold
-int printk_emit(int facility, int level,
-		const char *dict, size_t dictlen,
-		const char *fmt, ...);
+asmlinkage int printk_emit(int facility, int level,
+			   const char *dict, size_t dictlen,
+			   const char *fmt, ...);
 
 asmlinkage __printf(1, 2) __cold
 int printk(const char *fmt, ...);
@@ -190,22 +150,13 @@ extern int printk_delay_msec;
 extern int dmesg_restrict;
 extern int kptr_restrict;
 
-extern int
-devkmsg_sysctl_set_loglvl(struct ctl_table *table, int write, void __user *buf,
-			  size_t *lenp, loff_t *ppos);
-
 extern void wake_up_klogd(void);
 
-char *log_buf_addr_get(void);
-u32 log_buf_len_get(void);
-void log_buf_vmcoreinfo_setup(void);
+void log_buf_kexec_setup(void);
 void __init setup_log_buf(int early);
-__printf(1, 2) void dump_stack_set_arch_desc(const char *fmt, ...);
+void dump_stack_set_arch_desc(const char *fmt, ...);
 void dump_stack_print_info(const char *log_lvl);
 void show_regs_print_info(const char *log_lvl);
-extern void printk_safe_init(void);
-extern void printk_safe_flush(void);
-extern void printk_safe_flush_on_panic(void);
 #else
 static inline __printf(1, 0)
 int vprintk(const char *s, va_list args)
@@ -236,17 +187,7 @@ static inline void wake_up_klogd(void)
 {
 }
 
-static inline char *log_buf_addr_get(void)
-{
-	return NULL;
-}
-
-static inline u32 log_buf_len_get(void)
-{
-	return 0;
-}
-
-static inline void log_buf_vmcoreinfo_setup(void)
+static inline void log_buf_kexec_setup(void)
 {
 }
 
@@ -254,7 +195,7 @@ static inline void setup_log_buf(int early)
 {
 }
 
-static inline __printf(1, 2) void dump_stack_set_arch_desc(const char *fmt, ...)
+static inline void dump_stack_set_arch_desc(const char *fmt, ...)
 {
 }
 
@@ -265,18 +206,6 @@ static inline void dump_stack_print_info(const char *log_lvl)
 static inline void show_regs_print_info(const char *log_lvl)
 {
 }
-
-static inline void printk_safe_init(void)
-{
-}
-
-static inline void printk_safe_flush(void)
-{
-}
-
-static inline void printk_safe_flush_on_panic(void)
-{
-}
 #endif
 
 extern asmlinkage void dump_stack(void) __cold;
@@ -285,12 +214,6 @@ extern asmlinkage void dump_stack(void) __cold;
 #define pr_fmt(fmt) fmt
 #endif
 
-/*
- * These can be used to print at the various log levels.
- * All of these will print unconditionally, although note that pr_debug()
- * and other debug macros are compiled out unless either DEBUG is defined
- * or CONFIG_DYNAMIC_DEBUG is set.
- */
 #define pr_emerg(fmt, ...) \
 	printk(KERN_EMERG pr_fmt(fmt), ##__VA_ARGS__)
 #define pr_alert(fmt, ...) \
@@ -306,11 +229,6 @@ extern asmlinkage void dump_stack(void) __cold;
 	printk(KERN_NOTICE pr_fmt(fmt), ##__VA_ARGS__)
 #define pr_info(fmt, ...) \
 	printk(KERN_INFO pr_fmt(fmt), ##__VA_ARGS__)
-/*
- * Like KERN_CONT, pr_cont() should only be used when continuing
- * a line with no newline ('\n') enclosed. Otherwise it defaults
- * back to KERN_DEFAULT.
- */
 #define pr_cont(fmt, ...) \
 	printk(KERN_CONT fmt, ##__VA_ARGS__)
 
@@ -323,11 +241,10 @@ extern asmlinkage void dump_stack(void) __cold;
 	no_printk(KERN_DEBUG pr_fmt(fmt), ##__VA_ARGS__)
 #endif
 
+#include <linux/dynamic_debug.h>
 
 /* If you are writing a driver, please use dev_dbg instead */
 #if defined(CONFIG_DYNAMIC_DEBUG)
-#include <linux/dynamic_debug.h>
-
 /* dynamic_pr_debug() uses pr_fmt() internally so we don't need it here */
 #define pr_debug(fmt, ...) \
 	dynamic_pr_debug(fmt, ##__VA_ARGS__)
@@ -347,29 +264,14 @@ extern asmlinkage void dump_stack(void) __cold;
 #define printk_once(fmt, ...)					\
 ({								\
 	static bool __print_once __read_mostly;			\
-	bool __ret_print_once = !__print_once;			\
 								\
 	if (!__print_once) {					\
 		__print_once = true;				\
 		printk(fmt, ##__VA_ARGS__);			\
 	}							\
-	unlikely(__ret_print_once);				\
-})
-#define printk_deferred_once(fmt, ...)				\
-({								\
-	static bool __print_once __read_mostly;			\
-	bool __ret_print_once = !__print_once;			\
-								\
-	if (!__print_once) {					\
-		__print_once = true;				\
-		printk_deferred(fmt, ##__VA_ARGS__);		\
-	}							\
-	unlikely(__ret_print_once);				\
 })
 #else
 #define printk_once(fmt, ...)					\
-	no_printk(fmt, ##__VA_ARGS__)
-#define printk_deferred_once(fmt, ...)				\
 	no_printk(fmt, ##__VA_ARGS__)
 #endif
 
@@ -458,10 +360,10 @@ do {									\
 	static DEFINE_RATELIMIT_STATE(_rs,				\
 				      DEFAULT_RATELIMIT_INTERVAL,	\
 				      DEFAULT_RATELIMIT_BURST);		\
-	DEFINE_DYNAMIC_DEBUG_METADATA(descriptor, pr_fmt(fmt));		\
+	DEFINE_DYNAMIC_DEBUG_METADATA(descriptor, fmt);			\
 	if (unlikely(descriptor.flags & _DPRINTK_FLAGS_PRINT) &&	\
 	    __ratelimit(&_rs))						\
-		__dynamic_pr_debug(&descriptor, pr_fmt(fmt), ##__VA_ARGS__);	\
+		__dynamic_pr_debug(&descriptor, fmt, ##__VA_ARGS__);	\
 } while (0)
 #elif defined(DEBUG)
 #define pr_debug_ratelimited(fmt, ...)					\
@@ -478,9 +380,9 @@ enum {
 	DUMP_PREFIX_ADDRESS,
 	DUMP_PREFIX_OFFSET
 };
-extern int hex_dump_to_buffer(const void *buf, size_t len, int rowsize,
-			      int groupsize, char *linebuf, size_t linebuflen,
-			      bool ascii);
+extern void hex_dump_to_buffer(const void *buf, size_t len,
+			       int rowsize, int groupsize,
+			       char *linebuf, size_t linebuflen, bool ascii);
 #ifdef CONFIG_PRINTK
 extern void print_hex_dump(const char *level, const char *prefix_str,
 			   int prefix_type, int rowsize, int groupsize,
@@ -510,17 +412,11 @@ static inline void print_hex_dump_bytes(const char *prefix_str, int prefix_type,
 			     groupsize, buf, len, ascii)	\
 	dynamic_hex_dump(prefix_str, prefix_type, rowsize,	\
 			 groupsize, buf, len, ascii)
-#elif defined(DEBUG)
+#else
 #define print_hex_dump_debug(prefix_str, prefix_type, rowsize,		\
 			     groupsize, buf, len, ascii)		\
 	print_hex_dump(KERN_DEBUG, prefix_str, prefix_type, rowsize,	\
 		       groupsize, buf, len, ascii)
-#else
-static inline void print_hex_dump_debug(const char *prefix_str, int prefix_type,
-					int rowsize, int groupsize,
-					const void *buf, size_t len, bool ascii)
-{
-}
-#endif
+#endif /* defined(CONFIG_DYNAMIC_DEBUG) */
 
 #endif

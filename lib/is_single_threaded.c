@@ -9,9 +9,8 @@
  * as published by the Free Software Foundation; either version
  * 2 of the Licence, or (at your option) any later version.
  */
-#include <linux/sched/signal.h>
-#include <linux/sched/task.h>
-#include <linux/sched/mm.h>
+
+#include <linux/sched.h>
 
 /*
  * Returns true if the task does not share ->mm with another thread/process.
@@ -37,7 +36,8 @@ bool current_is_single_threaded(void)
 		if (unlikely(p == task->group_leader))
 			continue;
 
-		for_each_thread(p, t) {
+		t = p;
+		do {
 			if (unlikely(t->mm == mm))
 				goto found;
 			if (likely(t->mm))
@@ -48,7 +48,7 @@ bool current_is_single_threaded(void)
 			 * forked before exiting.
 			 */
 			smp_rmb();
-		}
+		} while_each_thread(p, t);
 	}
 	ret = true;
 found:

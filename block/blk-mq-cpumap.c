@@ -1,8 +1,3 @@
-/*
- * CPU <-> hardware queue mapping helpers
- *
- * Copyright (C) 2013-2014 Jens Axboe
- */
 #include <linux/kernel.h>
 #include <linux/threads.h>
 #include <linux/module.h>
@@ -14,37 +9,43 @@
 #include "blk.h"
 #include "blk-mq.h"
 
+static void show_map(unsigned int *map, unsigned int nr)
+{
+	int i;
+
+	pr_info("blk-mq: CPU -> queue map\n");
+	for_each_online_cpu(i)
+		pr_info("  CPU%2u -> Queue %u\n", i, map[i]);
+}
+
 static int cpu_to_queue_index(unsigned int nr_cpus, unsigned int nr_queues,
 			      const int cpu)
 {
-	return cpu * nr_queues / nr_cpus;
+	return cpu / ((nr_cpus + nr_queues - 1) / nr_queues);
 }
 
 static int get_first_sibling(unsigned int cpu)
 {
 	unsigned int ret;
 
-	ret = cpumask_first(topology_sibling_cpumask(cpu));
+	ret = cpumask_first(topology_thread_cpumask(cpu));
 	if (ret < nr_cpu_ids)
 		return ret;
 
 	return cpu;
 }
 
-int blk_mq_map_queues(struct blk_mq_tag_set *set)
+int blk_mq_update_queue_map(unsigned int *map, unsigned int nr_queues)
 {
-	unsigned int *map = set->mq_map;
-	unsigned int nr_queues = set->nr_hw_queues;
-	const struct cpumask *online_mask = cpu_online_mask;
 	unsigned int i, nr_cpus, nr_uniq_cpus, queue, first_sibling;
 	cpumask_var_t cpus;
 
 	if (!alloc_cpumask_var(&cpus, GFP_ATOMIC))
-		return -ENOMEM;
+		return 1;
 
 	cpumask_clear(cpus);
 	nr_cpus = nr_uniq_cpus = 0;
-	for_each_cpu(i, online_mask) {
+	for_each_online_cpu(i) {
 		nr_cpus++;
 		first_sibling = get_first_sibling(i);
 		if (!cpumask_test_cpu(first_sibling, cpus))
@@ -54,7 +55,7 @@ int blk_mq_map_queues(struct blk_mq_tag_set *set)
 
 	queue = 0;
 	for_each_possible_cpu(i) {
-		if (!cpumask_test_cpu(i, online_mask)) {
+		if (!cpu_online(i)) {
 			map[i] = 0;
 			continue;
 		}
@@ -84,23 +85,24 @@ int blk_mq_map_queues(struct blk_mq_tag_set *set)
 			map[i] = map[first_sibling];
 	}
 
+	show_map(map, nr_cpus);
 	free_cpumask_var(cpus);
 	return 0;
 }
-EXPORT_SYMBOL_GPL(blk_mq_map_queues);
 
-/*
- * We have no quick way of doing reverse lookups. This is only used at
- * queue init time, so runtime isn't important.
- */
-int blk_mq_hw_queue_to_node(unsigned int *mq_map, unsigned int index)
+unsigned int *blk_mq_make_queue_map(struct blk_mq_reg *reg)
 {
-	int i;
+	unsigned int *map;
 
-	for_each_possible_cpu(i) {
-		if (index == mq_map[i])
-			return local_memory_node(cpu_to_node(i));
-	}
+	/* If cpus are offline, map them to first hctx */
+	map = kzalloc_node(sizeof(*map) * nr_cpu_ids, GFP_KERNEL,
+				reg->numa_node);
+	if (!map)
+		return NULL;
 
-	return NUMA_NO_NODE;
+	if (!blk_mq_update_queue_map(map, reg->nr_hw_queues))
+		return map;
+
+	kfree(map);
+	return NULL;
 }

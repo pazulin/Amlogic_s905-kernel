@@ -6,7 +6,6 @@
 #include <linux/kernel.h>
 #include <linux/slab.h>
 #include <linux/errno.h>
-#include <linux/sched.h>
 #include "hashtab.h"
 
 struct hashtab *hashtab_create(u32 (*hash_value)(struct hashtab *h, const void *key),
@@ -17,15 +16,15 @@ struct hashtab *hashtab_create(u32 (*hash_value)(struct hashtab *h, const void *
 	u32 i;
 
 	p = kzalloc(sizeof(*p), GFP_KERNEL);
-	if (!p)
+	if (p == NULL)
 		return p;
 
 	p->size = size;
 	p->nel = 0;
 	p->hash_value = hash_value;
 	p->keycmp = keycmp;
-	p->htable = kmalloc_array(size, sizeof(*p->htable), GFP_KERNEL);
-	if (!p->htable) {
+	p->htable = kmalloc(sizeof(*(p->htable)) * size, GFP_KERNEL);
+	if (p->htable == NULL) {
 		kfree(p);
 		return NULL;
 	}
@@ -40,8 +39,6 @@ int hashtab_insert(struct hashtab *h, void *key, void *datum)
 {
 	u32 hvalue;
 	struct hashtab_node *prev, *cur, *newnode;
-
-	cond_resched();
 
 	if (!h || h->nel == HASHTAB_MAX_NODES)
 		return -EINVAL;
@@ -58,7 +55,7 @@ int hashtab_insert(struct hashtab *h, void *key, void *datum)
 		return -EEXIST;
 
 	newnode = kzalloc(sizeof(*newnode), GFP_KERNEL);
-	if (!newnode)
+	if (newnode == NULL)
 		return -ENOMEM;
 	newnode->key = key;
 	newnode->datum = datum;
@@ -87,7 +84,7 @@ void *hashtab_search(struct hashtab *h, const void *key)
 	while (cur && h->keycmp(h, key, cur->key) > 0)
 		cur = cur->next;
 
-	if (!cur || (h->keycmp(h, key, cur->key) != 0))
+	if (cur == NULL || (h->keycmp(h, key, cur->key) != 0))
 		return NULL;
 
 	return cur->datum;

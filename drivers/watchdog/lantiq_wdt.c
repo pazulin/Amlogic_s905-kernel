@@ -3,7 +3,7 @@
  *  under the terms of the GNU General Public License version 2 as published
  *  by the Free Software Foundation.
  *
- *  Copyright (C) 2010 John Crispin <john@phrozen.org>
+ *  Copyright (C) 2010 John Crispin <blogic@openwrt.org>
  *  Based on EP93xx wdt driver
  */
 
@@ -192,6 +192,11 @@ ltq_wdt_probe(struct platform_device *pdev)
 	struct resource *res = platform_get_resource(pdev, IORESOURCE_MEM, 0);
 	struct clk *clk;
 
+	if (!res) {
+		dev_err(&pdev->dev, "cannot obtain I/O memory region");
+		return -ENOENT;
+	}
+
 	ltq_wdt_membase = devm_ioremap_resource(&pdev->dev, res);
 	if (IS_ERR(ltq_wdt_membase))
 		return PTR_ERR(ltq_wdt_membase);
@@ -232,6 +237,7 @@ static struct platform_driver ltq_wdt_driver = {
 	.remove = ltq_wdt_remove,
 	.driver = {
 		.name = "wdt",
+		.owner = THIS_MODULE,
 		.of_match_table = ltq_wdt_match,
 	},
 };
@@ -240,6 +246,6 @@ module_platform_driver(ltq_wdt_driver);
 
 module_param(nowayout, bool, 0);
 MODULE_PARM_DESC(nowayout, "Watchdog cannot be stopped once started");
-MODULE_AUTHOR("John Crispin <john@phrozen.org>");
+MODULE_AUTHOR("John Crispin <blogic@openwrt.org>");
 MODULE_DESCRIPTION("Lantiq SoC Watchdog");
 MODULE_LICENSE("GPL");

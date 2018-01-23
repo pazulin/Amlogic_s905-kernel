@@ -9,6 +9,7 @@
 #include <linux/module.h>
 #include <linux/skbuff.h>
 #include <linux/vmalloc.h>
+#include <net/flow_keys.h>
 #include <net/pkt_sched.h>
 #include <net/sock.h>
 
@@ -175,6 +176,22 @@ static u32 hhf_time_stamp(void)
 	return jiffies;
 }
 
+static unsigned int skb_hash(const struct hhf_sched_data *q,
+			     const struct sk_buff *skb)
+{
+	struct flow_keys keys;
+	unsigned int hash;
+
+	if (skb->sk && skb->sk->sk_hash)
+		return skb->sk->sk_hash;
+
+	skb_flow_dissect(skb, &keys);
+	hash = jhash_3words((__force u32)keys.dst,
+			    (__force u32)keys.src ^ keys.ip_proto,
+			    (__force u32)keys.ports, q->perturbation);
+	return hash;
+}
+
 /* Looks up a heavy-hitter flow in a chaining list of table T. */
 static struct hh_flow_state *seek_list(const u32 hash,
 				       struct list_head *head,
@@ -263,7 +280,7 @@ static enum wdrr_bucket_idx hhf_classify(struct sk_buff *skb, struct Qdisc *sch)
 	}
 
 	/* Get hashed flow-id of the skb. */
-	hash = skb_get_hash_perturb(skb, q->perturbation);
+	hash = skb_hash(q, skb);
 
 	/* Check if this packet belongs to an already established HH flow. */
 	flow_pos = hash & HHF_BIT_MASK;
@@ -345,7 +362,7 @@ static void bucket_add(struct wdrr_bucket *bucket, struct sk_buff *skb)
 	skb->next = NULL;
 }
 
-static unsigned int hhf_drop(struct Qdisc *sch, struct sk_buff **to_free)
+static unsigned int hhf_drop(struct Qdisc *sch)
 {
 	struct hhf_sched_data *q = qdisc_priv(sch);
 	struct wdrr_bucket *bucket;
@@ -359,27 +376,26 @@ static unsigned int hhf_drop(struct Qdisc *sch, struct sk_buff **to_free)
 		struct sk_buff *skb = dequeue_head(bucket);
 
 		sch->q.qlen--;
-		qdisc_qstats_backlog_dec(sch, skb);
-		qdisc_drop(skb, sch, to_free);
+		sch->qstats.drops++;
+		sch->qstats.backlog -= qdisc_pkt_len(skb);
+		kfree_skb(skb);
 	}
 
 	/* Return id of the bucket from which the packet was dropped. */
 	return bucket - q->buckets;
 }
 
-static int hhf_enqueue(struct sk_buff *skb, struct Qdisc *sch,
-		       struct sk_buff **to_free)
+static int hhf_enqueue(struct sk_buff *skb, struct Qdisc *sch)
 {
 	struct hhf_sched_data *q = qdisc_priv(sch);
 	enum wdrr_bucket_idx idx;
 	struct wdrr_bucket *bucket;
-	unsigned int prev_backlog;
 
 	idx = hhf_classify(skb, sch);
 
 	bucket = &q->buckets[idx];
 	bucket_add(bucket, skb);
-	qdisc_qstats_backlog_inc(sch, skb);
+	sch->qstats.backlog += qdisc_pkt_len(skb);
 
 	if (list_empty(&bucket->bucketchain)) {
 		unsigned int weight;
@@ -398,19 +414,18 @@ static int hhf_enqueue(struct sk_buff *skb, struct Qdisc *sch,
 		}
 		bucket->deficit = weight * q->quantum;
 	}
-	if (++sch->q.qlen <= sch->limit)
+	if (++sch->q.qlen < sch->limit)
 		return NET_XMIT_SUCCESS;
 
-	prev_backlog = sch->qstats.backlog;
 	q->drop_overlimit++;
 	/* Return Congestion Notification only if we dropped a packet from this
 	 * bucket.
 	 */
-	if (hhf_drop(sch, to_free) == idx)
+	if (hhf_drop(sch) == idx)
 		return NET_XMIT_CN;
 
 	/* As we dropped a packet, better let upper stack know this. */
-	qdisc_tree_reduce_backlog(sch, 1, prev_backlog - sch->qstats.backlog);
+	qdisc_tree_decrease_qlen(sch, 1);
 	return NET_XMIT_SUCCESS;
 }
 
@@ -442,7 +457,7 @@ begin:
 	if (bucket->head) {
 		skb = dequeue_head(bucket);
 		sch->q.qlen--;
-		qdisc_qstats_backlog_dec(sch, skb);
+		sch->qstats.backlog -= qdisc_pkt_len(skb);
 	}
 
 	if (!skb) {
@@ -464,7 +479,27 @@ static void hhf_reset(struct Qdisc *sch)
 	struct sk_buff *skb;
 
 	while ((skb = hhf_dequeue(sch)) != NULL)
-		rtnl_kfree_skbs(skb, skb);
+		kfree_skb(skb);
+}
+
+static void *hhf_zalloc(size_t sz)
+{
+	void *ptr = kzalloc(sz, GFP_KERNEL | __GFP_NOWARN);
+
+	if (!ptr)
+		ptr = vzalloc(sz);
+
+	return ptr;
+}
+
+static void hhf_free(void *addr)
+{
+	if (addr) {
+		if (is_vmalloc_addr(addr))
+			vfree(addr);
+		else
+			kfree(addr);
+	}
 }
 
 static void hhf_destroy(struct Qdisc *sch)
@@ -473,8 +508,8 @@ static void hhf_destroy(struct Qdisc *sch)
 	struct hhf_sched_data *q = qdisc_priv(sch);
 
 	for (i = 0; i < HHF_ARRAYS_CNT; i++) {
-		kvfree(q->hhf_arrays[i]);
-		kvfree(q->hhf_valid_bits[i]);
+		hhf_free(q->hhf_arrays[i]);
+		hhf_free(q->hhf_valid_bits[i]);
 	}
 
 	for (i = 0; i < HH_FLOWS_CNT; i++) {
@@ -488,7 +523,7 @@ static void hhf_destroy(struct Qdisc *sch)
 			kfree(flow);
 		}
 	}
-	kvfree(q->hh_flows);
+	hhf_free(q->hh_flows);
 }
 
 static const struct nla_policy hhf_policy[TCA_HHF_MAX + 1] = {
@@ -505,7 +540,7 @@ static int hhf_change(struct Qdisc *sch, struct nlattr *opt)
 {
 	struct hhf_sched_data *q = qdisc_priv(sch);
 	struct nlattr *tb[TCA_HHF_MAX + 1];
-	unsigned int qlen, prev_backlog;
+	unsigned int qlen;
 	int err;
 	u64 non_hh_quantum;
 	u32 new_quantum = q->quantum;
@@ -514,7 +549,7 @@ static int hhf_change(struct Qdisc *sch, struct nlattr *opt)
 	if (!opt)
 		return -EINVAL;
 
-	err = nla_parse_nested(tb, TCA_HHF_MAX, opt, hhf_policy, NULL);
+	err = nla_parse_nested(tb, TCA_HHF_MAX, opt, hhf_policy);
 	if (err < 0)
 		return err;
 
@@ -555,14 +590,12 @@ static int hhf_change(struct Qdisc *sch, struct nlattr *opt)
 	}
 
 	qlen = sch->q.qlen;
-	prev_backlog = sch->qstats.backlog;
 	while (sch->q.qlen > sch->limit) {
 		struct sk_buff *skb = hhf_dequeue(sch);
 
-		rtnl_kfree_skbs(skb, skb);
+		kfree_skb(skb);
 	}
-	qdisc_tree_reduce_backlog(sch, qlen - sch->q.qlen,
-				  prev_backlog - sch->qstats.backlog);
+	qdisc_tree_decrease_qlen(sch, qlen - sch->q.qlen);
 
 	sch_tree_unlock(sch);
 	return 0;
@@ -594,8 +627,8 @@ static int hhf_init(struct Qdisc *sch, struct nlattr *opt)
 
 	if (!q->hh_flows) {
 		/* Initialize heavy-hitter flow table. */
-		q->hh_flows = kvzalloc(HH_FLOWS_CNT *
-					 sizeof(struct list_head), GFP_KERNEL);
+		q->hh_flows = hhf_zalloc(HH_FLOWS_CNT *
+					 sizeof(struct list_head));
 		if (!q->hh_flows)
 			return -ENOMEM;
 		for (i = 0; i < HH_FLOWS_CNT; i++)
@@ -609,12 +642,10 @@ static int hhf_init(struct Qdisc *sch, struct nlattr *opt)
 
 		/* Initialize heavy-hitter filter arrays. */
 		for (i = 0; i < HHF_ARRAYS_CNT; i++) {
-			q->hhf_arrays[i] = kvzalloc(HHF_ARRAYS_LEN *
-						      sizeof(u32), GFP_KERNEL);
+			q->hhf_arrays[i] = hhf_zalloc(HHF_ARRAYS_LEN *
+						      sizeof(u32));
 			if (!q->hhf_arrays[i]) {
-				/* Note: hhf_destroy() will be called
-				 * by our caller.
-				 */
+				hhf_destroy(sch);
 				return -ENOMEM;
 			}
 		}
@@ -622,12 +653,10 @@ static int hhf_init(struct Qdisc *sch, struct nlattr *opt)
 
 		/* Initialize valid bits of heavy-hitter filter arrays. */
 		for (i = 0; i < HHF_ARRAYS_CNT; i++) {
-			q->hhf_valid_bits[i] = kvzalloc(HHF_ARRAYS_LEN /
-							  BITS_PER_BYTE, GFP_KERNEL);
+			q->hhf_valid_bits[i] = hhf_zalloc(HHF_ARRAYS_LEN /
+							  BITS_PER_BYTE);
 			if (!q->hhf_valid_bits[i]) {
-				/* Note: hhf_destroy() will be called
-				 * by our caller.
-				 */
+				hhf_destroy(sch);
 				return -ENOMEM;
 			}
 		}
@@ -663,7 +692,8 @@ static int hhf_dump(struct Qdisc *sch, struct sk_buff *skb)
 	    nla_put_u32(skb, TCA_HHF_NON_HH_WEIGHT, q->hhf_non_hh_weight))
 		goto nla_put_failure;
 
-	return nla_nest_end(skb, opts);
+	nla_nest_end(skb, opts);
+	return skb->len;
 
 nla_put_failure:
 	return -1;
@@ -689,6 +719,7 @@ static struct Qdisc_ops hhf_qdisc_ops __read_mostly = {
 	.enqueue	=	hhf_enqueue,
 	.dequeue	=	hhf_dequeue,
 	.peek		=	qdisc_peek_dequeued,
+	.drop		=	hhf_drop,
 	.init		=	hhf_init,
 	.reset		=	hhf_reset,
 	.destroy	=	hhf_destroy,

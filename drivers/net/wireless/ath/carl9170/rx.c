@@ -358,7 +358,7 @@ static int carl9170_rx_mac_status(struct ar9170 *ar,
 	switch (mac->status & AR9170_RX_STATUS_MODULATION) {
 	case AR9170_RX_STATUS_MODULATION_CCK:
 		if (mac->status & AR9170_RX_STATUS_SHORT_PREAMBLE)
-			status->enc_flags |= RX_ENC_FLAG_SHORTPRE;
+			status->flag |= RX_FLAG_SHORTPRE;
 		switch (head->plcp[0]) {
 		case AR9170_RX_PHY_RATE_CCK_1M:
 			status->rate_idx = 0;
@@ -417,18 +417,18 @@ static int carl9170_rx_mac_status(struct ar9170 *ar,
 
 			return -EINVAL;
 		}
-		if (status->band == NL80211_BAND_2GHZ)
+		if (status->band == IEEE80211_BAND_2GHZ)
 			status->rate_idx += 4;
 		break;
 
 	case AR9170_RX_STATUS_MODULATION_HT:
 		if (head->plcp[3] & 0x80)
-			status->bw = RATE_INFO_BW_40;
+			status->flag |= RX_FLAG_40MHZ;
 		if (head->plcp[6] & 0x80)
-			status->enc_flags |= RX_ENC_FLAG_SHORT_GI;
+			status->flag |= RX_FLAG_SHORT_GI;
 
 		status->rate_idx = clamp(0, 75, head->plcp[3] & 0x7f);
-		status->encoding = RX_ENC_HT;
+		status->flag |= RX_FLAG_HT;
 		break;
 
 	default:
@@ -453,7 +453,7 @@ static void carl9170_rx_phy_status(struct ar9170 *ar,
 	/* post-process RSSI */
 	for (i = 0; i < 7; i++)
 		if (phy->rssi[i] & 0x80)
-			phy->rssi[i] = ((~phy->rssi[i] & 0x7f) + 1) & 0x7f;
+			phy->rssi[i] = ((phy->rssi[i] & 0x7f) + 1) & 0x7f;
 
 	/* TODO: we could do something with phy_errors */
 	status->signal = ar->noise[0] + phy->rssi_combined;
@@ -572,7 +572,7 @@ static void carl9170_ps_beacon(struct ar9170 *ar, void *data, unsigned int len)
 
 static void carl9170_ba_check(struct ar9170 *ar, void *data, unsigned int len)
 {
-	struct ieee80211_bar *bar = data;
+	struct ieee80211_bar *bar = (void *) data;
 	struct carl9170_bar_list_entry *entry;
 	unsigned int queue;
 

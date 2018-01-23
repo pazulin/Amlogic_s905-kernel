@@ -6,8 +6,6 @@
 #ifndef __ASSEMBLY__
 
 #include <linux/spinlock.h>
-#include <linux/mm_types.h>
-
 #include <asm/spitfire.h>
 #include <asm-generic/mm_hooks.h>
 
@@ -19,40 +17,38 @@ extern spinlock_t ctx_alloc_lock;
 extern unsigned long tlb_context_cache;
 extern unsigned long mmu_context_bmap[];
 
-void get_new_mmu_context(struct mm_struct *mm);
+extern void get_new_mmu_context(struct mm_struct *mm);
 #ifdef CONFIG_SMP
-void smp_new_mmu_context_version(void);
+extern void smp_new_mmu_context_version(void);
 #else
 #define smp_new_mmu_context_version() do { } while (0)
 #endif
 
-int init_new_context(struct task_struct *tsk, struct mm_struct *mm);
-void destroy_context(struct mm_struct *mm);
+extern int init_new_context(struct task_struct *tsk, struct mm_struct *mm);
+extern void destroy_context(struct mm_struct *mm);
 
-void __tsb_context_switch(unsigned long pgd_pa,
-			  struct tsb_config *tsb_base,
-			  struct tsb_config *tsb_huge,
-			  unsigned long tsb_descr_pa);
+extern void __tsb_context_switch(unsigned long pgd_pa,
+				 struct tsb_config *tsb_base,
+				 struct tsb_config *tsb_huge,
+				 unsigned long tsb_descr_pa);
 
 static inline void tsb_context_switch(struct mm_struct *mm)
 {
 	__tsb_context_switch(__pa(mm->pgd),
-			     &mm->context.tsb_block[MM_TSB_BASE],
+			     &mm->context.tsb_block[0],
 #if defined(CONFIG_HUGETLB_PAGE) || defined(CONFIG_TRANSPARENT_HUGEPAGE)
-			     (mm->context.tsb_block[MM_TSB_HUGE].tsb ?
-			      &mm->context.tsb_block[MM_TSB_HUGE] :
+			     (mm->context.tsb_block[1].tsb ?
+			      &mm->context.tsb_block[1] :
 			      NULL)
 #else
 			     NULL
 #endif
-			     , __pa(&mm->context.tsb_descr[MM_TSB_BASE]));
+			     , __pa(&mm->context.tsb_descr[0]));
 }
 
-void tsb_grow(struct mm_struct *mm,
-	      unsigned long tsb_index,
-	      unsigned long mm_rss);
+extern void tsb_grow(struct mm_struct *mm, unsigned long tsb_index, unsigned long mm_rss);
 #ifdef CONFIG_SMP
-void smp_tsb_sync(struct mm_struct *mm);
+extern void smp_tsb_sync(struct mm_struct *mm);
 #else
 #define smp_tsb_sync(__mm) do { } while (0)
 #endif
@@ -70,7 +66,7 @@ void smp_tsb_sync(struct mm_struct *mm);
 	: "r" (CTX_HWBITS((__mm)->context)), \
 	  "r" (SECONDARY_CONTEXT), "i" (ASI_DMMU), "i" (ASI_MMU))
 
-void __flush_tlb_mm(unsigned long, unsigned long);
+extern void __flush_tlb_mm(unsigned long, unsigned long);
 
 /* Switch the current MM context. */
 static inline void switch_mm(struct mm_struct *old_mm, struct mm_struct *mm, struct task_struct *tsk)

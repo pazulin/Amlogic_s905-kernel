@@ -20,13 +20,12 @@
  *
  */
 
-#include <linux/io.h>
+#include <asm/io.h>
 #include <linux/interrupt.h>
 #include <linux/init.h>
 #include <linux/delay.h>
 #include <linux/time.h>
 #include <linux/wait.h>
-#include <linux/sched/signal.h>
 #include <linux/firmware.h>
 #include <linux/moduleparam.h>
 #include <linux/slab.h>
@@ -786,9 +785,6 @@ wavefront_send_patch (snd_wavefront_t *dev, wavefront_patch_info *header)
 	DPRINT (WF_DEBUG_LOAD_PATCH, "downloading patch %d\n",
 				      header->number);
 
-	if (header->number >= ARRAY_SIZE(dev->patch_status))
-		return -EINVAL;
-
 	dev->patch_status[header->number] |= WF_SLOT_FILLED;
 
 	bptr = buf;
@@ -797,7 +793,7 @@ wavefront_send_patch (snd_wavefront_t *dev, wavefront_patch_info *header)
     
 	if (snd_wavefront_cmd (dev, WFC_DOWNLOAD_PATCH, NULL, buf)) {
 		snd_printk ("download patch failed\n");
-		return -EIO;
+		return -(EIO);
 	}
 
 	return (0);
@@ -812,9 +808,6 @@ wavefront_send_program (snd_wavefront_t *dev, wavefront_patch_info *header)
 
 	DPRINT (WF_DEBUG_LOAD_PATCH, "downloading program %d\n",
 		header->number);
-
-	if (header->number >= ARRAY_SIZE(dev->prog_status))
-		return -EINVAL;
 
 	dev->prog_status[header->number] = WF_SLOT_USED;
 
@@ -838,7 +831,7 @@ wavefront_send_program (snd_wavefront_t *dev, wavefront_patch_info *header)
     
 	if (snd_wavefront_cmd (dev, WFC_DOWNLOAD_PROGRAM, NULL, buf)) {
 		snd_printk ("download patch failed\n");	
-		return -EIO;
+		return -(EIO);
 	}
 
 	return (0);
@@ -905,9 +898,6 @@ wavefront_send_sample (snd_wavefront_t *dev,
 		header->number = x;
 	}
 
-	if (header->number >= WF_MAX_SAMPLE)
-		return -EINVAL;
-
 	if (header->size) {
 
 		/* XXX it's a debatable point whether or not RDONLY semantics
@@ -962,7 +952,7 @@ wavefront_send_sample (snd_wavefront_t *dev,
 	if (skip > 0 && header->hdr.s.SampleResolution != LINEAR_16BIT) {
 		snd_printk ("channel selection only "
 			    "possible on 16-bit samples");
-		return -EINVAL;
+		return -(EINVAL);
 	}
 
 	switch (skip) {
@@ -1059,7 +1049,7 @@ wavefront_send_sample (snd_wavefront_t *dev,
 			   NULL, sample_hdr)) {
 		snd_printk ("sample %sdownload refused.\n",
 			    header->size ? "" : "header ");
-		return -EIO;
+		return -(EIO);
 	}
 
 	if (header->size == 0) {
@@ -1085,7 +1075,7 @@ wavefront_send_sample (snd_wavefront_t *dev,
 		if (snd_wavefront_cmd (dev, WFC_DOWNLOAD_BLOCK, NULL, NULL)) {
 			snd_printk ("download block "
 				    "request refused.\n");
-			return -EIO;
+			return -(EIO);
 		}
 
 		for (i = 0; i < blocksize; i++) {
@@ -1145,12 +1135,12 @@ wavefront_send_sample (snd_wavefront_t *dev,
 			if (dma_ack == -1) {
 				snd_printk ("upload sample "
 					    "DMA ack timeout\n");
-				return -EIO;
+				return -(EIO);
 			} else {
 				snd_printk ("upload sample "
 					    "DMA ack error 0x%x\n",
 					    dma_ack);
-				return -EIO;
+				return -(EIO);
 			}
 		}
 	}
@@ -1191,7 +1181,7 @@ wavefront_send_alias (snd_wavefront_t *dev, wavefront_patch_info *header)
 
 	if (snd_wavefront_cmd (dev, WFC_DOWNLOAD_SAMPLE_ALIAS, NULL, alias_hdr)) {
 		snd_printk ("download alias failed.\n");
-		return -EIO;
+		return -(EIO);
 	}
 
 	dev->sample_status[header->number] = (WF_SLOT_FILLED|WF_ST_ALIAS);
@@ -1242,7 +1232,7 @@ wavefront_send_multisample (snd_wavefront_t *dev, wavefront_patch_info *header)
 			   msample_hdr)) {
 		snd_printk ("download of multisample failed.\n");
 		kfree(msample_hdr);
-		return -EIO;
+		return -(EIO);
 	}
 
 	dev->sample_status[header->number] = (WF_SLOT_FILLED|WF_ST_MULTISAMPLE);
@@ -1264,7 +1254,7 @@ wavefront_fetch_multisample (snd_wavefront_t *dev,
     
 	if (snd_wavefront_cmd (dev, WFC_UPLOAD_MULTISAMPLE, log_ns, number)) {
 		snd_printk ("upload multisample failed.\n");
-		return -EIO;
+		return -(EIO);
 	}
     
 	DPRINT (WF_DEBUG_DATA, "msample %d has %d samples\n",
@@ -1283,14 +1273,14 @@ wavefront_fetch_multisample (snd_wavefront_t *dev,
 		if ((val = wavefront_read (dev)) == -1) {
 			snd_printk ("upload multisample failed "
 				    "during sample loop.\n");
-			return -EIO;
+			return -(EIO);
 		}
 		d[0] = val;
 
 		if ((val = wavefront_read (dev)) == -1) {
 			snd_printk ("upload multisample failed "
 				    "during sample loop.\n");
-			return -EIO;
+			return -(EIO);
 		}
 		d[1] = val;
 	
@@ -1325,7 +1315,7 @@ wavefront_send_drum (snd_wavefront_t *dev, wavefront_patch_info *header)
 
 	if (snd_wavefront_cmd (dev, WFC_DOWNLOAD_EDRUM_PROGRAM, NULL, drumbuf)) {
 		snd_printk ("download drum failed.\n");
-		return -EIO;
+		return -(EIO);
 	}
 
 	return (0);

@@ -8,8 +8,7 @@
 #include <linux/fs_struct.h>
 #include <linux/fsnotify.h>
 #include <linux/personality.h>
-#include <linux/uaccess.h>
-#include <linux/compat.h>
+#include <asm/uaccess.h>
 #include "internal.h"
 #include "mount.h"
 
@@ -196,9 +195,8 @@ static int handle_to_path(int mountdirfd, struct file_handle __user *ufh,
 		goto out_err;
 	}
 	/* copy the full handle */
-	*handle = f_handle;
-	if (copy_from_user(&handle->f_handle,
-			   &ufh->f_handle,
+	if (copy_from_user(handle, ufh,
+			   sizeof(struct file_handle) +
 			   f_handle.handle_bytes)) {
 		retval = -EFAULT;
 		goto out_handle;
@@ -229,7 +227,7 @@ long do_handle_open(int mountdirfd,
 		path_put(&path);
 		return fd;
 	}
-	file = file_open_root(path.dentry, path.mnt, "", open_flag, 0);
+	file = file_open_root(path.dentry, path.mnt, "", open_flag);
 	if (IS_ERR(file)) {
 		put_unused_fd(fd);
 		retval =  PTR_ERR(file);
@@ -265,15 +263,3 @@ SYSCALL_DEFINE3(open_by_handle_at, int, mountdirfd,
 	ret = do_handle_open(mountdirfd, handle, flags);
 	return ret;
 }
-
-#ifdef CONFIG_COMPAT
-/*
- * Exactly like fs/open.c:sys_open_by_handle_at(), except that it
- * doesn't set the O_LARGEFILE flag.
- */
-COMPAT_SYSCALL_DEFINE3(open_by_handle_at, int, mountdirfd,
-			     struct file_handle __user *, handle, int, flags)
-{
-	return do_handle_open(mountdirfd, handle, flags);
-}
-#endif

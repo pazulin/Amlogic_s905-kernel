@@ -9,53 +9,69 @@
  * published by the Free Software Foundation.
  */
 
-#include <linux/interrupt.h>
-#include <linux/irq.h>
-#include <linux/kernel.h>
 #include <linux/kexec.h>
-#include <linux/page-flags.h>
-#include <linux/smp.h>
+#include <linux/of_fdt.h>
+#include <linux/slab.h>
+#include <linux/uaccess.h>
+#include <linux/kernel.h>
 
 #include <asm/cacheflush.h>
-#include <asm/cpu_ops.h>
-#include <asm/memory.h>
-#include <asm/mmu.h>
-#include <asm/mmu_context.h>
-#include <asm/page.h>
+#include <asm/system_misc.h>
 
 #include "cpu-reset.h"
 
-/* Global variables for the arm64_relocate_new_kernel routine. */
-extern const unsigned char arm64_relocate_new_kernel[];
-extern const unsigned long arm64_relocate_new_kernel_size;
+/* Global variables for the relocate_kernel routine. */
+
+static unsigned long kimage_head;
+static unsigned long kimage_start;
+bool in_crash_kexec;
+
+
+#define IND_FLAGS (IND_DESTINATION | IND_INDIRECTION | IND_DONE | IND_SOURCE)
+/**
+ * kexec_is_dtb - Helper routine to check the device tree header signature.
+ */
+static bool kexec_is_dtb(const void *dtb)
+{
+	__be32 magic;
+
+	return get_user(magic, (__be32 *)dtb) ? false :
+		(be32_to_cpu(magic) == OF_DT_HEADER);
+}
 
 /**
  * kexec_image_info - For debugging output.
  */
 #define kexec_image_info(_i) _kexec_image_info(__func__, __LINE__, _i)
 static void _kexec_image_info(const char *func, int line,
-	const struct kimage *kimage)
+	const struct kimage *image)
 {
 	unsigned long i;
 
-	pr_debug("%s:%d:\n", func, line);
-	pr_debug("  kexec kimage info:\n");
-	pr_debug("    type:        %d\n", kimage->type);
-	pr_debug("    start:       %lx\n", kimage->start);
-	pr_debug("    head:        %lx\n", kimage->head);
-	pr_debug("    nr_segments: %lu\n", kimage->nr_segments);
+#if !defined(DEBUG)
+	return;
+#endif
+	pr_devel("%s:%d:\n", func, line);
+	pr_devel("  kexec image info:\n");
+	pr_devel("    type:        %d\n", image->type);
+	pr_devel("    start:       %lx\n", image->start);
+	pr_devel("    head:        %lx\n", image->head);
+	pr_devel("    nr_segments: %lu\n", image->nr_segments);
 
-	for (i = 0; i < kimage->nr_segments; i++) {
-		pr_debug("      segment[%lu]: %016lx - %016lx, 0x%lx bytes, %lu pages\n",
+	for (i = 0; i < image->nr_segments; i++) {
+		pr_devel("      segment[%lu]: %016lx - %016lx, %lx bytes, %lu pages%s\n",
 			i,
-			kimage->segment[i].mem,
-			kimage->segment[i].mem + kimage->segment[i].memsz,
-			kimage->segment[i].memsz,
-			kimage->segment[i].memsz /  PAGE_SIZE);
+			image->segment[i].mem,
+			image->segment[i].mem + image->segment[i].memsz,
+			image->segment[i].memsz,
+			image->segment[i].memsz /  PAGE_SIZE,
+			(kexec_is_dtb(image->segment[i].buf) ?
+				", dtb segment" : ""));
 	}
 }
 
-void machine_kexec_cleanup(struct kimage *kimage)
+
+void machine_kexec_cleanup(struct kimage *image)
 {
 	/* Empty routine needed to avoid build errors. */
 }
@@ -64,78 +80,51 @@ void machine_kexec_cleanup(struct kimage *kimage)
  * machine_kexec_prepare - Prepare for a kexec reboot.
  *
  * Called from the core kexec code when a kernel image is loaded.
- * Forbid loading a kexec kernel if we have no way of hotplugging cpus or cpus
- * are stuck in the kernel. This avoids a panic once we hit machine_kexec().
  */
-int machine_kexec_prepare(struct kimage *kimage)
+int machine_kexec_prepare(struct kimage *image)
 {
-	kexec_image_info(kimage);
-
-	if (kimage->type != KEXEC_TYPE_CRASH && cpus_are_stuck_in_kernel()) {
-		pr_err("Can't kexec: CPUs are stuck in the kernel.\n");
-		return -EBUSY;
-	}
+	kimage_start = image->start;
+	kexec_image_info(image);
 
 	return 0;
 }
 
 /**
- * kexec_list_flush - Helper to flush the kimage list and source pages to PoC.
+ * kexec_list_flush - Helper to flush the kimage list to PoC.
  */
-static void kexec_list_flush(struct kimage *kimage)
+static void kexec_list_flush(unsigned long kimage_head)
 {
-	kimage_entry_t *entry;
+	unsigned long *entry;
 
-	for (entry = &kimage->head; ; entry++) {
-		unsigned int flag;
-		void *addr;
-
-		/* flush the list entries. */
-		__flush_dcache_area(entry, sizeof(kimage_entry_t));
-
-		flag = *entry & IND_FLAGS;
-		if (flag == IND_DONE)
-			break;
-
-		addr = phys_to_virt(*entry & PAGE_MASK);
+	for (entry = &kimage_head; ; entry++) {
+		unsigned int flag = *entry & IND_FLAGS;
+		void *addr = phys_to_virt(*entry & PAGE_MASK);
 
 		switch (flag) {
 		case IND_INDIRECTION:
-			/* Set entry point just before the new list page. */
-			entry = (kimage_entry_t *)addr - 1;
-			break;
-		case IND_SOURCE:
-			/* flush the source pages. */
+			entry = (unsigned long *)addr - 1;
 			__flush_dcache_area(addr, PAGE_SIZE);
 			break;
 		case IND_DESTINATION:
 			break;
+		case IND_SOURCE:
+			__flush_dcache_area(addr, PAGE_SIZE);
+			break;
+		case IND_DONE:
+			return;
 		default:
 			BUG();
 		}
 	}
 }
 
-/**
- * kexec_segment_flush - Helper to flush the kimage segments to PoC.
- */
-static void kexec_segment_flush(const struct kimage *kimage)
+static void soft_restart_cur(unsigned long addr)
 {
-	unsigned long i;
+	setup_mm_for_reboot();
+	cpu_soft_restart(virt_to_phys(cpu_reset_kexec), addr,
+		is_hyp_mode_available());
 
-	pr_debug("%s:\n", __func__);
-
-	for (i = 0; i < kimage->nr_segments; i++) {
-		pr_debug("  segment[%lu]: %016lx - %016lx, 0x%lx bytes, %lu pages\n",
-			i,
-			kimage->segment[i].mem,
-			kimage->segment[i].mem + kimage->segment[i].memsz,
-			kimage->segment[i].memsz,
-			kimage->segment[i].memsz /  PAGE_SIZE);
-
-		__flush_dcache_area(phys_to_virt(kimage->segment[i].mem),
-			kimage->segment[i].memsz);
-	}
+	BUG(); /* Should never get here. */
 }
 
 /**
@@ -143,36 +132,42 @@ static void kexec_segment_flush(const struct kimage *kimage)
  *
  * Called from the core kexec code for a sys_reboot with LINUX_REBOOT_CMD_KEXEC.
  */
-void machine_kexec(struct kimage *kimage)
+void machine_kexec(struct kimage *image)
 {
 	phys_addr_t reboot_code_buffer_phys;
 	void *reboot_code_buffer;
-	bool in_kexec_crash = (kimage == kexec_crash_image);
-	bool stuck_cpus = cpus_are_stuck_in_kernel();
 
-	/*
-	 * New cpus may have become stuck_in_kernel after we loaded the image.
-	 */
-	BUG_ON(!in_kexec_crash && (stuck_cpus || (num_online_cpus() > 1)));
-	WARN(in_kexec_crash && (stuck_cpus || smp_crash_stop_failed()),
-		"Some CPUs may be stale, kdump will be unreliable.\n");
+	if (num_online_cpus() > 1) {
+		if (in_crash_kexec)
+			pr_warn("*\n* kdump might fail because %d cpus are still online\n*\n",
+					num_online_cpus());
+		else
+			BUG();
+	}
+	if (image)
+		kimage_head = image->head;
 
-	reboot_code_buffer_phys = page_to_phys(kimage->control_code_page);
+	reboot_code_buffer_phys = page_to_phys(image->control_code_page);
 	reboot_code_buffer = phys_to_virt(reboot_code_buffer_phys);
 
-	kexec_image_info(kimage);
+	kexec_image_info(image);
 
-	pr_debug("%s:%d: control_code_page:        %p\n", __func__, __LINE__,
-		kimage->control_code_page);
-	pr_debug("%s:%d: reboot_code_buffer_phys:  %pa\n", __func__, __LINE__,
+	pr_err("%s:%d: control_code_page:        %p\n", __func__, __LINE__,
+		image->control_code_page);
+	pr_err("%s:%d: reboot_code_buffer_phys:  %pa\n", __func__, __LINE__,
 		&reboot_code_buffer_phys);
-	pr_debug("%s:%d: reboot_code_buffer:       %p\n", __func__, __LINE__,
+	pr_err("%s:%d: reboot_code_buffer:       %p\n", __func__, __LINE__,
 		reboot_code_buffer);
-	pr_debug("%s:%d: relocate_new_kernel:      %p\n", __func__, __LINE__,
+	pr_err("%s:%d: relocate_new_kernel:      %p\n", __func__, __LINE__,
 		arm64_relocate_new_kernel);
-	pr_debug("%s:%d: relocate_new_kernel_size: 0x%lx(%lu) bytes\n",
+	pr_err("%s:%d: relocate_new_kernel_size: 0x%lx(%lu) bytes\n",
 		__func__, __LINE__, arm64_relocate_new_kernel_size,
 		arm64_relocate_new_kernel_size);
+
+	pr_err("%s:%d: kimage_head:              %lx\n", __func__, __LINE__,
+		kimage_head);
+	pr_err("%s:%d: kimage_start:             %lx\n", __func__, __LINE__,
+		kimage_start);
 
 	/*
 	 * Copy arm64_relocate_new_kernel to the reboot_code_buffer for use
@@ -181,184 +176,63 @@ void machine_kexec(struct kimage *kimage)
 	memcpy(reboot_code_buffer, arm64_relocate_new_kernel,
 		arm64_relocate_new_kernel_size);
 
+	/* Set the variables in reboot_code_buffer. */
+
+	memcpy(reboot_code_buffer + arm64_kexec_kimage_start_offset,
+	       &kimage_start, sizeof(kimage_start));
+	memcpy(reboot_code_buffer + arm64_kexec_kimage_head_offset,
+	       &kimage_head, sizeof(kimage_head));
+
 	/* Flush the reboot_code_buffer in preparation for its execution. */
 	__flush_dcache_area(reboot_code_buffer, arm64_relocate_new_kernel_size);
-	flush_icache_range((uintptr_t)reboot_code_buffer,
-		arm64_relocate_new_kernel_size);
 
-	/* Flush the kimage list and its buffers. */
-	kexec_list_flush(kimage);
-
-	/* Flush the new image if already in place. */
-	if ((kimage != kexec_crash_image) && (kimage->head & IND_DONE))
-		kexec_segment_flush(kimage);
+	/* Flush the kimage list. */
+	kexec_list_flush(image->head);
 
 	pr_info("Bye!\n");
 
+	pr_info("-----phys:%llx\n", reboot_code_buffer_phys);
 	/* Disable all DAIF exceptions. */
 	asm volatile ("msr daifset, #0xf" : : : "memory");
 
 	/*
-	 * cpu_soft_restart will shutdown the MMU, disable data caches, then
+	 * soft_restart(_cur) will shutdown the MMU, disable data caches, then
 	 * transfer control to the reboot_code_buffer which contains a copy of
 	 * the arm64_relocate_new_kernel routine.  arm64_relocate_new_kernel
-	 * uses physical addressing to relocate the new image to its final
-	 * position and transfers control to the image entry point when the
-	 * relocation is complete.
+	 * will use physical addressing to relocate the new kernel to its final
+	 * position and then will transfer control to the entry point of the new
+	 * kernel.
 	 */
-
-	cpu_soft_restart(kimage != kexec_crash_image,
-		reboot_code_buffer_phys, kimage->head, kimage->start, 0);
-
-	BUG(); /* Should never get here. */
-}
-
-static void machine_kexec_mask_interrupts(void)
-{
-	unsigned int i;
-	struct irq_desc *desc;
-
-	for_each_irq_desc(i, desc) {
-		struct irq_chip *chip;
-		int ret;
-
-		chip = irq_desc_get_chip(desc);
-		if (!chip)
-			continue;
-
-		/*
-		 * First try to remove the active state. If this
-		 * fails, try to EOI the interrupt.
-		 */
-		ret = irq_set_irqchip_state(i, IRQCHIP_STATE_ACTIVE, false);
-
-		if (ret && irqd_irq_inprogress(&desc->irq_data) &&
-		    chip->irq_eoi)
-			chip->irq_eoi(&desc->irq_data);
-
-		if (chip->irq_mask)
-			chip->irq_mask(&desc->irq_data);
-
-		if (chip->irq_disable && !irqd_irq_disabled(&desc->irq_data))
-			chip->irq_disable(&desc->irq_data);
-	}
+	pr_info("-----phys:%llx\n", reboot_code_buffer_phys);
+	soft_restart_cur(reboot_code_buffer_phys);
 }
 
 /**
- * machine_crash_shutdown - shutdown non-crashing cpus and save registers
+ * machine_crash_shutdown - shutdown non-boot cpus and save registers
  */
 void machine_crash_shutdown(struct pt_regs *regs)
 {
+	struct pt_regs dummy_regs;
+	int cpu;
+
 	local_irq_disable();
 
-	/* shutdown non-crashing cpus */
-	smp_send_crash_stop();
+	in_crash_kexec = true;
 
-	/* for crashing cpu */
+	/*
+	 * clear and initialize the per-cpu info. This is necessary
+	 * because, otherwise, slots for offline cpus would never be
+	 * filled up. See smp_send_stop().
+	 */
+	memset(&dummy_regs, 0, sizeof(dummy_regs));
+	for_each_possible_cpu(cpu)
+		crash_save_cpu(&dummy_regs, cpu);
+
+	/* shutdown non-boot cpus */
+	smp_send_stop();
+
+	/* for boot cpu */
 	crash_save_cpu(regs, smp_processor_id());
-	machine_kexec_mask_interrupts();
 
-	pr_info("Starting crashdump kernel...\n");
-}
-
-void arch_kexec_protect_crashkres(void)
-{
-	int i;
-
-	kexec_segment_flush(kexec_crash_image);
-
-	for (i = 0; i < kexec_crash_image->nr_segments; i++)
-		set_memory_valid(
-			__phys_to_virt(kexec_crash_image->segment[i].mem),
-			kexec_crash_image->segment[i].memsz >> PAGE_SHIFT, 0);
-}
-
-void arch_kexec_unprotect_crashkres(void)
-{
-	int i;
-
-	for (i = 0; i < kexec_crash_image->nr_segments; i++)
-		set_memory_valid(
-			__phys_to_virt(kexec_crash_image->segment[i].mem),
-			kexec_crash_image->segment[i].memsz >> PAGE_SHIFT, 1);
-}
-
-#ifdef CONFIG_HIBERNATION
-/*
- * To preserve the crash dump kernel image, the relevant memory segments
- * should be mapped again around the hibernation.
- */
-void crash_prepare_suspend(void)
-{
-	if (kexec_crash_image)
-		arch_kexec_unprotect_crashkres();
-}
-
-void crash_post_resume(void)
-{
-	if (kexec_crash_image)
-		arch_kexec_protect_crashkres();
-}
-
-/*
- * crash_is_nosave
- *
- * Return true only if a page is part of reserved memory for crash dump kernel,
- * but does not hold any data of loaded kernel image.
- *
- * Note that all the pages in crash dump kernel memory have been initially
- * marked as Reserved in kexec_reserve_crashkres_pages().
- *
- * In hibernation, the pages which are Reserved and yet "nosave" are excluded
- * from the hibernation iamge. crash_is_nosave() does thich check for crash
- * dump kernel and will reduce the total size of hibernation image.
- */
-
-bool crash_is_nosave(unsigned long pfn)
-{
-	int i;
-	phys_addr_t addr;
-
-	if (!crashk_res.end)
-		return false;
-
-	/* in reserved memory? */
-	addr = __pfn_to_phys(pfn);
-	if ((addr < crashk_res.start) || (crashk_res.end < addr))
-		return false;
-
-	if (!kexec_crash_image)
-		return true;
-
-	/* not part of loaded kernel image? */
-	for (i = 0; i < kexec_crash_image->nr_segments; i++)
-		if (addr >= kexec_crash_image->segment[i].mem &&
-				addr < (kexec_crash_image->segment[i].mem +
-					kexec_crash_image->segment[i].memsz))
-			return false;
-
-	return true;
-}
-
-void crash_free_reserved_phys_range(unsigned long begin, unsigned long end)
-{
-	unsigned long addr;
-	struct page *page;
-
-	for (addr = begin; addr < end; addr += PAGE_SIZE) {
-		page = phys_to_page(addr);
-		ClearPageReserved(page);
-		free_reserved_page(page);
-	}
-}
-#endif /* CONFIG_HIBERNATION */
-
-void arch_crash_save_vmcoreinfo(void)
-{
-	VMCOREINFO_NUMBER(VA_BITS);
-	/* Please note VMCOREINFO_NUMBER() uses "%d", not "%x" */
-	vmcoreinfo_append_str("NUMBER(kimage_voffset)=0x%llx\n",
-						kimage_voffset);
-	vmcoreinfo_append_str("NUMBER(PHYS_OFFSET)=0x%llx\n",
-						PHYS_OFFSET);
+	pr_err("Loading crashdump kernel...\n");
 }

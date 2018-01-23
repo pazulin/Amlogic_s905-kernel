@@ -18,7 +18,7 @@
 #include <linux/interrupt.h>
 #include <linux/ioport.h>
 #include <linux/proc_fs.h>
-#include <linux/sched/signal.h>
+#include <linux/sched.h>
 #include <linux/seq_file.h>
 #include <linux/skbuff.h>
 #include <linux/workqueue.h>
@@ -28,7 +28,7 @@
 #include <linux/moduleparam.h>
 #include <linux/delay.h>
 #include <linux/slab.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <linux/isdn/capicmd.h>
 #include <linux/isdn/capiutil.h>
 #ifdef AVMB1_COMPAT
@@ -1032,7 +1032,6 @@ static int old_capi_manufacturer(unsigned int cmd, void __user *data)
 						     sizeof(avmb1_carddef))))
 				return -EFAULT;
 			cdef.cardtype = AVM_CARDTYPE_B1;
-			cdef.cardnr = 0;
 		} else {
 			if ((retval = copy_from_user(&cdef, data,
 						     sizeof(avmb1_extcarddef))))
@@ -1185,7 +1184,7 @@ static int old_capi_manufacturer(unsigned int cmd, void __user *data)
  * Return value: CAPI result code
  */
 
-int capi20_manufacturer(unsigned long cmd, void __user *data)
+int capi20_manufacturer(unsigned int cmd, void __user *data)
 {
 	struct capi_ctr *ctr;
 	int retval;
@@ -1260,7 +1259,7 @@ int capi20_manufacturer(unsigned long cmd, void __user *data)
 	}
 
 	default:
-		printk(KERN_ERR "kcapi: manufacturer command %lu unknown.\n",
+		printk(KERN_ERR "kcapi: manufacturer command %d unknown.\n",
 		       cmd);
 		break;
 

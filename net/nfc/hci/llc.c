@@ -20,11 +20,13 @@
 
 #include "llc.h"
 
-static LIST_HEAD(llc_engines);
+static struct list_head llc_engines;
 
 int nfc_llc_init(void)
 {
 	int r;
+
+	INIT_LIST_HEAD(&llc_engines);
 
 	r = nfc_llc_nop_register();
 	if (r)
@@ -133,29 +135,34 @@ void nfc_llc_free(struct nfc_llc *llc)
 	kfree(llc);
 }
 
-int nfc_llc_start(struct nfc_llc *llc)
+inline void nfc_llc_get_rx_head_tail_room(struct nfc_llc *llc, int *rx_headroom,
+					  int *rx_tailroom)
+{
+	*rx_headroom = llc->rx_headroom;
+	*rx_tailroom = llc->rx_tailroom;
+}
+
+inline int nfc_llc_start(struct nfc_llc *llc)
 {
 	return llc->ops->start(llc);
 }
-EXPORT_SYMBOL(nfc_llc_start);
 
-int nfc_llc_stop(struct nfc_llc *llc)
+inline int nfc_llc_stop(struct nfc_llc *llc)
 {
 	return llc->ops->stop(llc);
 }
-EXPORT_SYMBOL(nfc_llc_stop);
 
-void nfc_llc_rcv_from_drv(struct nfc_llc *llc, struct sk_buff *skb)
+inline void nfc_llc_rcv_from_drv(struct nfc_llc *llc, struct sk_buff *skb)
 {
 	llc->ops->rcv_from_drv(llc, skb);
 }
 
-int nfc_llc_xmit_from_hci(struct nfc_llc *llc, struct sk_buff *skb)
+inline int nfc_llc_xmit_from_hci(struct nfc_llc *llc, struct sk_buff *skb)
 {
 	return llc->ops->xmit_from_hci(llc, skb);
 }
 
-void *nfc_llc_get_data(struct nfc_llc *llc)
+inline void *nfc_llc_get_data(struct nfc_llc *llc)
 {
 	return llc->data;
 }

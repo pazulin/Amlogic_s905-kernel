@@ -8,9 +8,8 @@
  * I like traps on v9, :))))
  */
 
-#include <linux/extable.h>
-#include <linux/sched/mm.h>
-#include <linux/sched/debug.h>
+#include <linux/module.h>
+#include <linux/sched.h>
 #include <linux/linkage.h>
 #include <linux/kernel.h>
 #include <linux/signal.h>
@@ -30,7 +29,7 @@
 #include <asm/page.h>
 #include <asm/pgtable.h>
 #include <asm/unistd.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/fpumacro.h>
 #include <asm/lsu.h>
 #include <asm/dcu.h>
@@ -44,10 +43,8 @@
 #include <asm/prom.h>
 #include <asm/memctrl.h>
 #include <asm/cacheflush.h>
-#include <asm/setup.h>
 
 #include "entry.h"
-#include "kernel.h"
 #include "kstack.h"
 
 /* When an irrecoverable trap occurs at tl > 0, the trap entry
@@ -86,7 +83,7 @@ static void dump_tl1_traplog(struct tl1_traplog *p)
 
 void bad_trap(struct pt_regs *regs, long lvl)
 {
-	char buffer[36];
+	char buffer[32];
 	siginfo_t info;
 
 	if (notify_die(DIE_TRAP, "bad trap", regs,
@@ -117,7 +114,7 @@ void bad_trap(struct pt_regs *regs, long lvl)
 
 void bad_trap_tl1(struct pt_regs *regs, long lvl)
 {
-	char buffer[36];
+	char buffer[32];
 	
 	if (notify_die(DIE_TRAP_TL1, "bad trap tl1", regs,
 		       0, lvl, SIGTRAP) == NOTIFY_STOP)
@@ -2052,73 +2049,6 @@ void sun4v_resum_overflow(struct pt_regs *regs)
 	atomic_inc(&sun4v_resum_oflow_cnt);
 }
 
-/* Given a set of registers, get the virtual addressi that was being accessed
- * by the faulting instructions at tpc.
- */
-static unsigned long sun4v_get_vaddr(struct pt_regs *regs)
-{
-	unsigned int insn;
-
-	if (!copy_from_user(&insn, (void __user *)regs->tpc, 4)) {
-		return compute_effective_address(regs, insn,
-						 (insn >> 25) & 0x1f);
-	}
-	return 0;
-}
-
-/* Attempt to handle non-resumable errors generated from userspace.
- * Returns true if the signal was handled, false otherwise.
- */
-bool sun4v_nonresum_error_user_handled(struct pt_regs *regs,
-				  struct sun4v_error_entry *ent) {
-
-	unsigned int attrs = ent->err_attrs;
-
-	if (attrs & SUN4V_ERR_ATTRS_MEMORY) {
-		unsigned long addr = ent->err_raddr;
-		siginfo_t info;
-
-		if (addr == ~(u64)0) {
-			/* This seems highly unlikely to ever occur */
-			pr_emerg("SUN4V NON-RECOVERABLE ERROR: Memory error detected in unknown location!\n");
-		} else {
-			unsigned long page_cnt = DIV_ROUND_UP(ent->err_size,
-							      PAGE_SIZE);
-
-			/* Break the unfortunate news. */
-			pr_emerg("SUN4V NON-RECOVERABLE ERROR: Memory failed at %016lX\n",
-				 addr);
-			pr_emerg("SUN4V NON-RECOVERABLE ERROR:   Claiming %lu ages.\n",
-				 page_cnt);
-
-			while (page_cnt-- > 0) {
-				if (pfn_valid(addr >> PAGE_SHIFT))
-					get_page(pfn_to_page(addr >> PAGE_SHIFT));
-				addr += PAGE_SIZE;
-			}
-		}
-		info.si_signo = SIGKILL;
-		info.si_errno = 0;
-		info.si_trapno = 0;
-		force_sig_info(info.si_signo, &info, current);
-
-		return true;
-	}
-	if (attrs & SUN4V_ERR_ATTRS_PIO) {
-		siginfo_t info;
-
-		info.si_signo = SIGBUS;
-		info.si_code = BUS_ADRERR;
-		info.si_addr = (void __user *)sun4v_get_vaddr(regs);
-		force_sig_info(info.si_signo, &info, current);
-
-		return true;
-	}
-
-	/* Default to doing nothing */
-	return false;
-}
-
 /* We run with %pil set to PIL_NORMAL_MAX and PSTATE_IE enabled in %pstate.
  * Log the event, clear the first word of the entry, and die.
  */
@@ -2142,12 +2072,6 @@ void sun4v_nonresum_error(struct pt_regs *regs, unsigned long offset)
 	wmb();
 
 	put_cpu();
-
-	if (!(regs->tstate & TSTATE_PRIV) &&
-	    sun4v_nonresum_error_user_handled(regs, &local_copy)) {
-		/* DON'T PANIC: This userspace error was handled. */
-		return;
-	}
 
 #ifdef CONFIG_PCI
 	/* Check for the special PCI poke sequence. */
@@ -2287,6 +2211,8 @@ void do_fpieee(struct pt_regs *regs)
 out:
 	exception_exit(prev_state);
 }
+
+extern int do_mathemu(struct pt_regs *, struct fpustate *, bool);
 
 void do_fpother(struct pt_regs *regs)
 {
@@ -2460,7 +2386,7 @@ static inline struct reg_window *kernel_stack_up(struct reg_window *rw)
 	return (struct reg_window *) (fp + STACK_BIAS);
 }
 
-void __noreturn die_if_kernel(char *str, struct pt_regs *regs)
+void die_if_kernel(char *str, struct pt_regs *regs)
 {
 	static int die_counter;
 	int count = 0;
@@ -2501,8 +2427,6 @@ void __noreturn die_if_kernel(char *str, struct pt_regs *regs)
 		}
 		user_instruction_dump ((unsigned int __user *) regs->tpc);
 	}
-	if (panic_on_oops)
-		panic("Fatal exception");
 	if (regs->tstate & TSTATE_PRIV)
 		do_exit(SIGKILL);
 	do_exit(SIGSEGV);
@@ -2511,6 +2435,9 @@ EXPORT_SYMBOL(die_if_kernel);
 
 #define VIS_OPCODE_MASK	((0x3 << 30) | (0x3f << 19))
 #define VIS_OPCODE_VAL	((0x2 << 30) | (0x36 << 19))
+
+extern int handle_popc(u32 insn, struct pt_regs *regs);
+extern int handle_ldf_stq(u32 insn, struct pt_regs *regs);
 
 void do_illegal_instruction(struct pt_regs *regs)
 {
@@ -2561,6 +2488,8 @@ void do_illegal_instruction(struct pt_regs *regs)
 out:
 	exception_exit(prev_state);
 }
+
+extern void kernel_unaligned_trap(struct pt_regs *regs, unsigned int insn);
 
 void mem_address_unaligned(struct pt_regs *regs, unsigned long sfar, unsigned long sfsr)
 {
@@ -2640,11 +2569,39 @@ void do_cee(struct pt_regs *regs)
 	die_if_kernel("TL0: Cache Error Exception", regs);
 }
 
+void do_cee_tl1(struct pt_regs *regs)
+{
+	exception_enter();
+	dump_tl1_traplog((struct tl1_traplog *)(regs + 1));
+	die_if_kernel("TL1: Cache Error Exception", regs);
+}
+
+void do_dae_tl1(struct pt_regs *regs)
+{
+	exception_enter();
+	dump_tl1_traplog((struct tl1_traplog *)(regs + 1));
+	die_if_kernel("TL1: Data Access Exception", regs);
+}
+
+void do_iae_tl1(struct pt_regs *regs)
+{
+	exception_enter();
+	dump_tl1_traplog((struct tl1_traplog *)(regs + 1));
+	die_if_kernel("TL1: Instruction Access Exception", regs);
+}
+
 void do_div0_tl1(struct pt_regs *regs)
 {
 	exception_enter();
 	dump_tl1_traplog((struct tl1_traplog *)(regs + 1));
 	die_if_kernel("TL1: DIV0 Exception", regs);
+}
+
+void do_fpdis_tl1(struct pt_regs *regs)
+{
+	exception_enter();
+	dump_tl1_traplog((struct tl1_traplog *)(regs + 1));
+	die_if_kernel("TL1: FPU Disabled", regs);
 }
 
 void do_fpieee_tl1(struct pt_regs *regs)
@@ -2765,6 +2722,8 @@ void __init trap_init(void)
 					       fault_address) ||
 		     TI_KREGS != offsetof(struct thread_info, kregs) ||
 		     TI_UTRAPS != offsetof(struct thread_info, utraps) ||
+		     TI_EXEC_DOMAIN != offsetof(struct thread_info,
+						exec_domain) ||
 		     TI_REG_WINDOW != offsetof(struct thread_info,
 					       reg_window) ||
 		     TI_RWIN_SPTRS != offsetof(struct thread_info,
@@ -2776,6 +2735,8 @@ void __init trap_init(void)
 		     TI_NEW_CHILD != offsetof(struct thread_info, new_child) ||
 		     TI_CURRENT_DS != offsetof(struct thread_info,
 						current_ds) ||
+		     TI_RESTART_BLOCK != offsetof(struct thread_info,
+						  restart_block) ||
 		     TI_KUNA_REGS != offsetof(struct thread_info,
 					      kern_una_regs) ||
 		     TI_KUNA_INSN != offsetof(struct thread_info,
@@ -2838,6 +2799,6 @@ void __init trap_init(void)
 	/* Attach to the address space of init_task.  On SMP we
 	 * do this in smp.c:smp_callin for other cpus.
 	 */
-	mmgrab(&init_mm);
+	atomic_inc(&init_mm.mm_count);
 	current->active_mm = &init_mm;
 }

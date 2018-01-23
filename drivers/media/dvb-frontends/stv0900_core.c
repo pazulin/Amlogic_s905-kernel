@@ -17,6 +17,10 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  *
  * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #include <linux/kernel.h>
@@ -1083,7 +1087,7 @@ u8 stv0900_get_optim_carr_loop(s32 srate, enum fe_stv0900_modcode modcode,
 							s32 pilot, u8 chip_id)
 {
 	u8 aclc_value = 0x29;
-	s32 i, cllas2_size;
+	s32 i;
 	const struct stv0900_car_loop_optim *cls2, *cllqs2, *cllas2;
 
 	dprintk("%s\n", __func__);
@@ -1092,17 +1096,14 @@ u8 stv0900_get_optim_carr_loop(s32 srate, enum fe_stv0900_modcode modcode,
 		cls2 = FE_STV0900_S2CarLoop;
 		cllqs2 = FE_STV0900_S2LowQPCarLoopCut30;
 		cllas2 = FE_STV0900_S2APSKCarLoopCut30;
-		cllas2_size = ARRAY_SIZE(FE_STV0900_S2APSKCarLoopCut30);
 	} else if (chip_id == 0x20) {
 		cls2 = FE_STV0900_S2CarLoopCut20;
 		cllqs2 = FE_STV0900_S2LowQPCarLoopCut20;
 		cllas2 = FE_STV0900_S2APSKCarLoopCut20;
-		cllas2_size = ARRAY_SIZE(FE_STV0900_S2APSKCarLoopCut20);
 	} else {
 		cls2 = FE_STV0900_S2CarLoopCut30;
 		cllqs2 = FE_STV0900_S2LowQPCarLoopCut30;
 		cllas2 = FE_STV0900_S2APSKCarLoopCut30;
-		cllas2_size = ARRAY_SIZE(FE_STV0900_S2APSKCarLoopCut30);
 	}
 
 	if (modcode < STV0900_QPSK_12) {
@@ -1177,7 +1178,7 @@ u8 stv0900_get_optim_carr_loop(s32 srate, enum fe_stv0900_modcode modcode,
 				aclc_value = cls2[i].car_loop_pilots_off_30;
 		}
 
-	} else if (i < cllas2_size) {
+	} else {
 		if (srate <= 3000000)
 			aclc_value = cllas2[i].car_loop_pilots_on_2;
 		else if (srate <= 7000000)
@@ -1269,6 +1270,7 @@ enum fe_stv0900_error stv0900_st_dvbs2_single(struct stv0900_internal *intp,
 					enum fe_stv0900_demod_mode LDPC_Mode,
 					enum fe_stv0900_demod_num demod)
 {
+	enum fe_stv0900_error error = STV0900_NO_ERROR;
 	s32 reg_ind;
 
 	dprintk("%s\n", __func__);
@@ -1335,7 +1337,7 @@ enum fe_stv0900_error stv0900_st_dvbs2_single(struct stv0900_internal *intp,
 		break;
 	}
 
-	return STV0900_NO_ERROR;
+	return error;
 }
 
 static enum fe_stv0900_error stv0900_init_internal(struct dvb_frontend *fe,
@@ -1553,6 +1555,8 @@ static int stv0900_status(struct stv0900_internal *intp,
 static int stv0900_set_mis(struct stv0900_internal *intp,
 				enum fe_stv0900_demod_num demod, int mis)
 {
+	enum fe_stv0900_error error = STV0900_NO_ERROR;
+
 	dprintk("%s\n", __func__);
 
 	if (mis < 0 || mis > 255) {
@@ -1565,7 +1569,7 @@ static int stv0900_set_mis(struct stv0900_internal *intp,
 		stv0900_write_reg(intp, ISIBITENA, 0xff);
 	}
 
-	return STV0900_NO_ERROR;
+	return error;
 }
 
 
@@ -1743,8 +1747,7 @@ static int stv0900_send_master_cmd(struct dvb_frontend *fe,
 				state->demod);
 }
 
-static int stv0900_send_burst(struct dvb_frontend *fe,
-			      enum fe_sec_mini_cmd burst)
+static int stv0900_send_burst(struct dvb_frontend *fe, fe_sec_mini_cmd_t burst)
 {
 	struct stv0900_state *state = fe->demodulator_priv;
 	struct stv0900_internal *intp = state->internal;
@@ -1793,8 +1796,7 @@ static int stv0900_recv_slave_reply(struct dvb_frontend *fe,
 	return 0;
 }
 
-static int stv0900_set_tone(struct dvb_frontend *fe,
-			    enum fe_sec_tone_mode toneoff)
+static int stv0900_set_tone(struct dvb_frontend *fe, fe_sec_tone_mode_t toneoff)
 {
 	struct stv0900_state *state = fe->demodulator_priv;
 	struct stv0900_internal *intp = state->internal;
@@ -1858,9 +1860,9 @@ static int stv0900_sleep(struct dvb_frontend *fe)
 	return 0;
 }
 
-static int stv0900_get_frontend(struct dvb_frontend *fe,
-				struct dtv_frontend_properties *p)
+static int stv0900_get_frontend(struct dvb_frontend *fe)
 {
+	struct dtv_frontend_properties *p = &fe->dtv_property_cache;
 	struct stv0900_state *state = fe->demodulator_priv;
 	struct stv0900_internal *intp = state->internal;
 	enum fe_stv0900_demod_num demod = state->demod;
@@ -1871,7 +1873,7 @@ static int stv0900_get_frontend(struct dvb_frontend *fe,
 	return 0;
 }
 
-static const struct dvb_frontend_ops stv0900_ops = {
+static struct dvb_frontend_ops stv0900_ops = {
 	.delsys = { SYS_DVBS, SYS_DVBS2, SYS_DSS },
 	.info = {
 		.name			= "STV0900 frontend",
@@ -1959,11 +1961,11 @@ struct dvb_frontend *stv0900_attach(const struct stv0900_config *config,
 		break;
 	}
 
-	dprintk("%s: Attaching STV0900 demodulator(%d) \n", __func__, demod);
+	dprintk("%s: Attaching STV0900 demodulator(%d)\n", __func__, demod);
 	return &state->frontend;
 
 error:
-	dprintk("%s: Failed to attach STV0900 demodulator(%d) \n",
+	dprintk("%s: Failed to attach STV0900 demodulator(%d)\n",
 		__func__, demod);
 	kfree(state);
 	return NULL;

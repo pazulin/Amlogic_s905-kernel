@@ -1,5 +1,5 @@
 /*
- * General MIPS MT support routines, usable in AP/SP and SMVP.
+ * General MIPS MT support routines, usable in AP/SP, SMVP, or SMTC kernels
  * Copyright (C) 2005 Mips Technologies, Inc
  */
 #include <linux/cpu.h>
@@ -9,11 +9,9 @@
 #include <linux/kernel.h>
 #include <linux/init.h>
 #include <linux/sched.h>
-#include <linux/sched/task.h>
-#include <linux/cred.h>
 #include <linux/security.h>
 #include <linux/types.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 /*
  * CPU mask used to set process affinity for MT VPEs/TCs with FPUs
@@ -101,10 +99,9 @@ asmlinkage long mipsmt_sys_sched_setaffinity(pid_t pid, unsigned int len,
 		retval = -ENOMEM;
 		goto out_free_new_mask;
 	}
-	if (!check_same_owner(p) && !capable(CAP_SYS_NICE)) {
-		retval = -EPERM;
+	retval = -EPERM;
+	if (!check_same_owner(p) && !capable(CAP_SYS_NICE))
 		goto out_unlock;
-	}
 
 	retval = security_task_setscheduler(p);
 	if (retval)
@@ -117,8 +114,8 @@ asmlinkage long mipsmt_sys_sched_setaffinity(pid_t pid, unsigned int len,
 	/* Compute new global allowed CPU set if necessary */
 	ti = task_thread_info(p);
 	if (test_ti_thread_flag(ti, TIF_FPUBOUND) &&
-	    cpumask_intersects(new_mask, &mt_fpu_cpumask)) {
-		cpumask_and(effective_mask, new_mask, &mt_fpu_cpumask);
+	    cpus_intersects(*new_mask, mt_fpu_cpumask)) {
+		cpus_and(*effective_mask, *new_mask, mt_fpu_cpumask);
 		retval = set_cpus_allowed_ptr(p, effective_mask);
 	} else {
 		cpumask_copy(effective_mask, new_mask);
@@ -157,7 +154,7 @@ asmlinkage long mipsmt_sys_sched_getaffinity(pid_t pid, unsigned int len,
 				      unsigned long __user *user_mask_ptr)
 {
 	unsigned int real_len;
-	cpumask_t allowed, mask;
+	cpumask_t mask;
 	int retval;
 	struct task_struct *p;
 
@@ -176,8 +173,7 @@ asmlinkage long mipsmt_sys_sched_getaffinity(pid_t pid, unsigned int len,
 	if (retval)
 		goto out_unlock;
 
-	cpumask_or(&allowed, &p->thread.user_cpus_allowed, &p->cpus_allowed);
-	cpumask_and(&mask, &allowed, cpu_active_mask);
+	cpumask_and(&mask, &p->thread.user_cpus_allowed, cpu_possible_mask);
 
 out_unlock:
 	read_unlock(&tasklist_lock);

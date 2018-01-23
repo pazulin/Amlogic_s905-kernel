@@ -509,8 +509,7 @@ static void
 set_arcofi(struct IsdnCardState *cs, int bc) {
 	cs->dc.isac.arcofi_bc = bc;
 	arcofi_fsm(cs, ARCOFI_START, &ARCOFI_COP_5);
-	wait_event_interruptible(cs->dc.isac.arcofi_wait,
-				 cs->dc.isac.arcofi_state == ARCOFI_NOP);
+	interruptible_sleep_on(&cs->dc.isac.arcofi_wait);
 }
 
 static int
@@ -529,8 +528,7 @@ check_arcofi(struct IsdnCardState *cs)
 		}
 	cs->dc.isac.arcofi_bc = 0;
 	arcofi_fsm(cs, ARCOFI_START, &ARCOFI_VERSION);
-	wait_event_interruptible(cs->dc.isac.arcofi_wait,
-				 cs->dc.isac.arcofi_state == ARCOFI_NOP);
+	interruptible_sleep_on(&cs->dc.isac.arcofi_wait);
 	if (!test_and_clear_bit(FLG_ARCOFI_ERROR, &cs->HW_Flags)) {
 		debugl1(cs, "Arcofi response received %d bytes", cs->dc.isac.mon_rxp);
 		p = cs->dc.isac.mon_rx;
@@ -597,8 +595,7 @@ check_arcofi(struct IsdnCardState *cs)
 			       Elsa_Types[cs->subtyp],
 			       cs->hw.elsa.base + 8);
 		arcofi_fsm(cs, ARCOFI_START, &ARCOFI_XOP_0);
-		wait_event_interruptible(cs->dc.isac.arcofi_wait,
-				 cs->dc.isac.arcofi_state == ARCOFI_NOP);
+		interruptible_sleep_on(&cs->dc.isac.arcofi_wait);
 		return (1);
 	}
 	return (0);
@@ -1147,7 +1144,9 @@ static int setup_elsa_common(struct IsdnCard *card)
 	init_arcofi(cs);
 #endif
 	setup_isac(cs);
-	setup_timer(&cs->hw.elsa.tl, (void *)elsa_led_handler, (long)cs);
+	cs->hw.elsa.tl.function = (void *) elsa_led_handler;
+	cs->hw.elsa.tl.data = (long) cs;
+	init_timer(&cs->hw.elsa.tl);
 	/* Teste Timer */
 	if (cs->hw.elsa.timer) {
 		byteout(cs->hw.elsa.trig, 0xff);

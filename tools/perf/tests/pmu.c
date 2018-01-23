@@ -2,8 +2,6 @@
 #include "pmu.h"
 #include "util.h"
 #include "tests.h"
-#include <errno.h>
-#include <linux/kernel.h>
 
 /* Simulated format definitions. */
 static struct test_format {
@@ -135,7 +133,7 @@ static struct list_head *test_terms_list(void)
 	return &terms;
 }
 
-int test__pmu(int subtest __maybe_unused)
+int test__pmu(void)
 {
 	char *format = test_format_dir_get();
 	LIST_HEAD(formats);
@@ -154,8 +152,7 @@ int test__pmu(int subtest __maybe_unused)
 		if (ret)
 			break;
 
-		ret = perf_pmu__config_terms(&formats, &attr, terms,
-					     false, NULL);
+		ret = perf_pmu__config_terms(&formats, &attr, terms);
 		if (ret)
 			break;
 

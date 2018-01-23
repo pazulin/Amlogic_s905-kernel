@@ -10,10 +10,8 @@
  *      as published by the Free Software Foundation; either version
  *      2 of the License, or (at your option) any later version.
  */
-
-#include <linux/kernel.h>
 #include <linux/errno.h>
-#include <linux/sched/signal.h>
+#include <linux/sched.h>
 #include <linux/smp.h>
 #include <linux/mm.h>
 #include <linux/reboot.h>
@@ -26,12 +24,8 @@
 #include <linux/interrupt.h>
 #include <linux/irq.h>
 #include <linux/bug.h>
-#include <linux/nmi.h>
-#include <linux/ctype.h>
 
-#include <asm/debugfs.h>
 #include <asm/ptrace.h>
-#include <asm/smp.h>
 #include <asm/string.h>
 #include <asm/prom.h>
 #include <asm/machdep.h>
@@ -50,19 +44,10 @@
 #include <asm/reg.h>
 #include <asm/debug.h>
 #include <asm/hw_breakpoint.h>
-#include <asm/xive.h>
-#include <asm/opal.h>
-#include <asm/firmware.h>
 
 #ifdef CONFIG_PPC64
 #include <asm/hvcall.h>
 #include <asm/paca.h>
-#endif
-
-#if defined(CONFIG_PPC_SPLPAR)
-#include <asm/plpar_wrappers.h>
-#else
-static inline long plapr_set_ciabr(unsigned long ciabr) {return 0; };
 #endif
 
 #include "nonstdio.h"
@@ -78,7 +63,6 @@ static int xmon_gate;
 #endif /* CONFIG_SMP */
 
 static unsigned long in_xmon __read_mostly = 0;
-static int xmon_on = IS_ENABLED(CONFIG_XMON_DEFAULT);
 
 static unsigned long adrs;
 static int size = 1;
@@ -91,7 +75,6 @@ static char tmpstr[128];
 
 static long bus_error_jmp[JMP_BUF_LEN];
 static int catch_memory_errors;
-static int catch_spr_faults;
 static long *xmon_fault_jmp[NR_CPUS];
 
 /* Breakpoint stuff */
@@ -104,9 +87,10 @@ struct bpt {
 };
 
 /* Bits in bpt.enabled */
-#define BP_CIABR	1
-#define BP_TRAP		2
-#define BP_DABR		4
+#define BP_IABR_TE	1		/* IABR translation enabled */
+#define BP_IABR		2
+#define BP_TRAP		8
+#define BP_DABR		0x10
 
 #define NBPTS	256
 static struct bpt bpts[NBPTS];
@@ -128,16 +112,6 @@ static void dump(void);
 static void prdump(unsigned long, long);
 static int ppc_inst_dump(unsigned long, long, int);
 static void dump_log_buf(void);
-
-#ifdef CONFIG_PPC_POWERNV
-static void dump_opal_msglog(void);
-#else
-static inline void dump_opal_msglog(void)
-{
-	printf("Machine is not running OPAL firmware.\n");
-}
-#endif
-
 static void backtrace(struct pt_regs *);
 static void excprint(struct pt_regs *);
 static void prregs(struct pt_regs *);
@@ -153,7 +127,7 @@ void getstring(char *, int);
 static void flush_input(void);
 static int inchar(void);
 static void take_input(char *);
-static int  read_spr(int, unsigned long *);
+static unsigned long read_spr(int);
 static void write_spr(int, unsigned long);
 static void super_regs(void);
 static void remove_bpts(void);
@@ -169,7 +143,6 @@ static int  cpu_cmd(void);
 static void csum(void);
 static void bootcmds(void);
 static void proccall(void);
-static void show_tasks(void);
 void dump_segments(void);
 static void symbol_lookup(void);
 static void xmon_show_stack(unsigned long sp, unsigned long lr,
@@ -187,17 +160,26 @@ static void dump_tlb_44x(void);
 static void dump_tlb_book3e(void);
 #endif
 
+static int xmon_no_auto_backtrace;
+
+extern void xmon_enter(void);
+extern void xmon_leave(void);
+
 #ifdef CONFIG_PPC64
 #define REG		"%.16lx"
 #else
 #define REG		"%.8lx"
 #endif
 
-#ifdef __LITTLE_ENDIAN__
-#define GETWORD(v)	(((v)[3] << 24) + ((v)[2] << 16) + ((v)[1] << 8) + (v)[0])
-#else
 #define GETWORD(v)	(((v)[0] << 24) + ((v)[1] << 16) + ((v)[2] << 8) + (v)[3])
-#endif
+
+#define isxdigit(c)	(('0' <= (c) && (c) <= '9') \
+			 || ('a' <= (c) && (c) <= 'f') \
+			 || ('A' <= (c) && (c) <= 'F'))
+#define isalnum(c)	(('0' <= (c) && (c) <= '9') \
+			 || ('a' <= (c) && (c) <= 'z') \
+			 || ('A' <= (c) && (c) <= 'Z'))
+#define isspace(c)	(c == ' ' || c == '\t' || c == 10 || c == 13 || c == 0)
 
 static char *help_string = "\
 Commands:\n\
@@ -213,18 +195,10 @@ Commands:\n\
   "\
   C	checksum\n\
   d	dump bytes\n\
-  d1	dump 1 byte values\n\
-  d2	dump 2 byte values\n\
-  d4	dump 4 byte values\n\
-  d8	dump 8 byte values\n\
   di	dump instructions\n\
   df	dump float values\n\
   dd	dump double values\n\
   dl    dump the kernel log buffer\n"
-#ifdef CONFIG_PPC_POWERNV
-  "\
-  do    dump the OPAL message log\n"
-#endif
 #ifdef CONFIG_PPC64
   "\
   dp[#]	dump paca for current cpu, or cpu #\n\
@@ -232,14 +206,7 @@ Commands:\n\
 #endif
   "\
   dr	dump stream of raw bytes\n\
-  dt	dump the tracing buffers (uses printk)\n\
-"
-#ifdef CONFIG_PPC_POWERNV
-"  dx#   dump xive on CPU #\n\
-  dxi#  dump xive irq state #\n\
-  dxa   dump xive on all CPUs\n"
-#endif
-"  e	print exception information\n\
+  e	print exception information\n\
   f	flush cache\n\
   la	lookup symbol+offset of specified address\n\
   ls	lookup address of specified symbol\n\
@@ -251,7 +218,6 @@ Commands:\n\
   mz	zero a block of memory\n\
   mi	show information about memory allocation\n\
   p 	call a procedure\n\
-  P 	list processes/tasks\n\
   r	print registers\n\
   s	single step\n"
 #ifdef CONFIG_SPU_BASE
@@ -262,12 +228,9 @@ Commands:\n\
   sdi #	disassemble spu local store for spu # (in hex)\n"
 #endif
 "  S	print special registers\n\
-  Sa    print all SPRs\n\
-  Sr #	read SPR #\n\
-  Sw #v write v to SPR #\n\
   t	print backtrace\n\
   x	exit monitor and recover\n\
-  X	exit monitor and don't recover\n"
+  X	exit monitor and dont recover\n"
 #if defined(CONFIG_PPC64) && !defined(CONFIG_PPC_BOOK3E)
 "  u	dump segment table or SLB\n"
 #elif defined(CONFIG_PPC_STD_MMU_32)
@@ -276,7 +239,6 @@ Commands:\n\
 "  u	dump TLB\n"
 #endif
 "  ?	help\n"
-"  # n	limit output to n lines per page (for dp, dpa, dl)\n"
 "  zr	reboot\n\
   zh	halt\n"
 ;
@@ -303,45 +265,6 @@ static inline void cinval(void *p)
 	asm volatile ("dcbi 0,%0; icbi 0,%0" : : "r" (p));
 }
 
-/**
- * write_ciabr() - write the CIABR SPR
- * @ciabr:	The value to write.
- *
- * This function writes a value to the CIARB register either directly
- * through mtspr instruction if the kernel is in HV privilege mode or
- * call a hypervisor function to achieve the same in case the kernel
- * is in supervisor privilege mode.
- */
-static void write_ciabr(unsigned long ciabr)
-{
-	if (!cpu_has_feature(CPU_FTR_ARCH_207S))
-		return;
-
-	if (cpu_has_feature(CPU_FTR_HVMODE)) {
-		mtspr(SPRN_CIABR, ciabr);
-		return;
-	}
-	plapr_set_ciabr(ciabr);
-}
-
-/**
- * set_ciabr() - set the CIABR
- * @addr:	The value to set.
- *
- * This function sets the correct privilege value into the the HW
- * breakpoint address before writing it up in the CIABR register.
- */
-static void set_ciabr(unsigned long addr)
-{
-	addr &= ~CIABR_PRIV;
-
-	if (cpu_has_feature(CPU_FTR_HVMODE))
-		addr |= CIABR_PRIV_HYPER;
-	else
-		addr |= CIABR_PRIV_SUPER;
-	write_ciabr(addr);
-}
-
 /*
  * Disable surveillance (the service processor watchdog function)
  * while we are in xmon.
@@ -354,7 +277,6 @@ static inline void disable_surveillance(void)
 #ifdef CONFIG_PPC_PSERIES
 	/* Since this can't be a module, args should end up below 4GB. */
 	static struct rtas_args args;
-	int token;
 
 	/*
 	 * At this point we have got all the cpus we can into
@@ -363,12 +285,16 @@ static inline void disable_surveillance(void)
 	 * If we did try to take rtas.lock there would be a
 	 * real possibility of deadlock.
 	 */
-	token = rtas_token("set-indicator");
-	if (token == RTAS_UNKNOWN_SERVICE)
+	args.token = rtas_token("set-indicator");
+	if (args.token == RTAS_UNKNOWN_SERVICE)
 		return;
-
-	rtas_call_unlocked(&args, token, 3, 1, NULL, SURVEILLANCE_TOKEN, 0, 0);
-
+	args.nargs = cpu_to_be32(3);
+	args.nret = cpu_to_be32(1);
+	args.rets = &args.args[3];
+	args.args[0] = cpu_to_be32(SURVEILLANCE_TOKEN);
+	args.args[1] = 0;
+	args.args[2] = 0;
+	enter_rtas(__pa(&args));
 #endif /* CONFIG_PPC_PSERIES */
 }
 
@@ -418,22 +344,7 @@ int cpus_are_in_xmon(void)
 {
 	return !cpumask_empty(&cpus_in_xmon);
 }
-
-static bool wait_for_other_cpus(int ncpus)
-{
-	unsigned long timeout;
-
-	/* We wait for 2s, which is a metric "little while" */
-	for (timeout = 20000; timeout != 0; --timeout) {
-		if (cpumask_weight(&cpus_in_xmon) >= ncpus)
-			return true;
-		udelay(100);
-		barrier();
-	}
-
-	return false;
-}
-#endif /* CONFIG_SMP */
+#endif
 
 static inline int unrecoverable_excp(struct pt_regs *regs)
 {
@@ -455,10 +366,10 @@ static int xmon_core(struct pt_regs *regs, int fromipi)
 #ifdef CONFIG_SMP
 	int cpu;
 	int secondary;
+	unsigned long timeout;
 #endif
 
 	local_irq_save(flags);
-	hard_irq_disable();
 
 	bp = in_breakpoint_table(regs->nip, &offset);
 	if (bp != NULL) {
@@ -471,12 +382,6 @@ static int xmon_core(struct pt_regs *regs, int fromipi)
 #ifdef CONFIG_SMP
 	cpu = smp_processor_id();
 	if (cpumask_test_cpu(cpu, &cpus_in_xmon)) {
-		/*
-		 * We catch SPR read/write faults here because the 0x700, 0xf60
-		 * etc. handlers don't call debugger_fault_handler().
-		 */
-		if (catch_spr_faults)
-			longjmp(bus_error_jmp, 1);
 		get_output_lock();
 		excprint(regs);
 		printf("cpu 0x%x: Exception %lx %s in xmon, "
@@ -510,7 +415,7 @@ static int xmon_core(struct pt_regs *regs, int fromipi)
 		get_output_lock();
 		excprint(regs);
 		if (bp) {
-			printf("cpu 0x%x stopped at breakpoint 0x%lx (",
+			printf("cpu 0x%x stopped at breakpoint 0x%x (",
 			       cpu, BP_NUM(bp));
 			xmon_print_symbol(regs->nip, " ", ")\n");
 		}
@@ -541,17 +446,13 @@ static int xmon_core(struct pt_regs *regs, int fromipi)
 		xmon_owner = cpu;
 		mb();
 		if (ncpus > 1) {
-			/*
-			 * A system reset (trap == 0x100) can be triggered on
-			 * all CPUs, so when we come in via 0x100 try waiting
-			 * for the other CPUs to come in before we send the
-			 * debugger break (IPI). This is similar to
-			 * crash_kexec_secondary().
-			 */
-			if (TRAP(regs) != 0x100 || !wait_for_other_cpus(ncpus))
-				smp_send_debugger_break();
-
-			wait_for_other_cpus(ncpus);
+			smp_send_debugger_break();
+			/* wait for other cpus to come in */
+			for (timeout = 100000000; timeout != 0; --timeout) {
+				if (cpumask_weight(&cpus_in_xmon) >= ncpus)
+					break;
+				barrier();
+			}
 		}
 		remove_bpts();
 		disable_surveillance();
@@ -608,7 +509,7 @@ static int xmon_core(struct pt_regs *regs, int fromipi)
 		excprint(regs);
 		bp = at_breakpoint(regs->nip);
 		if (bp) {
-			printf("Stopped at breakpoint %lx (", BP_NUM(bp));
+			printf("Stopped at breakpoint %x (", BP_NUM(bp));
 			xmon_print_symbol(regs->nip, " ", ")\n");
 		}
 		if (unrecoverable_excp(regs))
@@ -653,7 +554,6 @@ static int xmon_core(struct pt_regs *regs, int fromipi)
 #endif
 	insert_cpu_bpts();
 
-	touch_nmi_watchdog();
 	local_irq_restore(flags);
 
 	return cmd != 'X' && cmd != EOF;
@@ -820,7 +720,7 @@ static void insert_bpts(void)
 
 	bp = bpts;
 	for (i = 0; i < NBPTS; ++i, ++bp) {
-		if ((bp->enabled & (BP_TRAP|BP_CIABR)) == 0)
+		if ((bp->enabled & (BP_TRAP|BP_IABR)) == 0)
 			continue;
 		if (mread(bp->address, &bp->instr[0], 4) != 4) {
 			printf("Couldn't read instruction at %lx, "
@@ -835,7 +735,7 @@ static void insert_bpts(void)
 			continue;
 		}
 		store_inst(&bp->instr[0]);
-		if (bp->enabled & BP_CIABR)
+		if (bp->enabled & BP_IABR)
 			continue;
 		if (mwrite(bp->address, &bpinstr, 4) != 4) {
 			printf("Couldn't write instruction at %lx, "
@@ -855,11 +755,11 @@ static void insert_cpu_bpts(void)
 		brk.address = dabr.address;
 		brk.type = (dabr.enabled & HW_BRK_TYPE_DABR) | HW_BRK_TYPE_PRIV_ALL;
 		brk.len = 8;
-		__set_breakpoint(&brk);
+		set_breakpoint(&brk);
 	}
-
-	if (iabr)
-		set_ciabr(iabr->address);
+	if (iabr && cpu_has_feature(CPU_FTR_IABR))
+		mtspr(SPRN_IABR, iabr->address
+			 | (iabr->enabled & (BP_IABR|BP_IABR_TE)));
 }
 
 static void remove_bpts(void)
@@ -870,7 +770,7 @@ static void remove_bpts(void)
 
 	bp = bpts;
 	for (i = 0; i < NBPTS; ++i, ++bp) {
-		if ((bp->enabled & (BP_TRAP|BP_CIABR)) != BP_TRAP)
+		if ((bp->enabled & (BP_TRAP|BP_IABR)) != BP_TRAP)
 			continue;
 		if (mread(bp->address, &instr, 4) == 4
 		    && instr == bpinstr
@@ -885,19 +785,10 @@ static void remove_bpts(void)
 static void remove_cpu_bpts(void)
 {
 	hw_breakpoint_disable();
-	write_ciabr(0);
+	if (cpu_has_feature(CPU_FTR_IABR))
+		mtspr(SPRN_IABR, 0);
 }
 
-static void set_lpp_cmd(void)
-{
-	unsigned long lpp;
-
-	if (!scanhex(&lpp)) {
-		printf("Invalid number.\n");
-		lpp = 0;
-	}
-	xmon_set_pagination_lpp(lpp);
-}
 /* Command interpreting routine */
 static char *last_cmd;
 
@@ -909,7 +800,10 @@ cmds(struct pt_regs *excp)
 	last_cmd = NULL;
 	xmon_regs = excp;
 
-	xmon_show_stack(excp->gpr[1], excp->link, excp->nip);
+	if (!xmon_no_auto_backtrace) {
+		xmon_no_auto_backtrace = 1;
+		xmon_show_stack(excp->gpr[1], excp->link, excp->nip);
+	}
 
 	for(;;) {
 #ifdef CONFIG_SMP
@@ -942,7 +836,7 @@ cmds(struct pt_regs *excp)
 				memzcan();
 				break;
 			case 'i':
-				show_mem(0, NULL);
+				show_mem(0);
 				break;
 			default:
 				termch = cmd;
@@ -986,9 +880,6 @@ cmds(struct pt_regs *excp)
 		case '?':
 			xmon_puts(help_string);
 			break;
-		case '#':
-			set_lpp_cmd();
-			break;
 		case 'b':
 			bpt_cmds();
 			break;
@@ -1005,14 +896,11 @@ cmds(struct pt_regs *excp)
 		case 'p':
 			proccall();
 			break;
-		case 'P':
-			show_tasks();
-			break;
 #ifdef CONFIG_PPC_STD_MMU
 		case 'u':
 			dump_segments();
 			break;
-#elif defined(CONFIG_44x)
+#elif defined(CONFIG_4xx)
 		case 'u':
 			dump_tlb_44x();
 			break;
@@ -1086,8 +974,7 @@ static void bootcmds(void)
 	else if (cmd == 'h')
 		ppc_md.halt();
 	else if (cmd == 'p')
-		if (pm_power_off)
-			pm_power_off();
+		ppc_md.power_off();
 }
 
 static int cpu_cmd(void)
@@ -1106,14 +993,14 @@ static int cpu_cmd(void)
 					last_cpu = cpu;
 				} else {
 					if (last_cpu != first_cpu)
-						printf("-0x%lx", last_cpu);
+						printf("-%lx", last_cpu);
 					last_cpu = first_cpu = cpu;
-					printf(" 0x%lx", cpu);
+					printf(" %lx", cpu);
 				}
 			}
 		}
 		if (last_cpu != first_cpu)
-			printf("-0x%lx", last_cpu);
+			printf("-%lx", last_cpu);
 		printf("\n");
 		return 0;
 	}
@@ -1133,7 +1020,7 @@ static int cpu_cmd(void)
 			/* take control back */
 			mb();
 			xmon_owner = smp_processor_id();
-			printf("cpu 0x%x didn't take control\n", cpu);
+			printf("cpu %u didn't take control\n", cpu);
 			return 0;
 		}
 		barrier();
@@ -1195,7 +1082,7 @@ csum(void)
 	fcs = 0xffff;
 	for (i = 0; i < ncsum; ++i) {
 		if (mread(adrs+i, &v, 1) == 0) {
-			printf("csum stopped at "REG"\n", adrs+i);
+			printf("csum stopped at %x\n", adrs+i);
 			break;
 		}
 		fcs = FCS(fcs, v);
@@ -1233,7 +1120,7 @@ static char *breakpoint_help_string =
     "b <addr> [cnt]   set breakpoint at given instr addr\n"
     "bc               clear all breakpoints\n"
     "bc <n/addr>      clear breakpoint number n or at addr\n"
-    "bi <addr> [cnt]  set hardware instr breakpoint (POWER8 only)\n"
+    "bi <addr> [cnt]  set hardware instr breakpoint (POWER3/RS64 only)\n"
     "bd <addr> [cnt]  set hardware data breakpoint\n"
     "";
 
@@ -1272,13 +1159,13 @@ bpt_cmds(void)
 		break;
 
 	case 'i':	/* bi - hardware instr breakpoint */
-		if (!cpu_has_feature(CPU_FTR_ARCH_207S)) {
+		if (!cpu_has_feature(CPU_FTR_IABR)) {
 			printf("Hardware instruction breakpoint "
 			       "not supported on this cpu\n");
 			break;
 		}
 		if (iabr) {
-			iabr->enabled &= ~BP_CIABR;
+			iabr->enabled &= ~(BP_IABR | BP_IABR_TE);
 			iabr = NULL;
 		}
 		if (!scanhex(&a))
@@ -1287,7 +1174,7 @@ bpt_cmds(void)
 			break;
 		bp = new_breakpoint(a);
 		if (bp != NULL) {
-			bp->enabled |= BP_CIABR;
+			bp->enabled |= BP_IABR | BP_IABR_TE;
 			iabr = bp;
 		}
 		break;
@@ -1311,12 +1198,12 @@ bpt_cmds(void)
 			/* assume a breakpoint address */
 			bp = at_breakpoint(a);
 			if (bp == NULL) {
-				printf("No breakpoint at %lx\n", a);
+				printf("No breakpoint at %x\n", a);
 				break;
 			}
 		}
 
-		printf("Cleared breakpoint %lx (", BP_NUM(bp));
+		printf("Cleared breakpoint %x (", BP_NUM(bp));
 		xmon_print_symbol(bp->address, " ", ")\n");
 		bp->enabled = 0;
 		break;
@@ -1344,7 +1231,7 @@ bpt_cmds(void)
 				if (!bp->enabled)
 					continue;
 				printf("%2x %s   ", BP_NUM(bp),
-				    (bp->enabled & BP_CIABR) ? "inst": "trap");
+				    (bp->enabled & BP_IABR)? "inst": "trap");
 				xmon_print_symbol(bp->address, "  ", "\n");
 			}
 			break;
@@ -1369,19 +1256,9 @@ const char *getvecname(unsigned long vec)
 	case 0x100:	ret = "(System Reset)"; break;
 	case 0x200:	ret = "(Machine Check)"; break;
 	case 0x300:	ret = "(Data Access)"; break;
-	case 0x380:
-		if (radix_enabled())
-			ret = "(Data Access Out of Range)";
-		else
-			ret = "(Data SLB Access)";
-		break;
+	case 0x380:	ret = "(Data SLB Access)"; break;
 	case 0x400:	ret = "(Instruction Access)"; break;
-	case 0x480:
-		if (radix_enabled())
-			ret = "(Instruction Access Out of Range)";
-		else
-			ret = "(Instruction SLB Access)";
-		break;
+	case 0x480:	ret = "(Instruction SLB Access)"; break;
 	case 0x500:	ret = "(Hardware Interrupt)"; break;
 	case 0x600:	ret = "(Alignment)"; break;
 	case 0x700:	ret = "(Program Check)"; break;
@@ -1439,7 +1316,7 @@ static void xmon_show_stack(unsigned long sp, unsigned long lr,
 	struct pt_regs regs;
 
 	while (max_to_print--) {
-		if (!is_kernel_addr(sp)) {
+		if (sp < PAGE_OFFSET) {
 			if (sp != 0)
 				printf("SP (%lx) is in userspace\n", sp);
 			break;
@@ -1467,12 +1344,12 @@ static void xmon_show_stack(unsigned long sp, unsigned long lr,
 				mread(newsp + LRSAVE_OFFSET, &nextip,
 				      sizeof(unsigned long));
 			if (lr == ip) {
-				if (!is_kernel_addr(lr)
+				if (lr < PAGE_OFFSET
 				    || (fnstart <= lr && lr < fnend))
 					printip = 0;
 			} else if (lr == nextip) {
 				printip = 0;
-			} else if (is_kernel_addr(lr)
+			} else if (lr >= PAGE_OFFSET
 				   && !(fnstart <= lr && lr < fnend)) {
 				printf("[link register   ] ");
 				xmon_print_symbol(lr, " ", "\n");
@@ -1532,7 +1409,7 @@ static void print_bug_trap(struct pt_regs *regs)
 	if (regs->msr & MSR_PR)
 		return;		/* not in kernel */
 	addr = regs->nip;	/* address of trap instruction */
-	if (!is_kernel_addr(addr))
+	if (addr < PAGE_OFFSET)
 		return;
 	bug = find_bug(regs->nip);
 	if (bug == NULL)
@@ -1586,8 +1463,6 @@ static void excprint(struct pt_regs *fp)
 
 	if (trap == 0x700)
 		print_bug_trap(fp);
-
-	printf(linux_banner);
 }
 
 static void prregs(struct pt_regs *fp)
@@ -1681,196 +1556,116 @@ static void cacheflush(void)
 	catch_memory_errors = 0;
 }
 
-extern unsigned long xmon_mfspr(int spr, unsigned long default_value);
-extern void xmon_mtspr(int spr, unsigned long value);
-
-static int
-read_spr(int n, unsigned long *vp)
+static unsigned long
+read_spr(int n)
 {
+	unsigned int instrs[2];
+	unsigned long (*code)(void);
 	unsigned long ret = -1UL;
-	int ok = 0;
+#ifdef CONFIG_PPC64
+	unsigned long opd[3];
+
+	opd[0] = (unsigned long)instrs;
+	opd[1] = 0;
+	opd[2] = 0;
+	code = (unsigned long (*)(void)) opd;
+#else
+	code = (unsigned long (*)(void)) instrs;
+#endif
+
+	/* mfspr r3,n; blr */
+	instrs[0] = 0x7c6002a6 + ((n & 0x1F) << 16) + ((n & 0x3e0) << 6);
+	instrs[1] = 0x4e800020;
+	store_inst(instrs);
+	store_inst(instrs+1);
 
 	if (setjmp(bus_error_jmp) == 0) {
-		catch_spr_faults = 1;
+		catch_memory_errors = 1;
 		sync();
 
-		ret = xmon_mfspr(n, *vp);
+		ret = code();
 
 		sync();
-		*vp = ret;
-		ok = 1;
+		/* wait a little while to see if we get a machine check */
+		__delay(200);
+		n = size;
 	}
-	catch_spr_faults = 0;
 
-	return ok;
+	return ret;
 }
 
 static void
 write_spr(int n, unsigned long val)
 {
+	unsigned int instrs[2];
+	unsigned long (*code)(unsigned long);
+#ifdef CONFIG_PPC64
+	unsigned long opd[3];
+
+	opd[0] = (unsigned long)instrs;
+	opd[1] = 0;
+	opd[2] = 0;
+	code = (unsigned long (*)(unsigned long)) opd;
+#else
+	code = (unsigned long (*)(unsigned long)) instrs;
+#endif
+
+	instrs[0] = 0x7c6003a6 + ((n & 0x1F) << 16) + ((n & 0x3e0) << 6);
+	instrs[1] = 0x4e800020;
+	store_inst(instrs);
+	store_inst(instrs+1);
+
 	if (setjmp(bus_error_jmp) == 0) {
-		catch_spr_faults = 1;
+		catch_memory_errors = 1;
 		sync();
 
-		xmon_mtspr(n, val);
+		code(val);
 
 		sync();
-	} else {
-		printf("SPR 0x%03x (%4d) Faulted during write\n", n, n);
+		/* wait a little while to see if we get a machine check */
+		__delay(200);
+		n = size;
 	}
-	catch_spr_faults = 0;
 }
 
-static void dump_206_sprs(void)
-{
-#ifdef CONFIG_PPC64
-	if (!cpu_has_feature(CPU_FTR_ARCH_206))
-		return;
-
-	/* Actually some of these pre-date 2.06, but whatevs */
-
-	printf("srr0   = %.16x  srr1  = %.16x dsisr  = %.8x\n",
-		mfspr(SPRN_SRR0), mfspr(SPRN_SRR1), mfspr(SPRN_DSISR));
-	printf("dscr   = %.16x  ppr   = %.16x pir    = %.8x\n",
-		mfspr(SPRN_DSCR), mfspr(SPRN_PPR), mfspr(SPRN_PIR));
-
-	if (!(mfmsr() & MSR_HV))
-		return;
-
-	printf("sdr1   = %.16x  hdar  = %.16x hdsisr = %.8x\n",
-		mfspr(SPRN_SDR1), mfspr(SPRN_HDAR), mfspr(SPRN_HDSISR));
-	printf("hsrr0  = %.16x hsrr1  = %.16x hdec = %.8x\n",
-		mfspr(SPRN_HSRR0), mfspr(SPRN_HSRR1), mfspr(SPRN_HDEC));
-	printf("lpcr   = %.16x  pcr   = %.16x lpidr = %.8x\n",
-		mfspr(SPRN_LPCR), mfspr(SPRN_PCR), mfspr(SPRN_LPID));
-	printf("hsprg0 = %.16x hsprg1 = %.16x\n",
-		mfspr(SPRN_HSPRG0), mfspr(SPRN_HSPRG1));
-	printf("dabr   = %.16x dabrx  = %.16x\n",
-		mfspr(SPRN_DABR), mfspr(SPRN_DABRX));
-#endif
-}
-
-static void dump_207_sprs(void)
-{
-#ifdef CONFIG_PPC64
-	unsigned long msr;
-
-	if (!cpu_has_feature(CPU_FTR_ARCH_207S))
-		return;
-
-	printf("dpdes  = %.16x  tir   = %.16x cir    = %.8x\n",
-		mfspr(SPRN_DPDES), mfspr(SPRN_TIR), mfspr(SPRN_CIR));
-
-	printf("fscr   = %.16x  tar   = %.16x pspb   = %.8x\n",
-		mfspr(SPRN_FSCR), mfspr(SPRN_TAR), mfspr(SPRN_PSPB));
-
-	msr = mfmsr();
-	if (msr & MSR_TM) {
-		/* Only if TM has been enabled in the kernel */
-		printf("tfhar  = %.16x  tfiar = %.16x texasr = %.16x\n",
-			mfspr(SPRN_TFHAR), mfspr(SPRN_TFIAR),
-			mfspr(SPRN_TEXASR));
-	}
-
-	printf("mmcr0  = %.16x  mmcr1 = %.16x mmcr2  = %.16x\n",
-		mfspr(SPRN_MMCR0), mfspr(SPRN_MMCR1), mfspr(SPRN_MMCR2));
-	printf("pmc1   = %.8x pmc2 = %.8x  pmc3 = %.8x  pmc4   = %.8x\n",
-		mfspr(SPRN_PMC1), mfspr(SPRN_PMC2),
-		mfspr(SPRN_PMC3), mfspr(SPRN_PMC4));
-	printf("mmcra  = %.16x   siar = %.16x pmc5   = %.8x\n",
-		mfspr(SPRN_MMCRA), mfspr(SPRN_SIAR), mfspr(SPRN_PMC5));
-	printf("sdar   = %.16x   sier = %.16x pmc6   = %.8x\n",
-		mfspr(SPRN_SDAR), mfspr(SPRN_SIER), mfspr(SPRN_PMC6));
-	printf("ebbhr  = %.16x  ebbrr = %.16x bescr  = %.16x\n",
-		mfspr(SPRN_EBBHR), mfspr(SPRN_EBBRR), mfspr(SPRN_BESCR));
-
-	if (!(msr & MSR_HV))
-		return;
-
-	printf("hfscr  = %.16x  dhdes = %.16x rpr    = %.16x\n",
-		mfspr(SPRN_HFSCR), mfspr(SPRN_DHDES), mfspr(SPRN_RPR));
-	printf("dawr   = %.16x  dawrx = %.16x ciabr  = %.16x\n",
-		mfspr(SPRN_DAWR), mfspr(SPRN_DAWRX), mfspr(SPRN_CIABR));
-#endif
-}
-
-static void dump_one_spr(int spr, bool show_unimplemented)
-{
-	unsigned long val;
-
-	val = 0xdeadbeef;
-	if (!read_spr(spr, &val)) {
-		printf("SPR 0x%03x (%4d) Faulted during read\n", spr, spr);
-		return;
-	}
-
-	if (val == 0xdeadbeef) {
-		/* Looks like read was a nop, confirm */
-		val = 0x0badcafe;
-		if (!read_spr(spr, &val)) {
-			printf("SPR 0x%03x (%4d) Faulted during read\n", spr, spr);
-			return;
-		}
-
-		if (val == 0x0badcafe) {
-			if (show_unimplemented)
-				printf("SPR 0x%03x (%4d) Unimplemented\n", spr, spr);
-			return;
-		}
-	}
-
-	printf("SPR 0x%03x (%4d) = 0x%lx\n", spr, spr, val);
-}
+static unsigned long regno;
+extern char exc_prolog;
+extern char dec_exc;
 
 static void super_regs(void)
 {
-	static unsigned long regno;
 	int cmd;
-	int spr;
+	unsigned long val;
 
 	cmd = skipbl();
-
-	switch (cmd) {
-	case '\n': {
+	if (cmd == '\n') {
 		unsigned long sp, toc;
 		asm("mr %0,1" : "=r" (sp) :);
 		asm("mr %0,2" : "=r" (toc) :);
 
-		printf("msr    = "REG"  sprg0 = "REG"\n",
+		printf("msr  = "REG"  sprg0= "REG"\n",
 		       mfmsr(), mfspr(SPRN_SPRG0));
-		printf("pvr    = "REG"  sprg1 = "REG"\n",
+		printf("pvr  = "REG"  sprg1= "REG"\n",
 		       mfspr(SPRN_PVR), mfspr(SPRN_SPRG1));
-		printf("dec    = "REG"  sprg2 = "REG"\n",
+		printf("dec  = "REG"  sprg2= "REG"\n",
 		       mfspr(SPRN_DEC), mfspr(SPRN_SPRG2));
-		printf("sp     = "REG"  sprg3 = "REG"\n", sp, mfspr(SPRN_SPRG3));
-		printf("toc    = "REG"  dar   = "REG"\n", toc, mfspr(SPRN_DAR));
-
-		dump_206_sprs();
-		dump_207_sprs();
+		printf("sp   = "REG"  sprg3= "REG"\n", sp, mfspr(SPRN_SPRG3));
+		printf("toc  = "REG"  dar  = "REG"\n", toc, mfspr(SPRN_DAR));
 
 		return;
 	}
-	case 'w': {
-		unsigned long val;
-		scanhex(&regno);
-		val = 0;
-		read_spr(regno, &val);
+
+	scanhex(&regno);
+	switch (cmd) {
+	case 'w':
+		val = read_spr(regno);
 		scanhex(&val);
 		write_spr(regno, val);
-		dump_one_spr(regno, true);
-		break;
-	}
+		/* fall through */
 	case 'r':
-		scanhex(&regno);
-		dump_one_spr(regno, true);
-		break;
-	case 'a':
-		/* dump ALL SPRs */
-		for (spr = 1; spr < 1024; ++spr)
-			dump_one_spr(spr, false);
+		printf("spr %lx = %lx\n", regno, read_spr(regno));
 		break;
 	}
-
 	scannl();
 }
 
@@ -1947,7 +1742,7 @@ mwrite(unsigned long adrs, void *buf, int size)
 		__delay(200);
 		n = size;
 	} else {
-		printf("*** Error writing address "REG"\n", adrs + n);
+		printf("*** Error writing address %x\n", adrs + n);
 	}
 	catch_memory_errors = 0;
 	return n;
@@ -2147,6 +1942,7 @@ memex(void)
 			case '^':
 				adrs -= size;
 				break;
+				break;
 			case '/':
 				if (nslash > 0)
 					adrs -= 1 << nslash;
@@ -2232,9 +2028,6 @@ static void xmon_rawdump (unsigned long adrs, long ndump)
 static void dump_one_paca(int cpu)
 {
 	struct paca_struct *p;
-#ifdef CONFIG_PPC_STD_MMU_64
-	int i = 0;
-#endif
 
 	if (setjmp(bus_error_jmp) != 0) {
 		printf("*** Error dumping paca for cpu 0x%x!\n", cpu);
@@ -2248,12 +2041,12 @@ static void dump_one_paca(int cpu)
 
 	printf("paca for cpu 0x%x @ %p:\n", cpu, p);
 
-	printf(" %-*s = %s\n", 20, "possible", cpu_possible(cpu) ? "yes" : "no");
-	printf(" %-*s = %s\n", 20, "present", cpu_present(cpu) ? "yes" : "no");
-	printf(" %-*s = %s\n", 20, "online", cpu_online(cpu) ? "yes" : "no");
+	printf(" %-*s = %s\n", 16, "possible", cpu_possible(cpu) ? "yes" : "no");
+	printf(" %-*s = %s\n", 16, "present", cpu_present(cpu) ? "yes" : "no");
+	printf(" %-*s = %s\n", 16, "online", cpu_online(cpu) ? "yes" : "no");
 
 #define DUMP(paca, name, format) \
-	printf(" %-*s = %#-*"format"\t(0x%lx)\n", 20, #name, 18, paca->name, \
+	printf(" %-*s = %#-*"format"\t(0x%lx)\n", 16, #name, 18, paca->name, \
 		offsetof(struct paca_struct, name));
 
 	DUMP(p, lock_token, "x");
@@ -2261,47 +2054,19 @@ static void dump_one_paca(int cpu)
 	DUMP(p, kernel_toc, "lx");
 	DUMP(p, kernelbase, "lx");
 	DUMP(p, kernel_msr, "lx");
+#ifdef CONFIG_PPC_STD_MMU_64
+	DUMP(p, stab_real, "lx");
+	DUMP(p, stab_addr, "lx");
+#endif
 	DUMP(p, emergency_sp, "p");
 #ifdef CONFIG_PPC_BOOK3S_64
-	DUMP(p, nmi_emergency_sp, "p");
 	DUMP(p, mc_emergency_sp, "p");
-	DUMP(p, in_nmi, "x");
 	DUMP(p, in_mce, "x");
-	DUMP(p, hmi_event_available, "x");
 #endif
 	DUMP(p, data_offset, "lx");
 	DUMP(p, hw_cpu_id, "x");
 	DUMP(p, cpu_start, "x");
 	DUMP(p, kexec_state, "x");
-#ifdef CONFIG_PPC_STD_MMU_64
-	for (i = 0; i < SLB_NUM_BOLTED; i++) {
-		u64 esid, vsid;
-
-		if (!p->slb_shadow_ptr)
-			continue;
-
-		esid = be64_to_cpu(p->slb_shadow_ptr->save_area[i].esid);
-		vsid = be64_to_cpu(p->slb_shadow_ptr->save_area[i].vsid);
-
-		if (esid || vsid) {
-			printf(" slb_shadow[%d]:       = 0x%016lx 0x%016lx\n",
-				i, esid, vsid);
-		}
-	}
-	DUMP(p, vmalloc_sllp, "x");
-	DUMP(p, slb_cache_ptr, "x");
-	for (i = 0; i < SLB_CACHE_ENTRIES; i++)
-		printf(" slb_cache[%d]:        = 0x%016lx\n", i, p->slb_cache[i]);
-#endif
-	DUMP(p, dscr_default, "llx");
-#ifdef CONFIG_PPC_BOOK3E
-	DUMP(p, pgd, "p");
-	DUMP(p, kernel_pgd, "p");
-	DUMP(p, tcd_ptr, "p");
-	DUMP(p, mc_kstack, "p");
-	DUMP(p, crit_kstack, "p");
-	DUMP(p, dbg_kstack, "p");
-#endif
 	DUMP(p, __current, "p");
 	DUMP(p, kstack, "lx");
 	DUMP(p, stab_rr, "lx");
@@ -2312,27 +2077,7 @@ static void dump_one_paca(int cpu)
 	DUMP(p, io_sync, "x");
 	DUMP(p, irq_work_pending, "x");
 	DUMP(p, nap_state_lost, "x");
-	DUMP(p, sprg_vdso, "llx");
 
-#ifdef CONFIG_PPC_TRANSACTIONAL_MEM
-	DUMP(p, tm_scratch, "llx");
-#endif
-
-#ifdef CONFIG_PPC_POWERNV
-	DUMP(p, core_idle_state_ptr, "p");
-	DUMP(p, thread_idle_state, "x");
-	DUMP(p, thread_mask, "x");
-	DUMP(p, subcore_sibling_mask, "x");
-#endif
-
-	DUMP(p, accounting.utime, "llx");
-	DUMP(p, accounting.stime, "llx");
-	DUMP(p, accounting.utime_scaled, "llx");
-	DUMP(p, accounting.starttime, "llx");
-	DUMP(p, accounting.starttime_user, "llx");
-	DUMP(p, accounting.startspurr, "llx");
-	DUMP(p, accounting.utime_sspurr, "llx");
-	DUMP(p, accounting.steal_time, "llx");
 #undef DUMP
 
 	catch_memory_errors = 0;
@@ -2372,141 +2117,25 @@ static void dump_pacas(void)
 }
 #endif
 
-#ifdef CONFIG_PPC_POWERNV
-static void dump_one_xive(int cpu)
-{
-	unsigned int hwid = get_hard_smp_processor_id(cpu);
-
-	opal_xive_dump(XIVE_DUMP_TM_HYP, hwid);
-	opal_xive_dump(XIVE_DUMP_TM_POOL, hwid);
-	opal_xive_dump(XIVE_DUMP_TM_OS, hwid);
-	opal_xive_dump(XIVE_DUMP_TM_USER, hwid);
-	opal_xive_dump(XIVE_DUMP_VP, hwid);
-	opal_xive_dump(XIVE_DUMP_EMU_STATE, hwid);
-
-	if (setjmp(bus_error_jmp) != 0) {
-		catch_memory_errors = 0;
-		printf("*** Error dumping xive on cpu %d\n", cpu);
-		return;
-	}
-
-	catch_memory_errors = 1;
-	sync();
-	xmon_xive_do_dump(cpu);
-	sync();
-	__delay(200);
-	catch_memory_errors = 0;
-}
-
-static void dump_all_xives(void)
-{
-	int cpu;
-
-	if (num_possible_cpus() == 0) {
-		printf("No possible cpus, use 'dx #' to dump individual cpus\n");
-		return;
-	}
-
-	for_each_possible_cpu(cpu)
-		dump_one_xive(cpu);
-}
-
-static void dump_one_xive_irq(u32 num)
-{
-	s64 rc;
-	__be64 vp;
-	u8 prio;
-	__be32 lirq;
-
-	rc = opal_xive_get_irq_config(num, &vp, &prio, &lirq);
-	xmon_printf("IRQ 0x%x config: vp=0x%llx prio=%d lirq=0x%x (rc=%lld)\n",
-		    num, be64_to_cpu(vp), prio, be32_to_cpu(lirq), rc);
-}
-
-static void dump_xives(void)
-{
-	unsigned long num;
-	int c;
-
-	c = inchar();
-	if (c == 'a') {
-		dump_all_xives();
-		return;
-	} else if (c == 'i') {
-		if (scanhex(&num))
-			dump_one_xive_irq(num);
-		return;
-	}
-
-	termch = c;	/* Put c back, it wasn't 'a' */
-
-	if (scanhex(&num))
-		dump_one_xive(num);
-	else
-		dump_one_xive(xmon_owner);
-}
-#endif /* CONFIG_PPC_POWERNV */
-
-static void dump_by_size(unsigned long addr, long count, int size)
-{
-	unsigned char temp[16];
-	int i, j;
-	u64 val;
-
-	count = ALIGN(count, 16);
-
-	for (i = 0; i < count; i += 16, addr += 16) {
-		printf(REG, addr);
-
-		if (mread(addr, temp, 16) != 16) {
-			printf("\nFaulted reading %d bytes from 0x"REG"\n", 16, addr);
-			return;
-		}
-
-		for (j = 0; j < 16; j += size) {
-			putchar(' ');
-			switch (size) {
-			case 1: val = temp[j]; break;
-			case 2: val = *(u16 *)&temp[j]; break;
-			case 4: val = *(u32 *)&temp[j]; break;
-			case 8: val = *(u64 *)&temp[j]; break;
-			default: val = 0;
-			}
-
-			printf("%0*lx", size * 2, val);
-		}
-		printf("\n");
-	}
-}
-
+#define isxdigit(c)	(('0' <= (c) && (c) <= '9') \
+			 || ('a' <= (c) && (c) <= 'f') \
+			 || ('A' <= (c) && (c) <= 'F'))
 static void
 dump(void)
 {
-	static char last[] = { "d?\n" };
 	int c;
 
 	c = inchar();
 
 #ifdef CONFIG_PPC64
 	if (c == 'p') {
-		xmon_start_pagination();
 		dump_pacas();
-		xmon_end_pagination();
-		return;
-	}
-#endif
-#ifdef CONFIG_PPC_POWERNV
-	if (c == 'x') {
-		xmon_start_pagination();
-		dump_xives();
-		xmon_end_pagination();
 		return;
 	}
 #endif
 
-	if (c == '\n')
+	if ((isxdigit(c) && c != 'f' && c != 'd') || c == '\n')
 		termch = c;
-
 	scanhex((void *)&adrs);
 	if (termch != '\n')
 		termch = 0;
@@ -2520,11 +2149,6 @@ dump(void)
 		last_cmd = "di\n";
 	} else if (c == 'l') {
 		dump_log_buf();
-	} else if (c == 'o') {
-		dump_opal_msglog();
-	} else if (c == 't') {
-		ftrace_dump(DUMP_ALL);
-		tracing_on();
 	} else if (c == 'r') {
 		scanhex(&ndump);
 		if (ndump == 0)
@@ -2538,23 +2162,9 @@ dump(void)
 			ndump = 64;
 		else if (ndump > MAX_DUMP)
 			ndump = MAX_DUMP;
-
-		switch (c) {
-		case '8':
-		case '4':
-		case '2':
-		case '1':
-			ndump = ALIGN(ndump, 16);
-			dump_by_size(adrs, ndump, c - '0');
-			last[1] = c;
-			last_cmd = last;
-			break;
-		default:
-			prdump(adrs, ndump);
-			last_cmd = "d\n";
-		}
-
+		prdump(adrs, ndump);
 		adrs += ndump;
+		last_cmd = "d\n";
 	}
 }
 
@@ -2668,57 +2278,16 @@ dump_log_buf(void)
 	sync();
 
 	kmsg_dump_rewind_nolock(&dumper);
-	xmon_start_pagination();
 	while (kmsg_dump_get_line_nolock(&dumper, false, buf, sizeof(buf), &len)) {
 		buf[len] = '\0';
 		printf("%s", buf);
 	}
-	xmon_end_pagination();
 
 	sync();
 	/* wait a little while to see if we get a machine check */
 	__delay(200);
 	catch_memory_errors = 0;
 }
-
-#ifdef CONFIG_PPC_POWERNV
-static void dump_opal_msglog(void)
-{
-	unsigned char buf[128];
-	ssize_t res;
-	loff_t pos = 0;
-
-	if (!firmware_has_feature(FW_FEATURE_OPAL)) {
-		printf("Machine is not running OPAL firmware.\n");
-		return;
-	}
-
-	if (setjmp(bus_error_jmp) != 0) {
-		printf("Error dumping OPAL msglog!\n");
-		return;
-	}
-
-	catch_memory_errors = 1;
-	sync();
-
-	xmon_start_pagination();
-	while ((res = opal_msglog_copy(buf, pos, sizeof(buf) - 1))) {
-		if (res < 0) {
-			printf("Error dumping OPAL msglog! Error: %zd\n", res);
-			break;
-		}
-		buf[res] = '\0';
-		printf("%s", buf);
-		pos += res;
-	}
-	xmon_end_pagination();
-
-	sync();
-	/* wait a little while to see if we get a machine check */
-	__delay(200);
-	catch_memory_errors = 0;
-}
-#endif
 
 /*
  * Memory operations - move, set, print differences
@@ -2833,61 +2402,6 @@ memzcan(void)
 		printf("%.8x\n", a - mskip);
 }
 
-static void show_task(struct task_struct *tsk)
-{
-	char state;
-
-	/*
-	 * Cloned from kdb_task_state_char(), which is not entirely
-	 * appropriate for calling from xmon. This could be moved
-	 * to a common, generic, routine used by both.
-	 */
-	state = (tsk->state == 0) ? 'R' :
-		(tsk->state < 0) ? 'U' :
-		(tsk->state & TASK_UNINTERRUPTIBLE) ? 'D' :
-		(tsk->state & TASK_STOPPED) ? 'T' :
-		(tsk->state & TASK_TRACED) ? 'C' :
-		(tsk->exit_state & EXIT_ZOMBIE) ? 'Z' :
-		(tsk->exit_state & EXIT_DEAD) ? 'E' :
-		(tsk->state & TASK_INTERRUPTIBLE) ? 'S' : '?';
-
-	printf("%p %016lx %6d %6d %c %2d %s\n", tsk,
-		tsk->thread.ksp,
-		tsk->pid, tsk->parent->pid,
-		state, task_thread_info(tsk)->cpu,
-		tsk->comm);
-}
-
-static void show_tasks(void)
-{
-	unsigned long tskv;
-	struct task_struct *tsk = NULL;
-
-	printf("     task_struct     ->thread.ksp    PID   PPID S  P CMD\n");
-
-	if (scanhex(&tskv))
-		tsk = (struct task_struct *)tskv;
-
-	if (setjmp(bus_error_jmp) != 0) {
-		catch_memory_errors = 0;
-		printf("*** Error dumping task %p\n", tsk);
-		return;
-	}
-
-	catch_memory_errors = 1;
-	sync();
-
-	if (tsk)
-		show_task(tsk);
-	else
-		for_each_process(tsk)
-			show_task(tsk);
-
-	sync();
-	__delay(200);
-	catch_memory_errors = 0;
-}
-
 static void proccall(void)
 {
 	unsigned long args[8];
@@ -2917,7 +2431,7 @@ static void proccall(void)
 		ret = func(args[0], args[1], args[2], args[3],
 			   args[4], args[5], args[6], args[7]);
 		sync();
-		printf("return value is 0x%lx\n", ret);
+		printf("return value is %x\n", ret);
 	} else {
 		printf("*** %x exception occurred\n", fault_except);
 	}
@@ -3008,7 +2522,7 @@ scanhex(unsigned long *vp)
 		int i;
 		for (i=0; i<63; i++) {
 			c = inchar();
-			if (isspace(c) || c == '\0') {
+			if (isspace(c)) {
 				termch = c;
 				break;
 			}
@@ -3175,42 +2689,66 @@ static void xmon_print_symbol(unsigned long address, const char *mid,
 	printf("%s", after);
 }
 
-#ifdef CONFIG_PPC_STD_MMU_64
-void dump_segments(void)
+#ifdef CONFIG_PPC_BOOK3S_64
+static void dump_slb(void)
 {
 	int i;
-	unsigned long esid,vsid;
+	unsigned long esid,vsid,valid;
 	unsigned long llp;
 
-	printf("SLB contents of cpu 0x%x\n", smp_processor_id());
+	printf("SLB contents of cpu %x\n", smp_processor_id());
 
 	for (i = 0; i < mmu_slb_size; i++) {
 		asm volatile("slbmfee  %0,%1" : "=r" (esid) : "r" (i));
 		asm volatile("slbmfev  %0,%1" : "=r" (vsid) : "r" (i));
-
-		if (!esid && !vsid)
-			continue;
-
-		printf("%02d %016lx %016lx", i, esid, vsid);
-
-		if (!(esid & SLB_ESID_V)) {
-			printf("\n");
-			continue;
-		}
-
-		llp = vsid & SLB_VSID_LLP;
-		if (vsid & SLB_VSID_B_1T) {
-			printf("  1T  ESID=%9lx  VSID=%13lx LLP:%3lx \n",
-				GET_ESID_1T(esid),
-				(vsid & ~SLB_VSID_B) >> SLB_VSID_SHIFT_1T,
-				llp);
-		} else {
-			printf(" 256M ESID=%9lx  VSID=%13lx LLP:%3lx \n",
-				GET_ESID(esid),
-				(vsid & ~SLB_VSID_B) >> SLB_VSID_SHIFT,
-				llp);
+		valid = (esid & SLB_ESID_V);
+		if (valid | esid | vsid) {
+			printf("%02d %016lx %016lx", i, esid, vsid);
+			if (valid) {
+				llp = vsid & SLB_VSID_LLP;
+				if (vsid & SLB_VSID_B_1T) {
+					printf("  1T  ESID=%9lx  VSID=%13lx LLP:%3lx \n",
+						GET_ESID_1T(esid),
+						(vsid & ~SLB_VSID_B) >> SLB_VSID_SHIFT_1T,
+						llp);
+				} else {
+					printf(" 256M ESID=%9lx  VSID=%13lx LLP:%3lx \n",
+						GET_ESID(esid),
+						(vsid & ~SLB_VSID_B) >> SLB_VSID_SHIFT,
+						llp);
+				}
+			} else
+				printf("\n");
 		}
 	}
+}
+
+static void dump_stab(void)
+{
+	int i;
+	unsigned long *tmp = (unsigned long *)local_paca->stab_addr;
+
+	printf("Segment table contents of cpu %x\n", smp_processor_id());
+
+	for (i = 0; i < PAGE_SIZE/16; i++) {
+		unsigned long a, b;
+
+		a = *tmp++;
+		b = *tmp++;
+
+		if (a || b) {
+			printf("%03d %016lx ", i, a);
+			printf("%016lx\n", b);
+		}
+	}
+}
+
+void dump_segments(void)
+{
+	if (mmu_has_feature(MMU_FTR_SLB))
+		dump_slb();
+	else
+		dump_stab();
 }
 #endif
 
@@ -3424,8 +2962,6 @@ static void sysrq_handle_xmon(int key)
 	/* ensure xmon is enabled */
 	xmon_init(1);
 	debugger(get_irq_regs());
-	if (!xmon_on)
-		xmon_init(0);
 }
 
 static struct sysrq_key_op sysrq_xmon_op = {
@@ -3439,37 +2975,10 @@ static int __init setup_xmon_sysrq(void)
 	register_sysrq_key('x', &sysrq_xmon_op);
 	return 0;
 }
-device_initcall(setup_xmon_sysrq);
+__initcall(setup_xmon_sysrq);
 #endif /* CONFIG_MAGIC_SYSRQ */
 
-#ifdef CONFIG_DEBUG_FS
-static int xmon_dbgfs_set(void *data, u64 val)
-{
-	xmon_on = !!val;
-	xmon_init(xmon_on);
-
-	return 0;
-}
-
-static int xmon_dbgfs_get(void *data, u64 *val)
-{
-	*val = xmon_on;
-	return 0;
-}
-
-DEFINE_SIMPLE_ATTRIBUTE(xmon_dbgfs_ops, xmon_dbgfs_get,
-			xmon_dbgfs_set, "%llu\n");
-
-static int __init setup_xmon_dbgfs(void)
-{
-	debugfs_create_file("xmon", 0600, powerpc_debugfs_root, NULL,
-				&xmon_dbgfs_ops);
-	return 0;
-}
-device_initcall(setup_xmon_dbgfs);
-#endif /* CONFIG_DEBUG_FS */
-
-static int xmon_early __initdata;
+static int __initdata xmon_early, xmon_off;
 
 static int __init early_parse_xmon(char *p)
 {
@@ -3477,12 +2986,12 @@ static int __init early_parse_xmon(char *p)
 		/* just "xmon" is equivalent to "xmon=early" */
 		xmon_init(1);
 		xmon_early = 1;
-		xmon_on = 1;
-	} else if (strncmp(p, "on", 2) == 0) {
+	} else if (strncmp(p, "on", 2) == 0)
 		xmon_init(1);
-		xmon_on = 1;
-	} else if (strncmp(p, "off", 3) == 0)
-		xmon_on = 0;
+	else if (strncmp(p, "off", 3) == 0)
+		xmon_off = 1;
+	else if (strncmp(p, "nobt", 4) == 0)
+		xmon_no_auto_backtrace = 1;
 	else
 		return 1;
 
@@ -3492,8 +3001,10 @@ early_param("xmon", early_parse_xmon);
 
 void __init xmon_setup(void)
 {
-	if (xmon_on)
+#ifdef CONFIG_XMON_DEFAULT
+	if (!xmon_off)
 		xmon_init(1);
+#endif
 	if (xmon_early)
 		debugger(NULL);
 }

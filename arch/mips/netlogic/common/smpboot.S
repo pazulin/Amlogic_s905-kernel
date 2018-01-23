@@ -48,28 +48,26 @@
 #include <asm/netlogic/xlp-hal/sys.h>
 #include <asm/netlogic/xlp-hal/cpucontrol.h>
 
+#define CP0_EBASE	$15
+
 	.set	noreorder
 	.set	noat
 	.set	arch=xlr		/* for mfcr/mtcr, XLR is sufficient */
 
-/* Called by the boot cpu to wake up its sibling threads */
-NESTED(xlp_boot_core0_siblings, PT_SIZE, sp)
-	/* CPU register contents lost when enabling threads, save them first */
+FEXPORT(xlp_boot_core0_siblings)	/* "Master" cpu starts from here */
+	dmtc0	sp, $4, 2		/* SP saved in UserLocal */
 	SAVE_ALL
 	sync
 	/* find the location to which nlm_boot_siblings was relocated */
 	li	t0, CKSEG1ADDR(RESET_VEC_PHYS)
-	PTR_LA	t1, nlm_reset_entry
-	PTR_LA	t2, nlm_boot_siblings
+	dla	t1, nlm_reset_entry
+	dla	t2, nlm_boot_siblings
 	dsubu	t2, t1
 	daddu	t2, t0
 	/* call it */
-	jalr	t2
+	jr	t2
 	nop
-	RESTORE_ALL
-	jr	ra
-	nop
-END(xlp_boot_core0_siblings)
+	/* not reached */
 
 NESTED(nlm_boot_secondary_cpus, 16, sp)
 	/* Initialize CP0 Status */
@@ -84,7 +82,7 @@ NESTED(nlm_boot_secondary_cpus, 16, sp)
 	PTR_L	gp, 0(t1)
 
 	/* a0 has the processor id */
-	mfc0	a0, CP0_EBASE
+	mfc0	a0, CP0_EBASE, 1
 	andi	a0, 0x3ff		/* a0 <- node/core */
 	PTR_LA	t0, nlm_early_init_secondary
 	jalr	t0

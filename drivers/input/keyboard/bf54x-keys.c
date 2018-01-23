@@ -268,6 +268,8 @@ static int bfin_kpad_probe(struct platform_device *pdev)
 	input->phys = "bf54x-keys/input0";
 	input->dev.parent = &pdev->dev;
 
+	input_set_drvdata(input, bf54x_kpad);
+
 	input->id.bustype = BUS_HOST;
 	input->id.vendor = 0x0001;
 	input->id.product = 0x0001;
@@ -383,6 +385,7 @@ static int bfin_kpad_resume(struct platform_device *pdev)
 static struct platform_driver bfin_kpad_device_driver = {
 	.driver		= {
 		.name	= DRV_NAME,
+		.owner	= THIS_MODULE,
 	},
 	.probe		= bfin_kpad_probe,
 	.remove		= bfin_kpad_remove,

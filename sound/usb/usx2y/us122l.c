@@ -137,12 +137,13 @@ static void usb_stream_hwdep_vm_open(struct vm_area_struct *area)
 	snd_printdd(KERN_DEBUG "%i\n", atomic_read(&us122l->mmap_count));
 }
 
-static int usb_stream_hwdep_vm_fault(struct vm_fault *vmf)
+static int usb_stream_hwdep_vm_fault(struct vm_area_struct *area,
+				     struct vm_fault *vmf)
 {
 	unsigned long offset;
 	struct page *page;
 	void *vaddr;
-	struct us122l *us122l = vmf->vma->vm_private_data;
+	struct us122l *us122l = area->vm_private_data;
 	struct usb_stream *s;
 
 	mutex_lock(&us122l->mutex);
@@ -472,7 +473,7 @@ static int usb_stream_hwdep_new(struct snd_card *card)
 	hw->ops.mmap = usb_stream_hwdep_mmap;
 	hw->ops.poll = usb_stream_hwdep_poll;
 
-	sprintf(hw->name, "/dev/bus/usb/%03d/%03d/hwdeppcm",
+	sprintf(hw->name, "/proc/bus/usb/%03d/%03d/hwdeppcm",
 		dev->bus->busnum, dev->devnum);
 	return 0;
 }
@@ -534,9 +535,7 @@ static void snd_us122l_free(struct snd_card *card)
 		snd_us122l_card_used[index] = 0;
 }
 
-static int usx2y_create_card(struct usb_device *device,
-			     struct usb_interface *intf,
-			     struct snd_card **cardp)
+static int usx2y_create_card(struct usb_device *device, struct snd_card **cardp)
 {
 	int		dev;
 	struct snd_card *card;
@@ -547,8 +546,8 @@ static int usx2y_create_card(struct usb_device *device,
 			break;
 	if (dev >= SNDRV_CARDS)
 		return -ENODEV;
-	err = snd_card_new(&intf->dev, index[dev], id[dev], THIS_MODULE,
-			   sizeof(struct us122l), &card);
+	err = snd_card_create(index[dev], id[dev], THIS_MODULE,
+			      sizeof(struct us122l), &card);
 	if (err < 0)
 		return err;
 	snd_us122l_card_used[US122L(card)->card_index = dev] = 1;
@@ -579,10 +578,11 @@ static int us122l_usb_probe(struct usb_interface *intf,
 	struct snd_card *card;
 	int err;
 
-	err = usx2y_create_card(device, intf, &card);
+	err = usx2y_create_card(device, &card);
 	if (err < 0)
 		return err;
 
+	snd_card_set_dev(card, &intf->dev);
 	if (!us122l_create_card(card)) {
 		snd_card_free(card);
 		return -EINVAL;

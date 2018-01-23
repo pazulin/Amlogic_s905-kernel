@@ -18,11 +18,14 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * To obtain the license, point your browser to
- * http://www.gnu.org/copyleft/gpl.html
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+ * Or, point your browser to http://www.gnu.org/copyleft/gpl.html
  *
  *
- * the project's page is at https://linuxtv.org
+ * the project's page is at http://www.linuxtv.org/ 
  */
 
 #include <linux/kernel.h>
@@ -375,7 +378,7 @@ static struct dvb_device dvbdev_ca = {
 int av7110_ca_register(struct av7110 *av7110)
 {
 	return dvb_register_device(&av7110->dvb_adapter, &av7110->ca_dev,
-				   &dvbdev_ca, av7110, DVB_DEVICE_CA, 0);
+				   &dvbdev_ca, av7110, DVB_DEVICE_CA);
 }
 
 void av7110_ca_unregister(struct av7110 *av7110)

@@ -406,7 +406,7 @@ static struct llc_conn_state_trans *llc_qualify_conn_ev(struct sock *sk,
 							struct sk_buff *skb)
 {
 	struct llc_conn_state_trans **next_trans;
-	const llc_conn_ev_qfyr_t *next_qualifier;
+	llc_conn_ev_qfyr_t *next_qualifier;
 	struct llc_conn_state_ev *ev = llc_conn_ev(skb);
 	struct llc_sock *llc = llc_sk(sk);
 	struct llc_conn_state *curr_state =
@@ -454,7 +454,7 @@ static int llc_exec_conn_trans_actions(struct sock *sk,
 				       struct sk_buff *skb)
 {
 	int rc = 0;
-	const llc_conn_action_t *next_action;
+	llc_conn_action_t *next_action;
 
 	for (next_action = trans->ev_actions;
 	     next_action && *next_action; next_action++) {
@@ -506,7 +506,7 @@ static struct sock *__llc_lookup_established(struct llc_sap *sap,
 again:
 	sk_nulls_for_each_rcu(rc, node, laddr_hb) {
 		if (llc_estab_match(sap, daddr, laddr, rc)) {
-			/* Extra checks required by SLAB_TYPESAFE_BY_RCU */
+			/* Extra checks required by SLAB_DESTROY_BY_RCU */
 			if (unlikely(!atomic_inc_not_zero(&rc->sk_refcnt)))
 				goto again;
 			if (unlikely(llc_sk(rc)->sap != sap ||
@@ -565,7 +565,7 @@ static struct sock *__llc_lookup_listener(struct llc_sap *sap,
 again:
 	sk_nulls_for_each_rcu(rc, node, laddr_hb) {
 		if (llc_listener_match(sap, laddr, rc)) {
-			/* Extra checks required by SLAB_TYPESAFE_BY_RCU */
+			/* Extra checks required by SLAB_DESTROY_BY_RCU */
 			if (unlikely(!atomic_inc_not_zero(&rc->sk_refcnt)))
 				goto again;
 			if (unlikely(llc_sk(rc)->sap != sap ||
@@ -768,7 +768,7 @@ static struct sock *llc_create_incoming_sock(struct sock *sk,
 					     struct llc_addr *daddr)
 {
 	struct sock *newsk = llc_sk_alloc(sock_net(sk), sk->sk_family, GFP_ATOMIC,
-					  sk->sk_prot, 0);
+					  sk->sk_prot);
 	struct llc_sock *newllc, *llc = llc_sk(sk);
 
 	if (!newsk)
@@ -821,10 +821,7 @@ void llc_conn_handler(struct llc_sap *sap, struct sk_buff *skb)
 		 * another trick required to cope with how the PROCOM state
 		 * machine works. -acme
 		 */
-		skb_orphan(skb);
-		sock_hold(sk);
 		skb->sk = sk;
-		skb->destructor = sock_efree;
 	}
 	if (!sock_owned_by_user(sk))
 		llc_conn_rcv(sk, skb);
@@ -934,9 +931,9 @@ static void llc_sk_init(struct sock *sk)
  *	Allocates a LLC sock and initializes it. Returns the new LLC sock
  *	or %NULL if there's no memory available for one
  */
-struct sock *llc_sk_alloc(struct net *net, int family, gfp_t priority, struct proto *prot, int kern)
+struct sock *llc_sk_alloc(struct net *net, int family, gfp_t priority, struct proto *prot)
 {
-	struct sock *sk = sk_alloc(net, family, priority, prot, kern);
+	struct sock *sk = sk_alloc(net, family, priority, prot);
 
 	if (!sk)
 		goto out;

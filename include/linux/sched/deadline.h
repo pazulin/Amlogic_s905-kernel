@@ -1,7 +1,5 @@
-#ifndef _LINUX_SCHED_DEADLINE_H
-#define _LINUX_SCHED_DEADLINE_H
-
-#include <linux/sched.h>
+#ifndef _SCHED_DEADLINE_H
+#define _SCHED_DEADLINE_H
 
 /*
  * SCHED_DEADLINE tasks has negative priorities, reflecting
@@ -23,9 +21,4 @@ static inline int dl_task(struct task_struct *p)
 	return dl_prio(p->prio);
 }
 
-static inline bool dl_time_before(u64 a, u64 b)
-{
-	return (s64)(a - b) < 0;
-}
-
-#endif /* _LINUX_SCHED_DEADLINE_H */
+#endif /* _SCHED_DEADLINE_H */

@@ -11,6 +11,10 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ *
  * CCDC hardware module for DM355
  * ------------------------------
  *
@@ -330,8 +334,8 @@ static int ccdc_set_params(void __user *params)
 
 	x = copy_from_user(&ccdc_raw_params, params, sizeof(ccdc_raw_params));
 	if (x) {
-		dev_dbg(ccdc_cfg.dev, "ccdc_set_params: error in copying ccdcparams, %d\n",
-			x);
+		dev_dbg(ccdc_cfg.dev, "ccdc_set_params: error in copying ccdc"
+			"params, %d\n", x);
 		return -EFAULT;
 	}
 
@@ -456,7 +460,7 @@ static void ccdc_config_black_compense(struct ccdc_black_compensation *bcomp)
  * ccdc_write_dfc_entry()
  * write an entry in the dfc table.
  */
-static int ccdc_write_dfc_entry(int index, struct ccdc_vertical_dft *dfc)
+int ccdc_write_dfc_entry(int index, struct ccdc_vertical_dft *dfc)
 {
 /* TODO This is to be re-visited and adjusted */
 #define DFC_WRITE_WAIT_COUNT	1000
@@ -1026,6 +1030,7 @@ static int dm355_ccdc_remove(struct platform_device *pdev)
 static struct platform_driver dm355_ccdc_driver = {
 	.driver = {
 		.name	= "dm355_ccdc",
+		.owner = THIS_MODULE,
 	},
 	.remove = dm355_ccdc_remove,
 	.probe = dm355_ccdc_probe,

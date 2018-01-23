@@ -449,7 +449,6 @@ static struct attribute_group pcc_attr_group = {
 
 /* hotkey input device driver */
 
-static int sleep_keydown_seen;
 static void acpi_pcc_generate_keyinput(struct pcc_acpi *pcc)
 {
 	struct input_dev *hotk_input_dev = pcc->input_dev;
@@ -458,21 +457,11 @@ static void acpi_pcc_generate_keyinput(struct pcc_acpi *pcc)
 
 	rc = acpi_evaluate_integer(pcc->handle, METHOD_HKEY_QUERY,
 				   NULL, &result);
-	if (ACPI_FAILURE(rc)) {
+	if (!ACPI_SUCCESS(rc)) {
 		ACPI_DEBUG_PRINT((ACPI_DB_ERROR,
 				 "error getting hotkey status\n"));
 		return;
 	}
-
-	/* hack: some firmware sends no key down for sleep / hibernate */
-	if ((result & 0xf) == 0x7 || (result & 0xf) == 0xa) {
-		if (result & 0x80)
-			sleep_keydown_seen = 1;
-		if (!sleep_keydown_seen)
-			sparse_keymap_report_event(hotk_input_dev,
-					result & 0xf, 0x80, false);
-	}
-
 	if (!sparse_keymap_report_event(hotk_input_dev,
 					result & 0xf, result & 0x80, false))
 		ACPI_DEBUG_PRINT((ACPI_DB_ERROR,
@@ -520,15 +509,27 @@ static int acpi_pcc_init_input(struct pcc_acpi *pcc)
 	if (error) {
 		ACPI_DEBUG_PRINT((ACPI_DB_ERROR,
 				  "Unable to register input device\n"));
-		goto err_free_dev;
+		goto err_free_keymap;
 	}
 
 	pcc->input_dev = input_dev;
 	return 0;
 
+ err_free_keymap:
+	sparse_keymap_free(input_dev);
  err_free_dev:
 	input_free_device(input_dev);
 	return error;
+}
+
+static void acpi_pcc_destroy_input(struct pcc_acpi *pcc)
+{
+	sparse_keymap_free(pcc->input_dev);
+	input_unregister_device(pcc->input_dev);
+	/*
+	 * No need to input_free_device() since core input API refcounts
+	 * and free()s the device.
+	 */
 }
 
 /* kernel module interface */
@@ -628,7 +629,7 @@ static int acpi_pcc_hotkey_add(struct acpi_device *device)
 out_backlight:
 	backlight_device_unregister(pcc->backlight);
 out_input:
-	input_unregister_device(pcc->input_dev);
+	acpi_pcc_destroy_input(pcc);
 out_sinf:
 	kfree(pcc->sinf);
 out_hotkey:
@@ -648,7 +649,7 @@ static int acpi_pcc_hotkey_remove(struct acpi_device *device)
 
 	backlight_device_unregister(pcc->backlight);
 
-	input_unregister_device(pcc->input_dev);
+	acpi_pcc_destroy_input(pcc);
 
 	kfree(pcc->sinf);
 	kfree(pcc);

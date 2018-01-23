@@ -23,7 +23,7 @@ struct host1x_job_gather {
 	u32 words;
 	dma_addr_t base;
 	struct host1x_bo *bo;
-	u32 offset;
+	int offset;
 	bool handled;
 };
 
@@ -44,7 +44,6 @@ struct host1x_waitchk {
 struct host1x_job_unpin_data {
 	struct host1x_bo *bo;
 	struct sg_table *sgt;
-	size_t size;
 };
 
 /*

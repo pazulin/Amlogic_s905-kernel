@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2017, Intel Corp.
+ * Copyright (C) 2000 - 2013, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -49,6 +49,9 @@
 
 #define _COMPONENT          ACPI_PARSER
 ACPI_MODULE_NAME("psopinfo")
+
+extern const u8 acpi_gbl_short_op_index[];
+extern const u8 acpi_gbl_long_op_index[];
 
 static const u8 acpi_gbl_argument_count[] =
     { 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 6 };
@@ -158,7 +161,7 @@ const struct acpi_opcode_info *acpi_ps_get_opcode_info(u16 opcode)
  *
  ******************************************************************************/
 
-const char *acpi_ps_get_opcode_name(u16 opcode)
+char *acpi_ps_get_opcode_name(u16 opcode)
 {
 #if defined(ACPI_DISASSEMBLER) || defined (ACPI_DEBUG_OUTPUT)
 
@@ -207,7 +210,7 @@ const u8 acpi_gbl_short_op_index[256] = {
 /*              8     9     A     B     C     D     E     F  */
 /* 0x00 */ 0x00, 0x01, _UNK, _UNK, _UNK, _UNK, 0x02, _UNK,
 /* 0x08 */ 0x03, _UNK, 0x04, 0x05, 0x06, 0x07, 0x6E, _UNK,
-/* 0x10 */ 0x08, 0x09, 0x0a, 0x6F, 0x0b, 0x81, _UNK, _UNK,
+/* 0x10 */ 0x08, 0x09, 0x0a, 0x6F, 0x0b, _UNK, _UNK, _UNK,
 /* 0x18 */ _UNK, _UNK, _UNK, _UNK, _UNK, _UNK, _UNK, _UNK,
 /* 0x20 */ _UNK, _UNK, _UNK, _UNK, _UNK, _UNK, _UNK, _UNK,
 /* 0x28 */ _UNK, _UNK, _UNK, _UNK, _UNK, 0x63, _PFX, _PFX,
@@ -226,7 +229,7 @@ const u8 acpi_gbl_short_op_index[256] = {
 /* 0x90 */ 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x73, 0x74,
 /* 0x98 */ 0x75, 0x76, _UNK, _UNK, 0x77, 0x78, 0x79, 0x7A,
 /* 0xA0 */ 0x3e, 0x3f, 0x40, 0x41, 0x42, 0x43, 0x60, 0x61,
-/* 0xA8 */ 0x62, 0x82, _UNK, _UNK, _UNK, _UNK, _UNK, _UNK,
+/* 0xA8 */ 0x62, _UNK, _UNK, _UNK, _UNK, _UNK, _UNK, _UNK,
 /* 0xB0 */ _UNK, _UNK, _UNK, _UNK, _UNK, _UNK, _UNK, _UNK,
 /* 0xB8 */ _UNK, _UNK, _UNK, _UNK, _UNK, _UNK, _UNK, _UNK,
 /* 0xC0 */ _UNK, _UNK, _UNK, _UNK, _UNK, _UNK, _UNK, _UNK,

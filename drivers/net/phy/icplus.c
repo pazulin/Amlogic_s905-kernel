@@ -28,7 +28,7 @@
 
 #include <asm/io.h>
 #include <asm/irq.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 MODULE_DESCRIPTION("ICPlus IP175C/IP101A/IP101G/IC1001 PHY drivers");
 MODULE_AUTHOR("Michael Barkowski");
@@ -45,6 +45,31 @@ MODULE_LICENSE("GPL");
 #define	IP101A_G_IRQ_PIN_USED		(1<<15) /* INTR pin used */
 #define	IP101A_G_IRQ_DEFAULT		IP101A_G_IRQ_PIN_USED
 
+#define IP101G_PAGE_SEL			0x14
+#define IP101G_PAGE_16			0x10
+#define IP101G_SPEC_CTRL_STATUS	0x10
+#define IP101G_ANALOG_OFF		0x0001
+#define IP101G_MMD_CTRL			0x0d
+#define IP101G_MMD_DATA			0x0e
+#define IP101G_DIO_PIN_DCR		0x1a
+#define OFF 1
+#define ON  0
+
+static void off_analog(struct phy_device *phydev, int off)
+{
+	int ana;
+
+	phy_write(phydev, IP101G_PAGE_SEL, IP101G_PAGE_16);
+	ana = phy_read(phydev, IP101G_SPEC_CTRL_STATUS);
+	if (off) {
+		phy_write(phydev, IP101G_SPEC_CTRL_STATUS,
+				(ana | IP101G_ANALOG_OFF));
+	} else {
+		phy_write(phydev, IP101G_SPEC_CTRL_STATUS,
+				(ana & ~IP101G_ANALOG_OFF));
+	}
+}
+
 static int ip175c_config_init(struct phy_device *phydev)
 {
 	int err, i;
@@ -53,43 +78,43 @@ static int ip175c_config_init(struct phy_device *phydev)
 	if (full_reset_performed == 0) {
 
 		/* master reset */
-		err = mdiobus_write(phydev->mdio.bus, 30, 0, 0x175c);
+		err = mdiobus_write(phydev->bus, 30, 0, 0x175c);
 		if (err < 0)
 			return err;
 
 		/* ensure no bus delays overlap reset period */
-		err = mdiobus_read(phydev->mdio.bus, 30, 0);
+		err = mdiobus_read(phydev->bus, 30, 0);
 
 		/* data sheet specifies reset period is 2 msec */
 		mdelay(2);
 
 		/* enable IP175C mode */
-		err = mdiobus_write(phydev->mdio.bus, 29, 31, 0x175c);
+		err = mdiobus_write(phydev->bus, 29, 31, 0x175c);
 		if (err < 0)
 			return err;
 
 		/* Set MII0 speed and duplex (in PHY mode) */
-		err = mdiobus_write(phydev->mdio.bus, 29, 22, 0x420);
+		err = mdiobus_write(phydev->bus, 29, 22, 0x420);
 		if (err < 0)
 			return err;
 
 		/* reset switch ports */
 		for (i = 0; i < 5; i++) {
-			err = mdiobus_write(phydev->mdio.bus, i,
+			err = mdiobus_write(phydev->bus, i,
 					    MII_BMCR, BMCR_RESET);
 			if (err < 0)
 				return err;
 		}
 
 		for (i = 0; i < 5; i++)
-			err = mdiobus_read(phydev->mdio.bus, i, MII_BMCR);
+			err = mdiobus_read(phydev->bus, i, MII_BMCR);
 
 		mdelay(2);
 
 		full_reset_performed = 1;
 	}
 
-	if (phydev->mdio.addr != 4) {
+	if (phydev->addr != 4) {
 		phydev->state = PHY_RUNNING;
 		phydev->speed = SPEED_100;
 		phydev->duplex = DUPLEX_FULL;
@@ -139,7 +164,10 @@ static int ip1001_config_init(struct phy_device *phydev)
 	if (c < 0)
 		return c;
 
-	if (phy_interface_is_rgmii(phydev)) {
+	if ((phydev->interface == PHY_INTERFACE_MODE_RGMII) ||
+	    (phydev->interface == PHY_INTERFACE_MODE_RGMII_ID) ||
+	    (phydev->interface == PHY_INTERFACE_MODE_RGMII_RXID) ||
+	    (phydev->interface == PHY_INTERFACE_MODE_RGMII_TXID)) {
 
 		c = phy_read(phydev, IP10XX_SPEC_CTRL_STATUS);
 		if (c < 0)
@@ -184,7 +212,7 @@ static int ip101a_g_config_init(struct phy_device *phydev)
 
 static int ip175c_read_status(struct phy_device *phydev)
 {
-	if (phydev->mdio.addr == 4) /* WAN port */
+	if (phydev->addr == 4) /* WAN port */
 		genphy_read_status(phydev);
 	else
 		/* Don't need to read status for switch ports */
@@ -195,7 +223,7 @@ static int ip175c_read_status(struct phy_device *phydev)
 
 static int ip175c_config_aneg(struct phy_device *phydev)
 {
-	if (phydev->mdio.addr == 4) /* WAN port */
+	if (phydev->addr == 4) /* WAN port */
 		genphy_config_aneg(phydev);
 
 	return 0;
@@ -210,6 +238,36 @@ static int ip101a_g_ack_interrupt(struct phy_device *phydev)
 	return 0;
 }
 
+static int ip101_suspend(struct phy_device *phydev)
+{
+	int value;
+
+	off_analog(phydev, OFF);
+
+	value = phy_read(phydev, MII_BMCR);
+	phy_write(phydev, MII_BMCR, value | BMCR_PDOWN);
+
+	/* ip101 need read to take effect */
+	phy_read(phydev, MII_BMCR);
+
+	return 0;
+}
+
+static int ip101_resume(struct phy_device *phydev)
+{
+	int value;
+
+	off_analog(phydev, ON);
+
+	value = phy_read(phydev, MII_BMCR);
+	phy_write(phydev, MII_BMCR, value & ~BMCR_PDOWN);
+
+	/* ip101 need read to take effect */
+	phy_read(phydev, MII_BMCR);
+
+	return 0;
+}
+
 static struct phy_driver icplus_driver[] = {
 {
 	.phy_id		= 0x02430d80,
@@ -219,33 +277,51 @@ static struct phy_driver icplus_driver[] = {
 	.config_init	= &ip175c_config_init,
 	.config_aneg	= &ip175c_config_aneg,
 	.read_status	= &ip175c_read_status,
-	.suspend	= genphy_suspend,
-	.resume		= genphy_resume,
+	.suspend	= ip101_suspend,
+	.resume		= ip101_resume,
+	.driver		= { .owner = THIS_MODULE,},
 }, {
 	.phy_id		= 0x02430d90,
 	.name		= "ICPlus IP1001",
 	.phy_id_mask	= 0x0ffffff0,
-	.features	= PHY_GBIT_FEATURES,
+	.features	= PHY_GBIT_FEATURES | SUPPORTED_Pause |
+			  SUPPORTED_Asym_Pause,
 	.config_init	= &ip1001_config_init,
 	.config_aneg	= &genphy_config_aneg,
 	.read_status	= &genphy_read_status,
-	.suspend	= genphy_suspend,
-	.resume		= genphy_resume,
+	.suspend	= ip101_suspend,
+	.resume		= ip101_resume,
+	.driver		= { .owner = THIS_MODULE,},
 }, {
 	.phy_id		= 0x02430c54,
 	.name		= "ICPlus IP101A/G",
 	.phy_id_mask	= 0x0ffffff0,
-	.features	= PHY_BASIC_FEATURES,
+	.features	= PHY_BASIC_FEATURES | SUPPORTED_Pause |
+			  SUPPORTED_Asym_Pause,
 	.flags		= PHY_HAS_INTERRUPT,
 	.ack_interrupt	= ip101a_g_ack_interrupt,
 	.config_init	= &ip101a_g_config_init,
 	.config_aneg	= &genphy_config_aneg,
 	.read_status	= &genphy_read_status,
-	.suspend	= genphy_suspend,
-	.resume		= genphy_resume,
+	.suspend	= ip101_suspend,
+	.resume		= ip101_resume,
+	.driver		= { .owner = THIS_MODULE,},
 } };
 
-module_phy_driver(icplus_driver);
+static int __init icplus_init(void)
+{
+	return phy_drivers_register(icplus_driver,
+		ARRAY_SIZE(icplus_driver));
+}
+
+static void __exit icplus_exit(void)
+{
+	phy_drivers_unregister(icplus_driver,
+		ARRAY_SIZE(icplus_driver));
+}
+
+module_init(icplus_init);
+module_exit(icplus_exit);
 
 static struct mdio_device_id __maybe_unused icplus_tbl[] = {
 	{ 0x02430d80, 0x0ffffff0 },

@@ -7,9 +7,7 @@
 
 #include <linux/errno.h>
 #include <linux/types.h>
-#include <linux/sched/signal.h>
-#include <linux/sched/mm.h>
-#include <linux/sched/debug.h>
+#include <linux/sched.h>
 #include <linux/fs.h>
 #include <linux/file.h>
 #include <linux/mm.h>
@@ -28,12 +26,11 @@
 #include <linux/export.h>
 #include <linux/context_tracking.h>
 
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/utrap.h>
 #include <asm/unistd.h>
 
 #include "entry.h"
-#include "kernel.h"
 #include "systbls.h"
 
 /* #define DEBUG_UNIMP_SYSCALL */
@@ -266,7 +263,7 @@ static unsigned long mmap_rnd(void)
 	unsigned long rnd = 0UL;
 
 	if (current->flags & PF_RANDOMIZE) {
-		unsigned long val = get_random_long();
+		unsigned long val = get_random_int();
 		if (test_thread_flag(TIF_32BIT))
 			rnd = (val % (1UL << (23UL-PAGE_SHIFT)));
 		else
@@ -335,14 +332,14 @@ SYSCALL_DEFINE6(sparc_ipc, unsigned int, call, int, first, unsigned long, second
 	long err;
 
 	/* No need for backward compatibility. We can start fresh... */
-	if (call <= SEMTIMEDOP) {
+	if (call <= SEMCTL) {
 		switch (call) {
 		case SEMOP:
 			err = sys_semtimedop(first, ptr,
-					     (unsigned int)second, NULL);
+					     (unsigned)second, NULL);
 			goto out;
 		case SEMTIMEDOP:
-			err = sys_semtimedop(first, ptr, (unsigned int)second,
+			err = sys_semtimedop(first, ptr, (unsigned)second,
 				(const struct timespec __user *)
 					     (unsigned long) fifth);
 			goto out;
@@ -415,7 +412,7 @@ out:
 
 SYSCALL_DEFINE1(sparc64_personality, unsigned long, personality)
 {
-	long ret;
+	int ret;
 
 	if (personality(current->personality) == PER_LINUX32 &&
 	    personality(personality) == PER_LINUX)

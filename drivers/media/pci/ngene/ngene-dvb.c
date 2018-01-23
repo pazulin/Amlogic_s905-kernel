@@ -19,8 +19,12 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * To obtain the license, point your browser to
- * http://www.gnu.org/copyleft/gpl.html
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA
+ * Or, point your browser to http://www.gnu.org/copyleft/gpl.html
  */
 
 #include <linux/module.h>
@@ -43,7 +47,7 @@
 /* COMMAND API interface ****************************************************/
 /****************************************************************************/
 
-static ssize_t ts_write(struct file *file, const char __user *buf,
+static ssize_t ts_write(struct file *file, const char *buf,
 			size_t count, loff_t *ppos)
 {
 	struct dvb_device *dvbdev = file->private_data;
@@ -55,12 +59,12 @@ static ssize_t ts_write(struct file *file, const char __user *buf,
 				     (&dev->tsout_rbuf) >= count) < 0)
 		return 0;
 
-	dvb_ringbuffer_write_user(&dev->tsout_rbuf, buf, count);
+	dvb_ringbuffer_write(&dev->tsout_rbuf, buf, count);
 
 	return count;
 }
 
-static ssize_t ts_read(struct file *file, char __user *buf,
+static ssize_t ts_read(struct file *file, char *buf,
 		       size_t count, loff_t *ppos)
 {
 	struct dvb_device *dvbdev = file->private_data;
@@ -93,6 +97,7 @@ static const struct file_operations ci_fops = {
 };
 
 struct dvb_device ngene_dvbdev_ci = {
+	.priv    = 0,
 	.readers = -1,
 	.writers = -1,
 	.users   = -1,

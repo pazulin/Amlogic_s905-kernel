@@ -24,7 +24,8 @@ struct iio_interrupt_trigger_info {
 
 static irqreturn_t iio_interrupt_trigger_poll(int irq, void *private)
 {
-	iio_trigger_poll(private);
+	/* Timestamp not currently provided */
+	iio_trigger_poll(private, 0);
 	return IRQ_HANDLED;
 }
 
@@ -58,7 +59,7 @@ static int iio_interrupt_trigger_probe(struct platform_device *pdev)
 	trig_info = kzalloc(sizeof(*trig_info), GFP_KERNEL);
 	if (!trig_info) {
 		ret = -ENOMEM;
-		goto error_free_trigger;
+		goto error_put_trigger;
 	}
 	iio_trigger_set_drvdata(trig, trig_info);
 	trig_info->irq = irq;
@@ -83,8 +84,8 @@ error_release_irq:
 	free_irq(irq, trig);
 error_free_trig_info:
 	kfree(trig_info);
-error_free_trigger:
-	iio_trigger_free(trig);
+error_put_trigger:
+	iio_trigger_put(trig);
 error_ret:
 	return ret;
 }
@@ -99,7 +100,7 @@ static int iio_interrupt_trigger_remove(struct platform_device *pdev)
 	iio_trigger_unregister(trig);
 	free_irq(trig_info->irq, trig);
 	kfree(trig_info);
-	iio_trigger_free(trig);
+	iio_trigger_put(trig);
 
 	return 0;
 }
@@ -109,6 +110,7 @@ static struct platform_driver iio_interrupt_trigger_driver = {
 	.remove = iio_interrupt_trigger_remove,
 	.driver = {
 		.name = "iio_interrupt_trigger",
+		.owner = THIS_MODULE,
 	},
 };
 

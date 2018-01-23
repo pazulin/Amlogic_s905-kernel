@@ -17,33 +17,31 @@
 #ifndef SI2157_H
 #define SI2157_H
 
-#include <media/media-device.h>
+#include <linux/kconfig.h>
 #include "dvb_frontend.h"
 
-/*
- * I2C address
- * 0x60
- */
 struct si2157_config {
 	/*
-	 * frontend
+	 * I2C address
 	 */
-	struct dvb_frontend *fe;
-
-#if defined(CONFIG_MEDIA_CONTROLLER)
-	struct media_device *mdev;
-#endif
+	u8 i2c_addr;
 
 	/*
 	 * Spectral Inversion
 	 */
 	bool inversion;
-
-	/*
-	 * Port selection
-	 * Select the RF interface to use (pins 9+11 or 12+13)
-	 */
-	u8 if_port;
 };
+
+#if IS_ENABLED(CONFIG_MEDIA_TUNER_SI2157)
+extern struct dvb_frontend *si2157_attach(struct dvb_frontend *fe,
+		struct i2c_adapter *i2c, const struct si2157_config *cfg);
+#else
+static inline struct dvb_frontend *si2157_attach(struct dvb_frontend *fe,
+		struct i2c_adapter *i2c, const struct si2157_config *cfg)
+{
+	pr_warn("%s: driver disabled by Kconfig\n", __func__);
+	return NULL;
+}
+#endif
 
 #endif

@@ -11,9 +11,6 @@
 #include <linux/module.h>
 #include <linux/errno.h>
 #include <linux/sched.h>
-#include <linux/sched/debug.h>
-#include <linux/sched/task.h>
-#include <linux/sched/task_stack.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
 #include <linux/smp.h>
@@ -29,7 +26,7 @@
 #include <linux/fs.h>
 #include <linux/slab.h>
 #include <linux/rcupdate.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/pgtable.h>
 #include <asm/io.h>
 #include <asm/processor.h>
@@ -106,9 +103,9 @@ void show_regs(struct pt_regs *regs)
 /*
  * free current thread data structures etc..
  */
-void exit_thread(struct task_struct *tsk)
+void exit_thread(void)
 {
-	exit_fpu(tsk);
+	exit_fpu();
 }
 
 void flush_thread(void)

@@ -90,8 +90,8 @@ static irqreturn_t netxen_msix_intr(int irq, void *data);
 
 static void netxen_free_ip_list(struct netxen_adapter *, bool);
 static void netxen_restore_indev_addr(struct net_device *dev, unsigned long);
-static void netxen_nic_get_stats(struct net_device *dev,
-				 struct rtnl_link_stats64 *stats);
+static struct rtnl_link_stats64 *netxen_nic_get_stats(struct net_device *dev,
+						      struct rtnl_link_stats64 *stats);
 static int netxen_nic_set_mac(struct net_device *netdev, void *p);
 
 /*  PCI Device ID Table  */
@@ -99,7 +99,7 @@ static int netxen_nic_set_mac(struct net_device *netdev, void *p);
 	{PCI_DEVICE(PCI_VENDOR_ID_NETXEN, (device)), \
 	.class = PCI_CLASS_NETWORK_ETHERNET << 8, .class_mask = ~0}
 
-static const struct pci_device_id netxen_pci_tbl[] = {
+static DEFINE_PCI_DEVICE_TABLE(netxen_pci_tbl) = {
 	ENTRY(PCI_DEVICE_ID_NX2031_10GXSR),
 	ENTRY(PCI_DEVICE_ID_NX2031_10GCX4),
 	ENTRY(PCI_DEVICE_ID_NX2031_4GCU),
@@ -176,7 +176,9 @@ netxen_alloc_sds_rings(struct netxen_recv_context *recv_ctx, int count)
 static void
 netxen_free_sds_rings(struct netxen_recv_context *recv_ctx)
 {
-	kfree(recv_ctx->sds_rings);
+	if (recv_ctx->sds_rings != NULL)
+		kfree(recv_ctx->sds_rings);
+
 	recv_ctx->sds_rings = NULL;
 }
 
@@ -641,9 +643,8 @@ static int netxen_setup_msi_interrupts(struct netxen_adapter *adapter,
 
 	if (adapter->msix_supported) {
 		netxen_init_msix_entries(adapter, num_msix);
-		err = pci_enable_msix_range(pdev, adapter->msix_entries,
-					    num_msix, num_msix);
-		if (err > 0) {
+		err = pci_enable_msix(pdev, adapter->msix_entries, num_msix);
+		if (err == 0) {
 			adapter->flags |= NETXEN_NIC_MSIX_ENABLED;
 			netxen_set_msix_bit(pdev, 1);
 
@@ -852,8 +853,7 @@ netxen_check_options(struct netxen_adapter *adapter)
 	ptr32 = (__le32 *)&serial_num;
 	offset = NX_FW_SERIAL_NUM_OFFSET;
 	for (i = 0; i < 8; i++) {
-		err = netxen_rom_fast_read(adapter, offset, &val);
-		if (err) {
+		if (netxen_rom_fast_read(adapter, offset, &val) == -1) {
 			dev_err(&pdev->dev, "error reading board info\n");
 			adapter->driver_mismatch = 1;
 			return;
@@ -1185,6 +1185,7 @@ __netxen_nic_down(struct netxen_adapter *adapter, struct net_device *netdev)
 		return;
 
 	smp_mb();
+	spin_lock(&adapter->tx_clean_lock);
 	netif_carrier_off(netdev);
 	netif_tx_disable(netdev);
 
@@ -1202,6 +1203,7 @@ __netxen_nic_down(struct netxen_adapter *adapter, struct net_device *netdev)
 	netxen_napi_disable(adapter);
 
 	netxen_release_tx_buffers(adapter);
+	spin_unlock(&adapter->tx_clean_lock);
 }
 
 /* Usage: During suspend and firmware recovery module */
@@ -1370,7 +1372,7 @@ netxen_setup_netdev(struct netxen_adapter *adapter,
 
 	netxen_nic_change_mtu(netdev, netdev->mtu);
 
-	netdev->ethtool_ops = &netxen_nic_ethtool_ops;
+	SET_ETHTOOL_OPS(netdev, &netxen_nic_ethtool_ops);
 
 	netdev->hw_features = NETIF_F_SG | NETIF_F_IP_CSUM | NETIF_F_TSO |
 	                      NETIF_F_RXCSUM;
@@ -1474,8 +1476,9 @@ netxen_nic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	u32 val;
 
 	if (pdev->revision >= NX_P3_A0 && pdev->revision <= NX_P3_B1) {
-		pr_warn("%s: chip revisions between 0x%x-0x%x will not be enabled\n",
-			module_name(THIS_MODULE), NX_P3_A0, NX_P3_B1);
+		pr_warning("%s: chip revisions between 0x%x-0x%x "
+				"will not be enabled.\n",
+				module_name(THIS_MODULE), NX_P3_A0, NX_P3_B1);
 		return -ENODEV;
 	}
 
@@ -1571,13 +1574,6 @@ netxen_nic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		if (i != 0x55555555)
 			adapter->physical_port = i;
 	}
-
-	/* MTU range: 0 - 8000 (P2) or 9600 (P3) */
-	netdev->min_mtu = 0;
-	if (NX_IS_REVISION_P3(adapter->ahw.revision_id))
-		netdev->max_mtu = P3_MAX_MTU;
-	else
-		netdev->max_mtu = P2_MAX_MTU;
 
 	netxen_nic_clear_stats(adapter);
 
@@ -1899,9 +1895,9 @@ netxen_tso_check(struct net_device *netdev,
 		protocol = vh->h_vlan_encapsulated_proto;
 		flags = FLAGS_VLAN_TAGGED;
 
-	} else if (skb_vlan_tag_present(skb)) {
+	} else if (vlan_tx_tag_present(skb)) {
 		flags = FLAGS_VLAN_OOB;
-		vid = skb_vlan_tag_get(skb);
+		vid = vlan_tx_tag_get(skb);
 		netxen_set_tx_vlan_tci(first_desc, vid);
 		vlan_oob = 1;
 	}
@@ -2293,7 +2289,7 @@ static void netxen_tx_timeout_task(struct work_struct *work)
 			goto request_reset;
 		}
 	}
-	netif_trans_update(adapter->netdev);
+	adapter->netdev->trans_start = jiffies;
 	rtnl_unlock();
 	return;
 
@@ -2302,8 +2298,8 @@ request_reset:
 	clear_bit(__NX_RESETTING, &adapter->state);
 }
 
-static void netxen_nic_get_stats(struct net_device *netdev,
-				 struct rtnl_link_stats64 *stats)
+static struct rtnl_link_stats64 *netxen_nic_get_stats(struct net_device *netdev,
+						      struct rtnl_link_stats64 *stats)
 {
 	struct netxen_adapter *adapter = netdev_priv(netdev);
 
@@ -2313,6 +2309,8 @@ static void netxen_nic_get_stats(struct net_device *netdev,
 	stats->tx_bytes = adapter->stats.txbytes;
 	stats->rx_dropped = adapter->stats.rxdropped;
 	stats->tx_dropped = adapter->stats.txdropped;
+
+	return stats;
 }
 
 static irqreturn_t netxen_intr(int irq, void *data)
@@ -2392,11 +2390,8 @@ static int netxen_nic_poll(struct napi_struct *napi, int budget)
 
 	work_done = netxen_process_rcv_ring(sds_ring, budget);
 
-	if (!tx_complete)
-		work_done = budget;
-
-	if (work_done < budget) {
-		napi_complete_done(&sds_ring->napi, work_done);
+	if ((work_done < budget) && tx_complete) {
+		napi_complete(&sds_ring->napi);
 		if (test_bit(__NX_DEV_UP, &adapter->state))
 			netxen_nic_enable_int(sds_ring);
 	}
@@ -2769,8 +2764,7 @@ netxen_fw_poll_work(struct work_struct *work)
 	if (test_bit(__NX_RESETTING, &adapter->state))
 		goto reschedule;
 
-	if (test_bit(__NX_DEV_UP, &adapter->state) &&
-	    !(adapter->capabilities & NX_FW_CAPABILITY_LINK_NOTIFICATION)) {
+	if (test_bit(__NX_DEV_UP, &adapter->state)) {
 		if (!adapter->has_link_events) {
 
 			netxen_nic_handle_phy_intr(adapter);
@@ -2897,7 +2891,7 @@ netxen_sysfs_read_crb(struct file *filp, struct kobject *kobj,
 		struct bin_attribute *attr,
 		char *buf, loff_t offset, size_t size)
 {
-	struct device *dev = kobj_to_dev(kobj);
+	struct device *dev = container_of(kobj, struct device, kobj);
 	struct netxen_adapter *adapter = dev_get_drvdata(dev);
 	u32 data;
 	u64 qmdata;
@@ -2925,7 +2919,7 @@ netxen_sysfs_write_crb(struct file *filp, struct kobject *kobj,
 		struct bin_attribute *attr,
 		char *buf, loff_t offset, size_t size)
 {
-	struct device *dev = kobj_to_dev(kobj);
+	struct device *dev = container_of(kobj, struct device, kobj);
 	struct netxen_adapter *adapter = dev_get_drvdata(dev);
 	u32 data;
 	u64 qmdata;
@@ -2966,7 +2960,7 @@ netxen_sysfs_read_mem(struct file *filp, struct kobject *kobj,
 		struct bin_attribute *attr,
 		char *buf, loff_t offset, size_t size)
 {
-	struct device *dev = kobj_to_dev(kobj);
+	struct device *dev = container_of(kobj, struct device, kobj);
 	struct netxen_adapter *adapter = dev_get_drvdata(dev);
 	u64 data;
 	int ret;
@@ -2987,7 +2981,7 @@ static ssize_t netxen_sysfs_write_mem(struct file *filp, struct kobject *kobj,
 		struct bin_attribute *attr, char *buf,
 		loff_t offset, size_t size)
 {
-	struct device *dev = kobj_to_dev(kobj);
+	struct device *dev = container_of(kobj, struct device, kobj);
 	struct netxen_adapter *adapter = dev_get_drvdata(dev);
 	u64 data;
 	int ret;
@@ -3005,14 +2999,14 @@ static ssize_t netxen_sysfs_write_mem(struct file *filp, struct kobject *kobj,
 }
 
 
-static const struct bin_attribute bin_attr_crb = {
+static struct bin_attribute bin_attr_crb = {
 	.attr = {.name = "crb", .mode = (S_IRUGO | S_IWUSR)},
 	.size = 0,
 	.read = netxen_sysfs_read_crb,
 	.write = netxen_sysfs_write_crb,
 };
 
-static const struct bin_attribute bin_attr_mem = {
+static struct bin_attribute bin_attr_mem = {
 	.attr = {.name = "mem", .mode = (S_IRUGO | S_IWUSR)},
 	.size = 0,
 	.read = netxen_sysfs_read_mem,
@@ -3024,16 +3018,16 @@ netxen_sysfs_read_dimm(struct file *filp, struct kobject *kobj,
 		struct bin_attribute *attr,
 		char *buf, loff_t offset, size_t size)
 {
-	struct device *dev = kobj_to_dev(kobj);
+	struct device *dev = container_of(kobj, struct device, kobj);
 	struct netxen_adapter *adapter = dev_get_drvdata(dev);
 	struct net_device *netdev = adapter->netdev;
 	struct netxen_dimm_cfg dimm;
 	u8 dw, rows, cols, banks, ranks;
 	u32 val;
 
-	if (size < attr->size) {
+	if (size != sizeof(struct netxen_dimm_cfg)) {
 		netdev_err(netdev, "Invalid size\n");
-		return -EINVAL;
+		return -1;
 	}
 
 	memset(&dimm, 0, sizeof(struct netxen_dimm_cfg));
@@ -3141,9 +3135,9 @@ out:
 
 }
 
-static const struct bin_attribute bin_attr_dimm = {
+static struct bin_attribute bin_attr_dimm = {
 	.attr = { .name = "dimm", .mode = (S_IRUGO | S_IWUSR) },
-	.size = sizeof(struct netxen_dimm_cfg),
+	.size = 0,
 	.read = netxen_sysfs_read_dimm,
 };
 
@@ -3264,7 +3258,7 @@ netxen_list_config_ip(struct netxen_adapter *adapter,
 		cur = kzalloc(sizeof(struct nx_ip_list), GFP_ATOMIC);
 		if (cur == NULL)
 			goto out;
-		if (is_vlan_dev(dev))
+		if (dev->priv_flags & IFF_802_1Q_VLAN)
 			dev = vlan_dev_real_dev(dev);
 		cur->master = !!netif_is_bond_master(dev);
 		cur->ip_addr = ifa->ifa_address;
@@ -3374,7 +3368,7 @@ static void netxen_config_master(struct net_device *dev, unsigned long event)
 	    !netif_is_bond_slave(dev)) {
 		netxen_config_indev_addr(adapter, master, event);
 		for_each_netdev_rcu(&init_net, slave)
-			if (is_vlan_dev(slave) &&
+			if (slave->priv_flags & IFF_802_1Q_VLAN &&
 			    vlan_dev_real_dev(slave) == master)
 				netxen_config_indev_addr(adapter, slave, event);
 	}
@@ -3400,7 +3394,7 @@ recheck:
 	if (dev == NULL)
 		goto done;
 
-	if (is_vlan_dev(dev)) {
+	if (dev->priv_flags & IFF_802_1Q_VLAN) {
 		dev = vlan_dev_real_dev(dev);
 		goto recheck;
 	}
@@ -3445,7 +3439,7 @@ recheck:
 	if (dev == NULL)
 		goto done;
 
-	if (is_vlan_dev(dev)) {
+	if (dev->priv_flags & IFF_802_1Q_VLAN) {
 		dev = vlan_dev_real_dev(dev);
 		goto recheck;
 	}

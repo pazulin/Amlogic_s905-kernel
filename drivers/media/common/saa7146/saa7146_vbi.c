@@ -1,4 +1,4 @@
-#include <media/drv-intf/saa7146_vv.h>
+#include <media/saa7146_vv.h>
 
 static int vbi_pixel_to_capture = 720 * 2;
 
@@ -95,7 +95,7 @@ static int vbi_workaround(struct saa7146_dev *dev)
 
 		/* prepare to wait to be woken up by the irq-handler */
 		add_wait_queue(&vv->vbi_wq, &wait);
-		set_current_state(TASK_INTERRUPTIBLE);
+		current->state = TASK_INTERRUPTIBLE;
 
 		/* start rps1 to enable workaround */
 		saa7146_write(dev, RPS_ADDR1, dev->d_rps1.dma_handle);
@@ -106,7 +106,7 @@ static int vbi_workaround(struct saa7146_dev *dev)
 		DEB_VBI("brs bug workaround %d/1\n", i);
 
 		remove_wait_queue(&vv->vbi_wq, &wait);
-		__set_current_state(TASK_RUNNING);
+		current->state = TASK_RUNNING;
 
 		/* disable rps1 irqs */
 		SAA7146_IER_DISABLE(dev,MASK_28);
@@ -365,8 +365,9 @@ static void vbi_init(struct saa7146_dev *dev, struct saa7146_vv *vv)
 
 	INIT_LIST_HEAD(&vv->vbi_dmaq.queue);
 
-	setup_timer(&vv->vbi_dmaq.timeout, saa7146_buffer_timeout,
-		    (unsigned long)(&vv->vbi_dmaq));
+	init_timer(&vv->vbi_dmaq.timeout);
+	vv->vbi_dmaq.timeout.function = saa7146_buffer_timeout;
+	vv->vbi_dmaq.timeout.data     = (unsigned long)(&vv->vbi_dmaq);
 	vv->vbi_dmaq.dev              = dev;
 
 	init_waitqueue_head(&vv->vbi_wq);

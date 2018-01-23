@@ -11,9 +11,6 @@
  */
 
 #include <linux/sched.h>
-#include <linux/sched/debug.h>
-#include <linux/sched/task.h>
-#include <linux/sched/task_stack.h>
 #include <linux/slab.h>
 #include <linux/err.h>
 #include <linux/fs.h>
@@ -36,6 +33,15 @@ void default_idle(void)
 	etrax_gpio_wake_up_check();
 #endif
 	local_irq_enable();
+}
+
+/*
+ * Free current thread data structures etc..
+ */
+
+void exit_thread(void)
+{
+	/* Nothing needs to be done.  */
 }
 
 /* if the watchdog is enabled, we can simply disable interrupts and go

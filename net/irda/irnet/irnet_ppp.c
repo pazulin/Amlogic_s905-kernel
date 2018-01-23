@@ -13,9 +13,8 @@
  *	2) as a control channel (write commands, read events)
  */
 
-#include <linux/sched/signal.h>
+#include <linux/sched.h>
 #include <linux/slab.h>
-
 #include "irnet_ppp.h"		/* Private header */
 /* Please put other headers in irnet.h - Thanks */
 
@@ -52,7 +51,7 @@ irnet_ctrl_write(irnet_socket *	ap,
   char *	next;		/* Next command to process */
   int		length;		/* Length of current command */
 
-  DENTER(CTRL_TRACE, "(ap=0x%p, count=%zd)\n", ap, count);
+  DENTER(CTRL_TRACE, "(ap=0x%p, count=%Zd)\n", ap, count);
 
   /* Check for overflow... */
   DABORT(count >= IRNET_MAX_COMMAND, -ENOMEM,
@@ -67,7 +66,7 @@ irnet_ctrl_write(irnet_socket *	ap,
 
   /* Safe terminate the string */
   command[count] = '\0';
-  DEBUG(CTRL_INFO, "Command line received is ``%s'' (%zd).\n",
+  DEBUG(CTRL_INFO, "Command line received is ``%s'' (%Zd).\n",
 	command, count);
 
   /* Check every commands in the command line */
@@ -286,7 +285,7 @@ irnet_ctrl_read(irnet_socket *	ap,
   char		event[75];
   ssize_t	ret = 0;
 
-  DENTER(CTRL_TRACE, "(ap=0x%p, count=%zd)\n", ap, count);
+  DENTER(CTRL_TRACE, "(ap=0x%p, count=%Zd)\n", ap, count);
 
 #ifdef INITIAL_DISCOVERY
   /* Check if we have read the log */
@@ -306,7 +305,7 @@ irnet_ctrl_read(irnet_socket *	ap,
 
   /* Put ourselves on the wait queue to be woken up */
   add_wait_queue(&irnet_events.rwait, &wait);
-  set_current_state(TASK_INTERRUPTIBLE);
+  current->state = TASK_INTERRUPTIBLE;
   for(;;)
     {
       /* If there is unread events */
@@ -322,14 +321,14 @@ irnet_ctrl_read(irnet_socket *	ap,
       /* Yield and wait to be woken up */
       schedule();
     }
-  __set_current_state(TASK_RUNNING);
+  current->state = TASK_RUNNING;
   remove_wait_queue(&irnet_events.rwait, &wait);
 
   /* Did we got it ? */
   if(ret != 0)
     {
       /* No, return the error code */
-      DEXIT(CTRL_TRACE, " - ret %zd\n", ret);
+      DEXIT(CTRL_TRACE, " - ret %Zd\n", ret);
       return ret;
     }
 
@@ -569,7 +568,7 @@ dev_irnet_write(struct file *	file,
 {
   irnet_socket *	ap = file->private_data;
 
-  DPASS(FS_TRACE, "(file=0x%p, ap=0x%p, count=%zd)\n",
+  DPASS(FS_TRACE, "(file=0x%p, ap=0x%p, count=%Zd)\n",
 	file, ap, count);
   DABORT(ap == NULL, -ENXIO, FS_ERROR, "ap is NULL !!!\n");
 
@@ -593,7 +592,7 @@ dev_irnet_read(struct file *	file,
 {
   irnet_socket *	ap = file->private_data;
 
-  DPASS(FS_TRACE, "(file=0x%p, ap=0x%p, count=%zd)\n",
+  DPASS(FS_TRACE, "(file=0x%p, ap=0x%p, count=%Zd)\n",
 	file, ap, count);
   DABORT(ap == NULL, -ENXIO, FS_ERROR, "ap is NULL !!!\n");
 

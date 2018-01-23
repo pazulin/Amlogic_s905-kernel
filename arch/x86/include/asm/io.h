@@ -35,13 +35,10 @@
   */
 
 #define ARCH_HAS_IOREMAP_WC
-#define ARCH_HAS_IOREMAP_WT
 
 #include <linux/string.h>
 #include <linux/compiler.h>
 #include <asm/page.h>
-#include <asm/early_ioremap.h>
-#include <asm/pgtable_types.h>
 
 #define build_mmio_read(name, size, type, reg, barrier) \
 static inline type name(const volatile void __iomem *addr) \
@@ -76,9 +73,6 @@ build_mmio_write(__writel, "l", unsigned int, "r", )
 #define __raw_readw __readw
 #define __raw_readl __readl
 
-#define writeb_relaxed(v, a) __writeb(v, a)
-#define writew_relaxed(v, a) __writew(v, a)
-#define writel_relaxed(v, a) __writel(v, a)
 #define __raw_writeb __writeb
 #define __raw_writew __writew
 #define __raw_writel __writel
@@ -91,7 +85,6 @@ build_mmio_read(readq, "q", unsigned long, "=r", :"memory")
 build_mmio_write(writeq, "q", unsigned long, "r", :"memory")
 
 #define readq_relaxed(a)	readq(a)
-#define writeq_relaxed(v, a)	writeq(v, a)
 
 #define __raw_readq(a)		readq(a)
 #define __raw_writeq(val, addr)	writeq(val, addr)
@@ -164,17 +157,6 @@ static inline unsigned int isa_virt_to_bus(volatile void *address)
 #define virt_to_bus virt_to_phys
 #define bus_to_virt phys_to_virt
 
-/*
- * The default ioremap() behavior is non-cached; if you need something
- * else, you probably want one of the following.
- */
-extern void __iomem *ioremap_nocache(resource_size_t offset, unsigned long size);
-extern void __iomem *ioremap_uc(resource_size_t offset, unsigned long size);
-#define ioremap_uc ioremap_uc
-
-extern void __iomem *ioremap_cache(resource_size_t offset, unsigned long size);
-extern void __iomem *ioremap_prot(resource_size_t offset, unsigned long size, unsigned long prot_val);
-
 /**
  * ioremap     -   map bus memory into CPU space
  * @offset:    bus address of the memory
@@ -189,6 +171,14 @@ extern void __iomem *ioremap_prot(resource_size_t offset, unsigned long size, un
  * If the area you are trying to map is a PCI BAR you should have a
  * look at pci_iomap().
  */
+extern void __iomem *ioremap_nocache(resource_size_t offset, unsigned long size);
+extern void __iomem *ioremap_cache(resource_size_t offset, unsigned long size);
+extern void __iomem *ioremap_prot(resource_size_t offset, unsigned long size,
+				unsigned long prot_val);
+
+/*
+ * The default ioremap() behavior is non-cached:
+ */
 static inline void __iomem *ioremap(resource_size_t offset, unsigned long size)
 {
 	return ioremap_nocache(offset, size);
@@ -202,47 +192,25 @@ extern void set_iounmap_nonlazy(void);
 
 #include <asm-generic/iomap.h>
 
+#include <linux/vmalloc.h>
+
 /*
  * Convert a virtual cached pointer to an uncached pointer
  */
 #define xlate_dev_kmem_ptr(p)	p
 
-/**
- * memset_io	Set a range of I/O memory to a constant value
- * @addr:	The beginning of the I/O-memory range to set
- * @val:	The value to set the memory to
- * @count:	The number of bytes to set
- *
- * Set a range of I/O memory to a given value.
- */
 static inline void
 memset_io(volatile void __iomem *addr, unsigned char val, size_t count)
 {
 	memset((void __force *)addr, val, count);
 }
 
-/**
- * memcpy_fromio	Copy a block of data from I/O memory
- * @dst:		The (RAM) destination for the copy
- * @src:		The (I/O memory) source for the data
- * @count:		The number of bytes to copy
- *
- * Copy a block of data from I/O memory.
- */
 static inline void
 memcpy_fromio(void *dst, const volatile void __iomem *src, size_t count)
 {
 	memcpy(dst, (const void __force *)src, count);
 }
 
-/**
- * memcpy_toio		Copy a block of data into I/O memory
- * @dst:		The (I/O memory) destination for the copy
- * @src:		The (RAM) source for the data
- * @count:		The number of bytes to copy
- *
- * Copy a block of data to I/O memory.
- */
 static inline void
 memcpy_toio(volatile void __iomem *dst, const void *src, size_t count)
 {
@@ -341,14 +309,26 @@ BUILDIO(b, b, char)
 BUILDIO(w, w, short)
 BUILDIO(l, , int)
 
-extern void *xlate_dev_mem_ptr(phys_addr_t phys);
-extern void unxlate_dev_mem_ptr(phys_addr_t phys, void *addr);
+extern void *xlate_dev_mem_ptr(unsigned long phys);
+extern void unxlate_dev_mem_ptr(unsigned long phys, void *addr);
 
 extern int ioremap_change_attr(unsigned long vaddr, unsigned long size,
-				enum page_cache_mode pcm);
+				unsigned long prot_val);
 extern void __iomem *ioremap_wc(resource_size_t offset, unsigned long size);
-extern void __iomem *ioremap_wt(resource_size_t offset, unsigned long size);
 
+/*
+ * early_ioremap() and early_iounmap() are for temporary early boot-time
+ * mappings, before the real ioremap() is functional.
+ * A boot-time mapping is currently limited to at most 16 pages.
+ */
+extern void early_ioremap_init(void);
+extern void early_ioremap_reset(void);
+extern void __iomem *early_ioremap(resource_size_t phys_addr,
+				   unsigned long size);
+extern void __iomem *early_memremap(resource_size_t phys_addr,
+				    unsigned long size);
+extern void early_iounmap(void __iomem *addr, unsigned long size);
+extern void fixup_early_ioremap(void);
 extern bool is_early_ioremap_ptep(pte_t *ptep);
 
 #ifdef CONFIG_XEN
@@ -366,19 +346,10 @@ extern bool xen_biovec_phys_mergeable(const struct bio_vec *vec1,
 #define IO_SPACE_LIMIT 0xffff
 
 #ifdef CONFIG_MTRR
-extern int __must_check arch_phys_wc_index(int handle);
-#define arch_phys_wc_index arch_phys_wc_index
-
 extern int __must_check arch_phys_wc_add(unsigned long base,
 					 unsigned long size);
 extern void arch_phys_wc_del(int handle);
 #define arch_phys_wc_add arch_phys_wc_add
-#endif
-
-#ifdef CONFIG_X86_PAT
-extern int arch_io_reserve_memtype_wc(resource_size_t start, resource_size_t size);
-extern void arch_io_free_memtype_wc(resource_size_t start, resource_size_t size);
-#define arch_io_reserve_memtype_wc arch_io_reserve_memtype_wc
 #endif
 
 #endif /* _ASM_X86_IO_H */

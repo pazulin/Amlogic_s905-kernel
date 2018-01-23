@@ -67,7 +67,6 @@ static int adp5520_bl_set(struct backlight_device *bl, int brightness)
 static int adp5520_bl_update_status(struct backlight_device *bl)
 {
 	int brightness = bl->props.brightness;
-
 	if (bl->props.power != FB_BLANK_UNBLANK)
 		brightness = 0;
 
@@ -332,18 +331,10 @@ static int adp5520_bl_probe(struct platform_device *pdev)
 	}
 
 	platform_set_drvdata(pdev, bl);
-	ret = adp5520_bl_setup(bl);
-	if (ret) {
-		dev_err(&pdev->dev, "failed to setup\n");
-		if (data->pdata->en_ambl_sens)
-			sysfs_remove_group(&bl->dev.kobj,
-					&adp5520_bl_attr_group);
-		return ret;
-	}
-
+	ret |= adp5520_bl_setup(bl);
 	backlight_update_status(bl);
 
-	return 0;
+	return ret;
 }
 
 static int adp5520_bl_remove(struct platform_device *pdev)
@@ -383,6 +374,7 @@ static SIMPLE_DEV_PM_OPS(adp5520_bl_pm_ops, adp5520_bl_suspend,
 static struct platform_driver adp5520_bl_driver = {
 	.driver		= {
 		.name	= "adp5520-backlight",
+		.owner	= THIS_MODULE,
 		.pm	= &adp5520_bl_pm_ops,
 	},
 	.probe		= adp5520_bl_probe,

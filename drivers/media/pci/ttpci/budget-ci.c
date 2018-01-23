@@ -19,11 +19,14 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.	 See the
  * GNU General Public License for more details.
  *
- * To obtain the license, point your browser to
- * http://www.gnu.org/copyleft/gpl.html
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+ * Or, point your browser to http://www.gnu.org/copyleft/gpl.html
  *
  *
- * the project's page is at https://linuxtv.org
+ * the project's page is at http://www.linuxtv.org/
  */
 
 #include <linux/module.h>
@@ -158,14 +161,14 @@ static void msp430_ir_interrupt(unsigned long data)
 		return;
 
 	if (budget_ci->ir.full_rc5) {
-		rc_keydown(dev, RC_TYPE_RC5,
-			   RC_SCANCODE_RC5(budget_ci->ir.rc5_device, budget_ci->ir.ir_key),
-			   !!(command & 0x20));
+		rc_keydown(dev,
+			   budget_ci->ir.rc5_device <<8 | budget_ci->ir.ir_key,
+			   (command & 0x20) ? 1 : 0);
 		return;
 	}
 
 	/* FIXME: We should generate complete scancodes for all devices */
-	rc_keydown(dev, RC_TYPE_UNKNOWN, budget_ci->ir.ir_key, !!(command & 0x20));
+	rc_keydown(dev, budget_ci->ir.ir_key, (command & 0x20) ? 1 : 0);
 }
 
 static int msp430_ir_init(struct budget_ci *budget_ci)
@@ -174,7 +177,7 @@ static int msp430_ir_init(struct budget_ci *budget_ci)
 	struct rc_dev *dev;
 	int error;
 
-	dev = rc_allocate_device(RC_DRIVER_SCANCODE);
+	dev = rc_allocate_device();
 	if (!dev) {
 		printk(KERN_ERR "budget_ci: IR interface initialisation failed\n");
 		return -ENOMEM;
@@ -231,7 +234,7 @@ static int msp430_ir_init(struct budget_ci *budget_ci)
 		break;
 	}
 	if (!budget_ci->ir.full_rc5)
-		dev->scancode_mask = 0xff;
+		dev->scanmask = 0xff;
 
 	error = rc_register_device(dev);
 	if (error) {
@@ -693,7 +696,7 @@ static int philips_su1278_tt_tuner_set_params(struct dvb_frontend *fe)
 	return 0;
 }
 
-static const struct stv0299_config philips_su1278_tt_config = {
+static struct stv0299_config philips_su1278_tt_config = {
 
 	.demod_address = 0x68,
 	.inittab = philips_su1278_tt_inittab,
@@ -1583,4 +1586,6 @@ module_exit(budget_ci_exit);
 
 MODULE_LICENSE("GPL");
 MODULE_AUTHOR("Michael Hunold, Jack Thomasson, Andrew de Quincey, others");
-MODULE_DESCRIPTION("driver for the SAA7146 based so-called budget PCI DVB cards w/ CI-module produced by Siemens, Technotrend, Hauppauge");
+MODULE_DESCRIPTION("driver for the SAA7146 based so-called "
+		   "budget PCI DVB cards w/ CI-module produced by "
+		   "Siemens, Technotrend, Hauppauge");

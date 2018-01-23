@@ -138,7 +138,7 @@ static int gpio_tilt_polled_probe(struct platform_device *pdev)
 
 	input->name = pdev->name;
 	input->phys = DRV_NAME"/input0";
-	input->dev.parent = dev;
+	input->dev.parent = &pdev->dev;
 
 	input->id.bustype = BUS_HOST;
 	input->id.vendor = 0x0001;
@@ -199,6 +199,7 @@ static struct platform_driver gpio_tilt_polled_driver = {
 	.remove	= gpio_tilt_polled_remove,
 	.driver	= {
 		.name	= DRV_NAME,
+		.owner	= THIS_MODULE,
 	},
 };
 

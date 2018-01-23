@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2017, Intel Corp.
+ * Copyright (C) 2000 - 2013, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -116,11 +116,6 @@ static const struct acpi_simple_repair_info acpi_object_repair_info[] = {
 	 ACPI_NOT_PACKAGE_ELEMENT,
 	 acpi_ns_convert_to_resource},
 
-	/* Object reference conversions */
-
-	{"_DEP", ACPI_RTYPE_STRING, ACPI_ALL_PACKAGE_ELEMENTS,
-	 acpi_ns_convert_to_reference},
-
 	/* Unicode conversions */
 
 	{"_MLS", ACPI_RTYPE_STRING, 1,
@@ -177,8 +172,8 @@ acpi_ns_simple_repair(struct acpi_evaluate_info *info,
 					      "Missing expected return value"));
 		}
 
-		status = predefined->object_converter(info->node, return_object,
-						      &new_object);
+		status =
+		    predefined->object_converter(return_object, &new_object);
 		if (ACPI_FAILURE(status)) {
 
 			/* A fatal error occurred during a conversion */
@@ -290,12 +285,22 @@ object_repaired:
 	/* Object was successfully repaired */
 
 	if (package_index != ACPI_NOT_PACKAGE_ELEMENT) {
-
-		/* Update reference count of new object */
-
+		/*
+		 * The original object is a package element. We need to
+		 * decrement the reference count of the original object,
+		 * for removing it from the package.
+		 *
+		 * However, if the original object was just wrapped with a
+		 * package object as part of the repair, we don't need to
+		 * change the reference count.
+		 */
 		if (!(info->return_flags & ACPI_OBJECT_WRAPPED)) {
 			new_object->common.reference_count =
 			    return_object->common.reference_count;
+
+			if (return_object->common.reference_count > 1) {
+				return_object->common.reference_count--;
+			}
 		}
 
 		ACPI_DEBUG_PRINT((ACPI_DB_REPAIR,
@@ -355,15 +360,12 @@ static const struct acpi_simple_repair_info *acpi_ns_match_simple_repair(struct
 			/* Check if we can actually repair this name/type combination */
 
 			if ((return_btype & this_name->unexpected_btypes) &&
-			    (this_name->package_index ==
-			     ACPI_ALL_PACKAGE_ELEMENTS
-			     || package_index == this_name->package_index)) {
+			    (package_index == this_name->package_index)) {
 				return (this_name);
 			}
 
 			return (NULL);
 		}
-
 		this_name++;
 	}
 
@@ -389,7 +391,7 @@ static const struct acpi_simple_repair_info *acpi_ns_match_simple_repair(struct
  ******************************************************************************/
 
 acpi_status
-acpi_ns_repair_null_element(struct acpi_evaluate_info *info,
+acpi_ns_repair_null_element(struct acpi_evaluate_info * info,
 			    u32 expected_btypes,
 			    u32 package_index,
 			    union acpi_operand_object **return_object_ptr)
@@ -463,7 +465,7 @@ acpi_ns_repair_null_element(struct acpi_evaluate_info *info,
  * RETURN:      None.
  *
  * DESCRIPTION: Remove all NULL package elements from packages that contain
- *              a variable number of subpackages. For these types of
+ *              a variable number of sub-packages. For these types of
  *              packages, NULL elements can be safely removed.
  *
  *****************************************************************************/
@@ -484,7 +486,7 @@ acpi_ns_remove_null_elements(struct acpi_evaluate_info *info,
 	/*
 	 * We can safely remove all NULL elements from these package types:
 	 * PTYPE1_VAR packages contain a variable number of simple data types.
-	 * PTYPE2 packages contain a variable number of subpackages.
+	 * PTYPE2 packages contain a variable number of sub-packages.
 	 */
 	switch (package_type) {
 	case ACPI_PTYPE1_VAR:
@@ -495,10 +497,10 @@ acpi_ns_remove_null_elements(struct acpi_evaluate_info *info,
 	case ACPI_PTYPE2_MIN:
 	case ACPI_PTYPE2_REV_FIXED:
 	case ACPI_PTYPE2_FIX_VAR:
+
 		break;
 
 	default:
-	case ACPI_PTYPE2_VAR_VAR:
 	case ACPI_PTYPE1_FIXED:
 	case ACPI_PTYPE1_OPTION:
 		return;
@@ -519,7 +521,6 @@ acpi_ns_remove_null_elements(struct acpi_evaluate_info *info,
 			*dest = *source;
 			dest++;
 		}
-
 		source++;
 	}
 
@@ -571,8 +572,8 @@ acpi_ns_wrap_with_package(struct acpi_evaluate_info *info,
 	ACPI_FUNCTION_NAME(ns_wrap_with_package);
 
 	/*
-	 * Create the new outer package and populate it. The new
-	 * package will have a single element, the lone sub-object.
+	 * Create the new outer package and populate it. The new package will
+	 * have a single element, the lone sub-object.
 	 */
 	pkg_obj_desc = acpi_ut_create_package_object(1);
 	if (!pkg_obj_desc) {

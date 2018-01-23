@@ -58,23 +58,20 @@ static void pcibios_scanbus(struct pci_channel *hose)
 
 	need_domain_info = need_domain_info || hose->index;
 	hose->need_domain_info = need_domain_info;
+	if (bus) {
+		next_busno = bus->busn_res.end + 1;
+		/* Don't allow 8-bit bus number overflow inside the hose -
+		   reserve some space for bridges. */
+		if (next_busno > 224) {
+			next_busno = 0;
+			need_domain_info = 1;
+		}
 
-	if (!bus) {
+		pci_bus_size_bridges(bus);
+		pci_bus_assign_resources(bus);
+	} else {
 		pci_free_resource_list(&resources);
-		return;
 	}
-
-	next_busno = bus->busn_res.end + 1;
-	/* Don't allow 8-bit bus number overflow inside the hose -
-	   reserve some space for bridges. */
-	if (next_busno > 224) {
-		next_busno = 0;
-		need_domain_info = 1;
-	}
-
-	pci_bus_size_bridges(bus);
-	pci_bus_assign_resources(bus);
-	pci_bus_add_devices(bus);
 }
 
 /*
@@ -189,6 +186,11 @@ resource_size_t pcibios_align_resource(void *data, const struct resource *res,
 	return start;
 }
 
+int pcibios_enable_device(struct pci_dev *dev, int mask)
+{
+	return pci_enable_resources(dev, mask);
+}
+
 static void __init
 pcibios_bus_report_status_early(struct pci_channel *hose,
 				int top_bus, int current_bus,
@@ -221,7 +223,7 @@ pcibios_bus_report_status_early(struct pci_channel *hose,
  * We can't use pci_find_device() here since we are
  * called from interrupt context.
  */
-static void __ref
+static void __init_refok
 pcibios_bus_report_status(struct pci_bus *bus, unsigned int status_mask,
 			  int warn)
 {
@@ -256,7 +258,7 @@ pcibios_bus_report_status(struct pci_bus *bus, unsigned int status_mask,
 			pcibios_bus_report_status(dev->subordinate, status_mask, warn);
 }
 
-void __ref pcibios_report_status(unsigned int status_mask, int warn)
+void __init_refok pcibios_report_status(unsigned int status_mask, int warn)
 {
 	struct pci_channel *hose;
 
@@ -267,6 +269,27 @@ void __ref pcibios_report_status(unsigned int status_mask, int warn)
 		else
 			pcibios_bus_report_status(hose->bus, status_mask, warn);
 	}
+}
+
+int pci_mmap_page_range(struct pci_dev *dev, struct vm_area_struct *vma,
+			enum pci_mmap_state mmap_state, int write_combine)
+{
+	/*
+	 * I/O space can be accessed via normal processor loads and stores on
+	 * this platform but for now we elect not to do this and portable
+	 * drivers should not do this anyway.
+	 */
+	if (mmap_state == pci_mmap_io)
+		return -EINVAL;
+
+	/*
+	 * Ignore write-combine; for now only return uncached mappings.
+	 */
+	vma->vm_page_prot = pgprot_noncached(vma->vm_page_prot);
+
+	return remap_pfn_range(vma, vma->vm_start, vma->vm_pgoff,
+			       vma->vm_end - vma->vm_start,
+			       vma->vm_page_prot);
 }
 
 #ifndef CONFIG_GENERIC_IOMAP

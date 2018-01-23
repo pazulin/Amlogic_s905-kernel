@@ -18,8 +18,60 @@
 #include "include/apparmor.h"
 #include "include/audit.h"
 #include "include/policy.h"
-#include "include/policy_ns.h"
 
+const char *const op_table[] = {
+	"null",
+
+	"sysctl",
+	"capable",
+
+	"unlink",
+	"mkdir",
+	"rmdir",
+	"mknod",
+	"truncate",
+	"link",
+	"symlink",
+	"rename_src",
+	"rename_dest",
+	"chmod",
+	"chown",
+	"getattr",
+	"open",
+
+	"file_perm",
+	"file_lock",
+	"file_mmap",
+	"file_mprotect",
+
+	"create",
+	"post_create",
+	"bind",
+	"connect",
+	"listen",
+	"accept",
+	"sendmsg",
+	"recvmsg",
+	"getsockname",
+	"getpeername",
+	"getsockopt",
+	"setsockopt",
+	"socket_shutdown",
+
+	"ptrace",
+
+	"exec",
+	"change_hat",
+	"change_profile",
+	"change_onexec",
+
+	"setprocattr",
+	"setrlimit",
+
+	"profile_replace",
+	"profile_load",
+	"profile_remove"
+};
 
 const char *const audit_mode_names[] = {
 	"normal",
@@ -62,23 +114,23 @@ static void audit_pre(struct audit_buffer *ab, void *ca)
 
 	if (aa_g_audit_header) {
 		audit_log_format(ab, "apparmor=");
-		audit_log_string(ab, aa_audit_type[aad(sa)->type]);
+		audit_log_string(ab, aa_audit_type[sa->aad->type]);
 	}
 
-	if (aad(sa)->op) {
+	if (sa->aad->op) {
 		audit_log_format(ab, " operation=");
-		audit_log_string(ab, aad(sa)->op);
+		audit_log_string(ab, op_table[sa->aad->op]);
 	}
 
-	if (aad(sa)->info) {
+	if (sa->aad->info) {
 		audit_log_format(ab, " info=");
-		audit_log_string(ab, aad(sa)->info);
-		if (aad(sa)->error)
-			audit_log_format(ab, " error=%d", aad(sa)->error);
+		audit_log_string(ab, sa->aad->info);
+		if (sa->aad->error)
+			audit_log_format(ab, " error=%d", sa->aad->error);
 	}
 
-	if (aad(sa)->profile) {
-		struct aa_profile *profile = aad(sa)->profile;
+	if (sa->aad->profile) {
+		struct aa_profile *profile = sa->aad->profile;
 		if (profile->ns != root_ns) {
 			audit_log_format(ab, " namespace=");
 			audit_log_untrustedstring(ab, profile->ns->base.hname);
@@ -87,9 +139,9 @@ static void audit_pre(struct audit_buffer *ab, void *ca)
 		audit_log_untrustedstring(ab, profile->base.hname);
 	}
 
-	if (aad(sa)->name) {
+	if (sa->aad->name) {
 		audit_log_format(ab, " name=");
-		audit_log_untrustedstring(ab, aad(sa)->name);
+		audit_log_untrustedstring(ab, sa->aad->name);
 	}
 }
 
@@ -101,7 +153,7 @@ static void audit_pre(struct audit_buffer *ab, void *ca)
 void aa_audit_msg(int type, struct common_audit_data *sa,
 		  void (*cb) (struct audit_buffer *, void *))
 {
-	aad(sa)->type = type;
+	sa->aad->type = type;
 	common_lsm_audit(sa, audit_pre, cb);
 }
 
@@ -109,6 +161,7 @@ void aa_audit_msg(int type, struct common_audit_data *sa,
  * aa_audit - Log a profile based audit event to the audit subsystem
  * @type: audit type for the message
  * @profile: profile to check against (NOT NULL)
+ * @gfp: allocation flags to use
  * @sa: audit event (NOT NULL)
  * @cb: optional callback fn for type specific fields (MAYBE NULL)
  *
@@ -116,13 +169,14 @@ void aa_audit_msg(int type, struct common_audit_data *sa,
  *
  * Returns: error on failure
  */
-int aa_audit(int type, struct aa_profile *profile, struct common_audit_data *sa,
+int aa_audit(int type, struct aa_profile *profile, gfp_t gfp,
+	     struct common_audit_data *sa,
 	     void (*cb) (struct audit_buffer *, void *))
 {
-	AA_BUG(!profile);
+	BUG_ON(!profile);
 
 	if (type == AUDIT_APPARMOR_AUTO) {
-		if (likely(!aad(sa)->error)) {
+		if (likely(!sa->aad->error)) {
 			if (AUDIT_MODE(profile) != AUDIT_ALL)
 				return 0;
 			type = AUDIT_APPARMOR_AUDIT;
@@ -134,23 +188,22 @@ int aa_audit(int type, struct aa_profile *profile, struct common_audit_data *sa,
 	if (AUDIT_MODE(profile) == AUDIT_QUIET ||
 	    (type == AUDIT_APPARMOR_DENIED &&
 	     AUDIT_MODE(profile) == AUDIT_QUIET))
-		return aad(sa)->error;
+		return sa->aad->error;
 
 	if (KILL_MODE(profile) && type == AUDIT_APPARMOR_DENIED)
 		type = AUDIT_APPARMOR_KILL;
 
 	if (!unconfined(profile))
-		aad(sa)->profile = profile;
+		sa->aad->profile = profile;
 
 	aa_audit_msg(type, sa, cb);
 
-	if (aad(sa)->type == AUDIT_APPARMOR_KILL)
+	if (sa->aad->type == AUDIT_APPARMOR_KILL)
 		(void)send_sig_info(SIGKILL, NULL,
-			sa->type == LSM_AUDIT_DATA_TASK && sa->u.tsk ?
-				    sa->u.tsk : current);
+				    sa->u.tsk ?  sa->u.tsk : current);
 
-	if (aad(sa)->type == AUDIT_APPARMOR_ALLOWED)
-		return complain_error(aad(sa)->error);
+	if (sa->aad->type == AUDIT_APPARMOR_ALLOWED)
+		return complain_error(sa->aad->error);
 
-	return aad(sa)->error;
+	return sa->aad->error;
 }

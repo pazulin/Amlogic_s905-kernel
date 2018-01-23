@@ -26,7 +26,7 @@
 #include <asm/tlbflush.h>
 #include <asm/kvm_ppc.h>
 #include <asm/kvm_book3s.h>
-#include <asm/book3s/64/mmu-hash.h>
+#include <asm/mmu-hash64.h>
 
 /* #define DEBUG_MMU */
 
@@ -38,7 +38,7 @@
 
 static void kvmppc_mmu_book3s_64_reset_msr(struct kvm_vcpu *vcpu)
 {
-	kvmppc_set_msr(vcpu, vcpu->arch.intr_msr);
+	kvmppc_set_msr(vcpu, MSR_SF);
 }
 
 static struct kvmppc_slb *kvmppc_mmu_book3s_64_find_slbe(
@@ -226,7 +226,7 @@ static int kvmppc_mmu_book3s_64_xlate(struct kvm_vcpu *vcpu, gva_t eaddr,
 	/* Magic page override */
 	if (unlikely(mp_ea) &&
 	    unlikely((eaddr & ~0xfffULL) == (mp_ea & ~0xfffULL)) &&
-	    !(kvmppc_get_msr(vcpu) & MSR_PR)) {
+	    !(vcpu->arch.shared->msr & MSR_PR)) {
 		gpte->eaddr = eaddr;
 		gpte->vpage = kvmppc_mmu_book3s_64_ea_to_vp(vcpu, eaddr, data);
 		gpte->raddr = vcpu->arch.magic_page_pa | (gpte->raddr & 0xfff);
@@ -265,26 +265,22 @@ do_second:
 		goto no_page_found;
 
 	if(copy_from_user(pteg, (void __user *)ptegp, sizeof(pteg))) {
-		printk_ratelimited(KERN_ERR
-			"KVM: Can't copy data from 0x%lx!\n", ptegp);
+		printk(KERN_ERR "KVM can't copy data from 0x%lx!\n", ptegp);
 		goto no_page_found;
 	}
 
-	if ((kvmppc_get_msr(vcpu) & MSR_PR) && slbe->Kp)
+	if ((vcpu->arch.shared->msr & MSR_PR) && slbe->Kp)
 		key = 4;
-	else if (!(kvmppc_get_msr(vcpu) & MSR_PR) && slbe->Ks)
+	else if (!(vcpu->arch.shared->msr & MSR_PR) && slbe->Ks)
 		key = 4;
 
 	for (i=0; i<16; i+=2) {
-		u64 pte0 = be64_to_cpu(pteg[i]);
-		u64 pte1 = be64_to_cpu(pteg[i + 1]);
-
 		/* Check all relevant fields of 1st dword */
-		if ((pte0 & v_mask) == v_val) {
+		if ((pteg[i] & v_mask) == v_val) {
 			/* If large page bit is set, check pgsize encoding */
 			if (slbe->large &&
 			    (vcpu->arch.hflags & BOOK3S_HFLAG_MULTI_PGSIZE)) {
-				pgsize = decode_pagesize(slbe, pte1);
+				pgsize = decode_pagesize(slbe, pteg[i+1]);
 				if (pgsize < 0)
 					continue;
 			}
@@ -301,8 +297,8 @@ do_second:
 		goto do_second;
 	}
 
-	v = be64_to_cpu(pteg[i]);
-	r = be64_to_cpu(pteg[i+1]);
+	v = pteg[i];
+	r = pteg[i+1];
 	pp = (r & HPTE_R_PP) | key;
 	if (r & HPTE_R_PP0)
 		pp |= 8;
@@ -314,12 +310,8 @@ do_second:
 	gpte->raddr = (r & HPTE_R_RPN & ~eaddr_mask) | (eaddr & eaddr_mask);
 	gpte->page_size = pgsize;
 	gpte->may_execute = ((r & HPTE_R_N) ? false : true);
-	if (unlikely(vcpu->arch.disable_kernel_nx) &&
-	    !(kvmppc_get_msr(vcpu) & MSR_PR))
-		gpte->may_execute = true;
 	gpte->may_read = false;
 	gpte->may_write = false;
-	gpte->wimg = r & HPTE_R_WIMG;
 
 	switch (pp) {
 	case 0:
@@ -350,14 +342,14 @@ do_second:
 		 * non-PAPR platforms such as mac99, and this is
 		 * what real hardware does.
 		 */
-                char __user *addr = (char __user *) (ptegp + (i + 1) * sizeof(u64));
+		char __user *addr = (char __user *) &pteg[i+1];
 		r |= HPTE_R_R;
 		put_user(r >> 8, addr + 6);
 	}
 	if (iswrite && gpte->may_write && !(r & HPTE_R_C)) {
 		/* Set the dirty flag */
 		/* Use a single byte write */
-                char __user *addr = (char __user *) (ptegp + (i + 1) * sizeof(u64));
+		char __user *addr = (char __user *) &pteg[i+1];
 		r |= HPTE_R_C;
 		put_user(r, addr + 7);
 	}
@@ -379,11 +371,14 @@ no_seg_found:
 
 static void kvmppc_mmu_book3s_64_slbmte(struct kvm_vcpu *vcpu, u64 rs, u64 rb)
 {
+	struct kvmppc_vcpu_book3s *vcpu_book3s;
 	u64 esid, esid_1t;
 	int slb_nr;
 	struct kvmppc_slb *slbe;
 
 	dprintk("KVM MMU: slbmte(0x%llx, 0x%llx)\n", rs, rb);
+
+	vcpu_book3s = to_book3s(vcpu);
 
 	esid = GET_ESID(rb);
 	esid_1t = GET_ESID_1T(rb);
@@ -484,7 +479,7 @@ static void kvmppc_mmu_book3s_64_slbia(struct kvm_vcpu *vcpu)
 		vcpu->arch.slb[i].origv = 0;
 	}
 
-	if (kvmppc_get_msr(vcpu) & MSR_IR) {
+	if (vcpu->arch.shared->msr & MSR_IR) {
 		kvmppc_mmu_flush_segments(vcpu);
 		kvmppc_mmu_map_segment(vcpu, kvmppc_get_pc(vcpu));
 	}
@@ -568,7 +563,7 @@ static int segment_contains_magic_page(struct kvm_vcpu *vcpu, ulong esid)
 {
 	ulong mp_ea = vcpu->arch.magic_page_ea;
 
-	return mp_ea && !(kvmppc_get_msr(vcpu) & MSR_PR) &&
+	return mp_ea && !(vcpu->arch.shared->msr & MSR_PR) &&
 		(mp_ea >> SID_SHIFT) == esid;
 }
 #endif
@@ -581,9 +576,8 @@ static int kvmppc_mmu_book3s_64_esid_to_vsid(struct kvm_vcpu *vcpu, ulong esid,
 	u64 gvsid = esid;
 	ulong mp_ea = vcpu->arch.magic_page_ea;
 	int pagesize = MMU_PAGE_64K;
-	u64 msr = kvmppc_get_msr(vcpu);
 
-	if (msr & (MSR_DR|MSR_IR)) {
+	if (vcpu->arch.shared->msr & (MSR_DR|MSR_IR)) {
 		slb = kvmppc_mmu_book3s_64_find_slbe(vcpu, ea);
 		if (slb) {
 			gvsid = slb->vsid;
@@ -596,7 +590,7 @@ static int kvmppc_mmu_book3s_64_esid_to_vsid(struct kvm_vcpu *vcpu, ulong esid,
 		}
 	}
 
-	switch (msr & (MSR_DR|MSR_IR)) {
+	switch (vcpu->arch.shared->msr & (MSR_DR|MSR_IR)) {
 	case 0:
 		gvsid = VSID_REAL | esid;
 		break;
@@ -629,7 +623,7 @@ static int kvmppc_mmu_book3s_64_esid_to_vsid(struct kvm_vcpu *vcpu, ulong esid,
 		gvsid |= VSID_64K;
 #endif
 
-	if (kvmppc_get_msr(vcpu) & MSR_PR)
+	if (vcpu->arch.shared->msr & MSR_PR)
 		gvsid |= VSID_PR;
 
 	*vsid = gvsid;
@@ -639,7 +633,7 @@ no_slb:
 	/* Catch magic page case */
 	if (unlikely(mp_ea) &&
 	    unlikely(esid == (mp_ea >> SID_SHIFT)) &&
-	    !(kvmppc_get_msr(vcpu) & MSR_PR)) {
+	    !(vcpu->arch.shared->msr & MSR_PR)) {
 		*vsid = VSID_REAL | esid;
 		return 0;
 	}

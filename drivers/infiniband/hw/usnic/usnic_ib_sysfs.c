@@ -1,24 +1,9 @@
 /*
  * Copyright (c) 2013, Cisco Systems, Inc. All rights reserved.
  *
- * This software is available to you under a choice of one of two
- * licenses.  You may choose to be licensed under the terms of the GNU
- * General Public License (GPL) Version 2, available from the file
- * COPYING in the main directory of this source tree, or the
- * BSD license below:
- *
- *     Redistribution and use in source and binary forms, with or
- *     without modification, are permitted provided that the following
- *     conditions are met:
- *
- *      - Redistributions of source code must retain the above
- *        copyright notice, this list of conditions and the following
- *        disclaimer.
- *
- *      - Redistributions in binary form must reproduce the above
- *        copyright notice, this list of conditions and the following
- *        disclaimer in the documentation and/or other materials
- *        provided with the distribution.
+ * This program is free software; you may redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; version 2 of the License.
  *
  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
  * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF
@@ -44,7 +29,21 @@
 #include "usnic_vnic.h"
 #include "usnic_ib_verbs.h"
 #include "usnic_log.h"
-#include "usnic_ib_sysfs.h"
+
+static ssize_t usnic_ib_show_fw_ver(struct device *device,
+					struct device_attribute *attr,
+					char *buf)
+{
+	struct usnic_ib_dev *us_ibdev =
+		container_of(device, struct usnic_ib_dev, ib_dev.dev);
+	struct ethtool_drvinfo info;
+
+	mutex_lock(&us_ibdev->usdev_lock);
+	us_ibdev->netdev->ethtool_ops->get_drvinfo(us_ibdev->netdev, &info);
+	mutex_unlock(&us_ibdev->usdev_lock);
+
+	return scnprintf(buf, PAGE_SIZE, "%s\n", info.fw_version);
+}
 
 static ssize_t usnic_ib_show_board(struct device *device,
 					struct device_attribute *attr,
@@ -81,7 +80,7 @@ usnic_ib_show_config(struct device *device, struct device_attribute *attr,
 	left = PAGE_SIZE;
 
 	mutex_lock(&us_ibdev->usdev_lock);
-	if (kref_read(&us_ibdev->vf_cnt) > 0) {
+	if (atomic_read(&us_ibdev->vf_cnt.refcount) > 0) {
 		char *busname;
 
 		/*
@@ -100,7 +99,7 @@ usnic_ib_show_config(struct device *device, struct device_attribute *attr,
 			PCI_FUNC(us_ibdev->pdev->devfn),
 			netdev_name(us_ibdev->netdev),
 			us_ibdev->ufdev->mac,
-			kref_read(&us_ibdev->vf_cnt));
+			atomic_read(&us_ibdev->vf_cnt.refcount));
 		UPDATE_PTR_LEFT(n, ptr, left);
 
 		for (res_type = USNIC_VNIC_RES_TYPE_EOL;
@@ -148,7 +147,7 @@ usnic_ib_show_max_vf(struct device *device, struct device_attribute *attr,
 	us_ibdev = container_of(device, struct usnic_ib_dev, ib_dev.dev);
 
 	return scnprintf(buf, PAGE_SIZE, "%u\n",
-			kref_read(&us_ibdev->vf_cnt));
+			atomic_read(&us_ibdev->vf_cnt.refcount));
 }
 
 static ssize_t
@@ -178,6 +177,7 @@ usnic_ib_show_cq_per_vf(struct device *device, struct device_attribute *attr,
 			us_ibdev->vf_res_cnt[USNIC_VNIC_RES_TYPE_CQ]);
 }
 
+static DEVICE_ATTR(fw_ver, S_IRUGO, usnic_ib_show_fw_ver, NULL);
 static DEVICE_ATTR(board_id, S_IRUGO, usnic_ib_show_board, NULL);
 static DEVICE_ATTR(config, S_IRUGO, usnic_ib_show_config, NULL);
 static DEVICE_ATTR(iface, S_IRUGO, usnic_ib_show_iface, NULL);
@@ -186,6 +186,7 @@ static DEVICE_ATTR(qp_per_vf, S_IRUGO, usnic_ib_show_qp_per_vf, NULL);
 static DEVICE_ATTR(cq_per_vf, S_IRUGO, usnic_ib_show_cq_per_vf, NULL);
 
 static struct device_attribute *usnic_class_attributes[] = {
+	&dev_attr_fw_ver,
 	&dev_attr_board_id,
 	&dev_attr_config,
 	&dev_attr_iface,

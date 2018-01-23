@@ -25,11 +25,10 @@
 #include <linux/interrupt.h>
 #include <linux/module.h>
 #include <linux/percpu.h>
-#include <linux/sched/mm.h>
+#include <linux/sched.h>
 #include <linux/smp.h>
 #include <linux/spinlock.h>
 #include <linux/cpu.h>
-#include <linux/mm_types.h>
 
 #include <asm/time.h>    /*  timer_interrupt  */
 #include <asm/hexagon_vm.h>
@@ -63,6 +62,10 @@ static inline void __handle_ipi(unsigned long *ops, struct ipi_data *ipi,
 
 		case IPI_CALL_FUNC:
 			generic_smp_call_function_interrupt();
+			break;
+
+		case IPI_CALL_FUNC_SINGLE:
+			generic_smp_call_function_single_interrupt();
 			break;
 
 		case IPI_CPU_STOP:
@@ -163,7 +166,7 @@ void start_secondary(void)
 	);
 
 	/*  Set the memory struct  */
-	mmgrab(&init_mm);
+	atomic_inc(&init_mm.mm_count);
 	current->active_mm = &init_mm;
 
 	cpu = smp_processor_id();
@@ -181,7 +184,7 @@ void start_secondary(void)
 
 	local_irq_enable();
 
-	cpu_startup_entry(CPUHP_AP_ONLINE_IDLE);
+	cpu_startup_entry(CPUHP_ONLINE);
 }
 
 
@@ -245,7 +248,7 @@ void smp_send_stop(void)
 
 void arch_send_call_function_single_ipi(int cpu)
 {
-	send_ipi(cpumask_of(cpu), IPI_CALL_FUNC);
+	send_ipi(cpumask_of(cpu), IPI_CALL_FUNC_SINGLE);
 }
 
 void arch_send_call_function_ipi_mask(const struct cpumask *mask)

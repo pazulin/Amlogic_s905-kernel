@@ -19,7 +19,6 @@
 #include <linux/delay.h>
 #include <linux/hdreg.h>
 #include <linux/ide.h>
-#include <linux/nmi.h>
 #include <linux/scatterlist.h>
 #include <linux/uaccess.h>
 
@@ -187,7 +186,7 @@ static ide_startstop_t task_no_data_intr(ide_drive_t *drive)
 	    tf->command == ATA_CMD_CHK_POWER) {
 		struct request *rq = hwif->rq;
 
-		if (ata_pm_request(rq))
+		if (blk_pm_request(rq))
 			ide_complete_pm_rq(drive, rq);
 		else
 			ide_finish_cmd(drive, cmd, stat);
@@ -287,7 +286,7 @@ static void ide_pio_datablock(ide_drive_t *drive, struct ide_cmd *cmd,
 	u8 saved_io_32bit = drive->io_32bit;
 
 	if (cmd->tf_flags & IDE_TFLAG_FS)
-		scsi_req(cmd->rq)->result = 0;
+		cmd->rq->errors = 0;
 
 	if (cmd->tf_flags & IDE_TFLAG_IO_16BIT)
 		drive->io_32bit = 0;
@@ -329,7 +328,7 @@ void ide_finish_cmd(ide_drive_t *drive, struct ide_cmd *cmd, u8 stat)
 	u8 set_xfer = !!(cmd->tf_flags & IDE_TFLAG_SET_XFER);
 
 	ide_complete_cmd(drive, cmd, stat, err);
-	scsi_req(rq)->result = err;
+	rq->errors = err;
 
 	if (err == 0 && set_xfer) {
 		ide_set_xfer_rate(drive, nsect);
@@ -429,12 +428,10 @@ int ide_raw_taskfile(ide_drive_t *drive, struct ide_cmd *cmd, u8 *buf,
 {
 	struct request *rq;
 	int error;
+	int rw = !(cmd->tf_flags & IDE_TFLAG_WRITE) ? READ : WRITE;
 
-	rq = blk_get_request(drive->queue,
-		(cmd->tf_flags & IDE_TFLAG_WRITE) ?
-			REQ_OP_DRV_OUT : REQ_OP_DRV_IN, __GFP_RECLAIM);
-	scsi_req_init(rq);
-	ide_req(rq)->type = ATA_PRIV_TASKFILE;
+	rq = blk_get_request(drive->queue, rw, __GFP_WAIT);
+	rq->cmd_type = REQ_TYPE_ATA_TASKFILE;
 
 	/*
 	 * (ks) We transfer currently only whole sectors.
@@ -444,7 +441,7 @@ int ide_raw_taskfile(ide_drive_t *drive, struct ide_cmd *cmd, u8 *buf,
 	 */
 	if (nsect) {
 		error = blk_rq_map_kern(drive->queue, rq, buf,
-					nsect * SECTOR_SIZE, __GFP_RECLAIM);
+					nsect * SECTOR_SIZE, __GFP_WAIT);
 		if (error)
 			goto put_req;
 	}
@@ -452,8 +449,8 @@ int ide_raw_taskfile(ide_drive_t *drive, struct ide_cmd *cmd, u8 *buf,
 	rq->special = cmd;
 	cmd->rq = rq;
 
-	blk_execute_rq(drive->queue, NULL, rq, 0);
-	error = scsi_req(rq)->result ? -EIO : 0;
+	error = blk_execute_rq(drive->queue, NULL, rq, 0);
+
 put_req:
 	blk_put_request(rq);
 	return error;

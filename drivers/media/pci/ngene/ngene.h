@@ -13,8 +13,12 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * To obtain the license, point your browser to
- * http://www.gnu.org/copyleft/gpl.html
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA
+ * 02110-1301, USA
+ * Or, point your browser to http://www.gnu.org/copyleft/gpl.html
  */
 
 #ifndef _NGENE_H_
@@ -678,7 +682,7 @@ struct ngene_channel {
 	int                   AudioDTOUpdated;
 	u32                   AudioDTOValue;
 
-	int (*set_tone)(struct dvb_frontend *, enum fe_sec_tone_mode);
+	int (*set_tone)(struct dvb_frontend *, fe_sec_tone_mode_t);
 	u8 lnbh;
 
 	/* stuff from analog driver */
@@ -733,7 +737,7 @@ typedef void (tx_cb_t)(struct ngene *, u32);
 struct ngene {
 	int                   nr;
 	struct pci_dev       *pci_dev;
-	unsigned char __iomem *iomem;
+	unsigned char        *iomem;
 
 	/*struct i2c_adapter  i2c_adapter;*/
 

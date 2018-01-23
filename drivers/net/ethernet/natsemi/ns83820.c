@@ -119,7 +119,7 @@
 #include <linux/slab.h>
 
 #include <asm/io.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 #define DRV_NAME "ns83820"
 
@@ -134,7 +134,7 @@ static int lnksts = 0;		/* CFG_LNKSTS bit polarity */
 
 /* tunables */
 #define RX_BUF_SIZE	1500	/* 8192 */
-#if IS_ENABLED(CONFIG_VLAN_8021Q)
+#if defined(CONFIG_VLAN_8021Q) || defined(CONFIG_VLAN_8021Q_MODULE)
 #define NS83820_VLAN_ACCEL_SUPPORT
 #endif
 
@@ -919,7 +919,7 @@ netdev_mangle_me_harder_failed:
 				ndev->stats.rx_dropped++;
 			}
 		} else {
-			dev_kfree_skb_irq(skb);
+			kfree_skb(skb);
 		}
 
 		nr++;
@@ -1122,12 +1122,12 @@ again:
 	}
 
 #ifdef NS83820_VLAN_ACCEL_SUPPORT
-	if (skb_vlan_tag_present(skb)) {
+	if(vlan_tx_tag_present(skb)) {
 		/* fetch the vlan tag info out of the
 		 * ancillary data if the vlan code
 		 * is using hw vlan acceleration
 		 */
-		short tag = skb_vlan_tag_get(skb);
+		short tag = vlan_tx_tag_get(skb);
 		extsts |= (EXTSTS_VPKT | htons(tag));
 	}
 #endif
@@ -1217,13 +1217,12 @@ static struct net_device_stats *ns83820_get_stats(struct net_device *ndev)
 }
 
 /* Let ethtool retrieve info */
-static int ns83820_get_link_ksettings(struct net_device *ndev,
-				      struct ethtool_link_ksettings *cmd)
+static int ns83820_get_settings(struct net_device *ndev,
+				struct ethtool_cmd *cmd)
 {
 	struct ns83820 *dev = PRIV(ndev);
 	u32 cfg, tanar, tbicr;
 	int fullduplex   = 0;
-	u32 supported;
 
 	/*
 	 * Here's the list of available ethtool commands from other drivers:
@@ -1245,47 +1244,44 @@ static int ns83820_get_link_ksettings(struct net_device *ndev,
 
 	fullduplex = (cfg & CFG_DUPSTS) ? 1 : 0;
 
-	supported = SUPPORTED_Autoneg;
+	cmd->supported = SUPPORTED_Autoneg;
 
 	if (dev->CFG_cache & CFG_TBI_EN) {
 		/* we have optical interface */
-		supported |= SUPPORTED_1000baseT_Half |
+		cmd->supported |= SUPPORTED_1000baseT_Half |
 					SUPPORTED_1000baseT_Full |
 					SUPPORTED_FIBRE;
-		cmd->base.port       = PORT_FIBRE;
+		cmd->port       = PORT_FIBRE;
 	} else {
 		/* we have copper */
-		supported |= SUPPORTED_10baseT_Half |
+		cmd->supported |= SUPPORTED_10baseT_Half |
 			SUPPORTED_10baseT_Full | SUPPORTED_100baseT_Half |
 			SUPPORTED_100baseT_Full | SUPPORTED_1000baseT_Half |
 			SUPPORTED_1000baseT_Full |
 			SUPPORTED_MII;
-		cmd->base.port = PORT_MII;
+		cmd->port = PORT_MII;
 	}
 
-	ethtool_convert_legacy_u32_to_link_mode(cmd->link_modes.supported,
-						supported);
-
-	cmd->base.duplex = fullduplex ? DUPLEX_FULL : DUPLEX_HALF;
+	cmd->duplex = fullduplex ? DUPLEX_FULL : DUPLEX_HALF;
 	switch (cfg / CFG_SPDSTS0 & 3) {
 	case 2:
-		cmd->base.speed = SPEED_1000;
+		ethtool_cmd_speed_set(cmd, SPEED_1000);
 		break;
 	case 1:
-		cmd->base.speed = SPEED_100;
+		ethtool_cmd_speed_set(cmd, SPEED_100);
 		break;
 	default:
-		cmd->base.speed = SPEED_10;
+		ethtool_cmd_speed_set(cmd, SPEED_10);
 		break;
 	}
-	cmd->base.autoneg = (tbicr & TBICR_MR_AN_ENABLE)
+	cmd->autoneg = (tbicr & TBICR_MR_AN_ENABLE)
 		? AUTONEG_ENABLE : AUTONEG_DISABLE;
 	return 0;
 }
 
 /* Let ethool change settings*/
-static int ns83820_set_link_ksettings(struct net_device *ndev,
-				      const struct ethtool_link_ksettings *cmd)
+static int ns83820_set_settings(struct net_device *ndev,
+				struct ethtool_cmd *cmd)
 {
 	struct ns83820 *dev = PRIV(ndev);
 	u32 cfg, tanar;
@@ -1310,10 +1306,10 @@ static int ns83820_set_link_ksettings(struct net_device *ndev,
 	spin_lock(&dev->tx_lock);
 
 	/* Set duplex */
-	if (cmd->base.duplex != fullduplex) {
+	if (cmd->duplex != fullduplex) {
 		if (have_optical) {
 			/*set full duplex*/
-			if (cmd->base.duplex == DUPLEX_FULL) {
+			if (cmd->duplex == DUPLEX_FULL) {
 				/* force full duplex */
 				writel(readl(dev->base + TXCFG)
 					| TXCFG_CSI | TXCFG_HBI | TXCFG_ATP,
@@ -1337,7 +1333,7 @@ static int ns83820_set_link_ksettings(struct net_device *ndev,
 
 	/* Set autonegotiation */
 	if (1) {
-		if (cmd->base.autoneg == AUTONEG_ENABLE) {
+		if (cmd->autoneg == AUTONEG_ENABLE) {
 			/* restart auto negotiation */
 			writel(TBICR_MR_AN_ENABLE | TBICR_MR_RESTART_AN,
 				dev->base + TBICR);
@@ -1352,7 +1348,7 @@ static int ns83820_set_link_ksettings(struct net_device *ndev,
 		}
 
 		printk(KERN_INFO "%s: autoneg %s via ethtool\n", ndev->name,
-				cmd->base.autoneg ? "ENABLED" : "DISABLED");
+				cmd->autoneg ? "ENABLED" : "DISABLED");
 	}
 
 	phy_intr(ndev);
@@ -1379,10 +1375,10 @@ static u32 ns83820_get_link(struct net_device *ndev)
 }
 
 static const struct ethtool_ops ops = {
+	.get_settings    = ns83820_get_settings,
+	.set_settings    = ns83820_set_settings,
 	.get_drvinfo     = ns83820_get_drvinfo,
-	.get_link        = ns83820_get_link,
-	.get_link_ksettings = ns83820_get_link_ksettings,
-	.set_link_ksettings = ns83820_set_link_ksettings,
+	.get_link        = ns83820_get_link
 };
 
 static inline void ns83820_disable_interrupts(struct ns83820 *dev)
@@ -1683,6 +1679,14 @@ static void ns83820_getmac(struct ns83820 *dev, u8 *mac)
 	}
 }
 
+static int ns83820_change_mtu(struct net_device *ndev, int new_mtu)
+{
+	if (new_mtu > RX_BUF_SIZE)
+		return -EINVAL;
+	ndev->mtu = new_mtu;
+	return 0;
+}
+
 static void ns83820_set_multicast(struct net_device *ndev)
 {
 	struct ns83820 *dev = PRIV(ndev);
@@ -1929,6 +1933,7 @@ static const struct net_device_ops netdev_ops = {
 	.ndo_stop		= ns83820_stop,
 	.ndo_start_xmit		= ns83820_hard_start_xmit,
 	.ndo_get_stats		= ns83820_get_stats,
+	.ndo_change_mtu		= ns83820_change_mtu,
 	.ndo_set_rx_mode	= ns83820_set_multicast,
 	.ndo_validate_addr	= eth_validate_addr,
 	.ndo_set_mac_address	= eth_mac_addr,
@@ -2025,7 +2030,7 @@ static int ns83820_init_one(struct pci_dev *pci_dev,
 		pci_dev->subsystem_vendor, pci_dev->subsystem_device);
 
 	ndev->netdev_ops = &netdev_ops;
-	ndev->ethtool_ops = &ops;
+	SET_ETHTOOL_OPS(ndev, &ops);
 	ndev->watchdog_timeo = 5 * HZ;
 	pci_set_drvdata(pci_dev, ndev);
 
@@ -2185,8 +2190,6 @@ static int ns83820_init_one(struct pci_dev *pci_dev,
 	ndev->features |= NETIF_F_SG;
 	ndev->features |= NETIF_F_IP_CSUM;
 
-	ndev->min_mtu = 0;
-
 #ifdef NS83820_VLAN_ACCEL_SUPPORT
 	/* We also support hardware vlan acceleration */
 	ndev->features |= NETIF_F_HW_VLAN_CTAG_TX | NETIF_F_HW_VLAN_CTAG_RX;
@@ -2257,7 +2260,7 @@ static void ns83820_remove_one(struct pci_dev *pci_dev)
 	free_netdev(ndev);
 }
 
-static const struct pci_device_id ns83820_pci_tbl[] = {
+static DEFINE_PCI_DEVICE_TABLE(ns83820_pci_tbl) = {
 	{ 0x100b, 0x0022, PCI_ANY_ID, PCI_ANY_ID, 0, .driver_data = 0, },
 	{ 0, },
 };

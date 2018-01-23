@@ -44,12 +44,10 @@
 #include <linux/slab.h>
 
 #include <asm/types.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/fpumacro.h>
 #include <asm/mmu_context.h>
 #include <asm/compat_signal.h>
-
-#include "systbls.h"
 
 asmlinkage long sys32_truncate64(const char __user * path, unsigned long high, unsigned long low)
 {

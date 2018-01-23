@@ -41,12 +41,6 @@ struct xenkbd_info {
 	char phys[32];
 };
 
-enum { KPARAM_X, KPARAM_Y, KPARAM_CNT };
-static int ptr_size[KPARAM_CNT] = { XENFB_WIDTH, XENFB_HEIGHT };
-module_param_array(ptr_size, int, NULL, 0444);
-MODULE_PARM_DESC(ptr_size,
-	"Pointing device width, height in pixels (default 800,600)");
-
 static int xenkbd_remove(struct xenbus_device *);
 static int xenkbd_connect_backend(struct xenbus_device *, struct xenkbd_info *);
 static void xenkbd_disconnect_backend(struct xenkbd_info *);
@@ -90,8 +84,8 @@ static irqreturn_t input_handler(int rq, void *dev_id)
 				input_report_key(dev, event->key.keycode,
 						 event->key.pressed);
 			else
-				pr_warn("unhandled keycode 0x%x\n",
-					event->key.keycode);
+				pr_warning("unhandled keycode 0x%x\n",
+					   event->key.keycode);
 			break;
 		case XENKBD_TYPE_POS:
 			input_report_abs(dev, ABS_X, event->pos.abs_x);
@@ -114,8 +108,7 @@ static irqreturn_t input_handler(int rq, void *dev_id)
 static int xenkbd_probe(struct xenbus_device *dev,
 				  const struct xenbus_device_id *id)
 {
-	int ret, i;
-	unsigned int abs;
+	int ret, i, abs;
 	struct xenkbd_info *info;
 	struct input_dev *kbd, *ptr;
 
@@ -134,20 +127,10 @@ static int xenkbd_probe(struct xenbus_device *dev,
 	if (!info->page)
 		goto error_nomem;
 
-	/* Set input abs params to match backend screen res */
-	abs = xenbus_read_unsigned(dev->otherend, "feature-abs-pointer", 0);
-	ptr_size[KPARAM_X] = xenbus_read_unsigned(dev->otherend, "width",
-						  ptr_size[KPARAM_X]);
-	ptr_size[KPARAM_Y] = xenbus_read_unsigned(dev->otherend, "height",
-						  ptr_size[KPARAM_Y]);
-	if (abs) {
-		ret = xenbus_write(XBT_NIL, dev->nodename,
-				   "request-abs-pointer", "1");
-		if (ret) {
-			pr_warn("xenkbd: can't request abs-pointer\n");
-			abs = 0;
-		}
-	}
+	if (xenbus_scanf(XBT_NIL, dev->otherend, "feature-abs-pointer", "%d", &abs) < 0)
+		abs = 0;
+	if (abs)
+		xenbus_printf(XBT_NIL, dev->nodename, "request-abs-pointer", "1");
 
 	/* keyboard */
 	kbd = input_allocate_device();
@@ -185,8 +168,8 @@ static int xenkbd_probe(struct xenbus_device *dev,
 
 	if (abs) {
 		__set_bit(EV_ABS, ptr->evbit);
-		input_set_abs_params(ptr, ABS_X, 0, ptr_size[KPARAM_X], 0, 0);
-		input_set_abs_params(ptr, ABS_Y, 0, ptr_size[KPARAM_Y], 0, 0);
+		input_set_abs_params(ptr, ABS_X, 0, XENFB_WIDTH, 0, 0);
+		input_set_abs_params(ptr, ABS_Y, 0, XENFB_HEIGHT, 0, 0);
 	} else {
 		input_set_capability(ptr, EV_REL, REL_X);
 		input_set_capability(ptr, EV_REL, REL_Y);
@@ -249,7 +232,7 @@ static int xenkbd_connect_backend(struct xenbus_device *dev,
 	struct xenbus_transaction xbt;
 
 	ret = gnttab_grant_foreign_access(dev->otherend_id,
-	                                  virt_to_gfn(info->page), 0);
+	                                  virt_to_mfn(info->page), 0);
 	if (ret < 0)
 		return ret;
 	info->gref = ret;
@@ -272,7 +255,7 @@ static int xenkbd_connect_backend(struct xenbus_device *dev,
 		goto error_irqh;
 	}
 	ret = xenbus_printf(xbt, dev->nodename, "page-ref", "%lu",
-			    virt_to_gfn(info->page));
+			    virt_to_mfn(info->page));
 	if (ret)
 		goto error_xenbus;
 	ret = xenbus_printf(xbt, dev->nodename, "page-gref", "%u", info->gref);
@@ -302,7 +285,7 @@ static int xenkbd_connect_backend(struct xenbus_device *dev,
  error_evtchan:
 	xenbus_free_evtchn(dev, evtchn);
  error_grant:
-	gnttab_end_foreign_access(info->gref, 0, 0UL);
+	gnttab_end_foreign_access_ref(info->gref, 0);
 	info->gref = -1;
 	return ret;
 }
@@ -313,13 +296,16 @@ static void xenkbd_disconnect_backend(struct xenkbd_info *info)
 		unbind_from_irqhandler(info->irq, info);
 	info->irq = -1;
 	if (info->gref >= 0)
-		gnttab_end_foreign_access(info->gref, 0, 0UL);
+		gnttab_end_foreign_access_ref(info->gref, 0);
 	info->gref = -1;
 }
 
 static void xenkbd_backend_changed(struct xenbus_device *dev,
 				   enum xenbus_state backend_state)
 {
+	struct xenkbd_info *info = dev_get_drvdata(&dev->dev);
+	int ret, val;
+
 	switch (backend_state) {
 	case XenbusStateInitialising:
 	case XenbusStateInitialised:
@@ -329,6 +315,18 @@ static void xenkbd_backend_changed(struct xenbus_device *dev,
 		break;
 
 	case XenbusStateInitWait:
+InitWait:
+		ret = xenbus_scanf(XBT_NIL, info->xbdev->otherend,
+				   "feature-abs-pointer", "%d", &val);
+		if (ret < 0)
+			val = 0;
+		if (val) {
+			ret = xenbus_printf(XBT_NIL, info->xbdev->nodename,
+					    "request-abs-pointer", "1");
+			if (ret)
+				pr_warning("xenkbd: can't request abs-pointer");
+		}
+
 		xenbus_switch_state(dev, XenbusStateConnected);
 		break;
 
@@ -339,7 +337,17 @@ static void xenkbd_backend_changed(struct xenbus_device *dev,
 		 * get Connected twice here.
 		 */
 		if (dev->state != XenbusStateConnected)
-			xenbus_switch_state(dev, XenbusStateConnected);
+			goto InitWait; /* no InitWait seen yet, fudge it */
+
+		/* Set input abs params to match backend screen res */
+		if (xenbus_scanf(XBT_NIL, info->xbdev->otherend,
+				 "width", "%d", &val) > 0)
+			input_set_abs_params(info->ptr, ABS_X, 0, val, 0, 0);
+
+		if (xenbus_scanf(XBT_NIL, info->xbdev->otherend,
+				 "height", "%d", &val) > 0)
+			input_set_abs_params(info->ptr, ABS_Y, 0, val, 0, 0);
+
 		break;
 
 	case XenbusStateClosed:
@@ -357,13 +365,12 @@ static const struct xenbus_device_id xenkbd_ids[] = {
 	{ "" }
 };
 
-static struct xenbus_driver xenkbd_driver = {
-	.ids = xenkbd_ids,
+static DEFINE_XENBUS_DRIVER(xenkbd, ,
 	.probe = xenkbd_probe,
 	.remove = xenkbd_remove,
 	.resume = xenkbd_resume,
 	.otherend_changed = xenkbd_backend_changed,
-};
+);
 
 static int __init xenkbd_init(void)
 {

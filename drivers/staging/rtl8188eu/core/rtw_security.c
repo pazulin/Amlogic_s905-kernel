@@ -11,6 +11,11 @@
  * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
  * more details.
  *
+ * You should have received a copy of the GNU General Public License along with
+ * this program; if not, write to the Free Software Foundation, Inc.,
+ * 51 Franklin Street, Fifth Floor, Boston, MA 02110, USA
+ *
+ *
  ******************************************************************************/
 #define  _RTW_SECURITY_C_
 
@@ -36,7 +41,7 @@ static void arcfour_init(struct arc4context *parc4ctx, u8 *key, u32	key_len)
 	u32	stateindex;
 	u8 *state;
 	u32	counter;
-
+_func_enter_;
 	state = parc4ctx->state;
 	parc4ctx->x = 0;
 	parc4ctx->y = 0;
@@ -53,6 +58,7 @@ static void arcfour_init(struct arc4context *parc4ctx, u8 *key, u32	key_len)
 		if (++keyindex >= key_len)
 			keyindex = 0;
 	}
+_func_exit_;
 }
 
 static u32 arcfour_byte(struct arc4context *parc4ctx)
@@ -61,7 +67,7 @@ static u32 arcfour_byte(struct arc4context *parc4ctx)
 	u32 y;
 	u32 sx, sy;
 	u8 *state;
-
+_func_enter_;
 	state = parc4ctx->state;
 	x = (parc4ctx->x + 1) & 0xff;
 	sx = state[x];
@@ -71,15 +77,17 @@ static u32 arcfour_byte(struct arc4context *parc4ctx)
 	parc4ctx->y = y;
 	state[y] = (u8)sx;
 	state[x] = (u8)sy;
+_func_exit_;
 	return state[(sx + sy) & 0xff];
 }
 
 static void arcfour_encrypt(struct arc4context *parc4ctx, u8 *dest, u8 *src, u32 len)
 {
 	u32	i;
-
+_func_enter_;
 	for (i = 0; i < len; i++)
 		dest[i] = src[i] ^ (unsigned char)arcfour_byte(parc4ctx);
+_func_exit_;
 }
 
 static int bcrc32initialized;
@@ -94,8 +102,9 @@ static u8 crc32_reverseBit(u8 data)
 
 static void crc32_init(void)
 {
+_func_enter_;
 	if (bcrc32initialized == 1) {
-		return;
+		goto exit;
 	} else {
 		int i, j;
 		u32 c;
@@ -117,13 +126,15 @@ static void crc32_init(void)
 		}
 		bcrc32initialized = 1;
 	}
+exit:
+_func_exit_;
 }
 
 static __le32 getcrc32(u8 *buf, int len)
 {
 	u8 *p;
 	u32  crc;
-
+_func_enter_;
 	if (bcrc32initialized == 0)
 		crc32_init();
 
@@ -131,6 +142,7 @@ static __le32 getcrc32(u8 *buf, int len)
 
 	for (p = buf; len > 0; ++p, --len)
 		crc = crc32_table[(crc ^ *p) & 0xff] ^ (crc >> 8);
+_func_exit_;
 	return cpu_to_le32(~crc);    /* transmit complement, per CRC-32 spec */
 }
 
@@ -153,6 +165,7 @@ void rtw_wep_encrypt(struct adapter *padapter, u8 *pxmitframe)
 	struct	security_priv	*psecuritypriv = &padapter->securitypriv;
 	struct	xmit_priv		*pxmitpriv = &padapter->xmitpriv;
 
+_func_enter_;
 
 	if (((struct xmit_frame *)pxmitframe)->buf_addr == NULL)
 		return;
@@ -188,11 +201,12 @@ void rtw_wep_encrypt(struct adapter *padapter, u8 *pxmitframe)
 				arcfour_encrypt(&mycontext, payload+length, crc, 4);
 
 				pframe += pxmitpriv->frag_len;
-				pframe = (u8 *)round_up((size_t)(pframe), 4);
+				pframe = (u8 *)RND4((size_t)(pframe));
 			}
 		}
 	}
 
+_func_exit_;
 }
 
 void rtw_wep_decrypt(struct adapter  *padapter, u8 *precvframe)
@@ -204,11 +218,12 @@ void rtw_wep_decrypt(struct adapter  *padapter, u8 *precvframe)
 	u32	keylength;
 	u8	*pframe, *payload, *iv, wepkey[16];
 	u8	 keyindex;
-	struct	rx_pkt_attrib	 *prxattrib = &(((struct recv_frame *)precvframe)->attrib);
+	struct	rx_pkt_attrib	 *prxattrib = &(((union recv_frame *)precvframe)->u.hdr.attrib);
 	struct	security_priv	*psecuritypriv = &padapter->securitypriv;
 
+_func_enter_;
 
-	pframe = (unsigned char *)((struct recv_frame *)precvframe)->pkt->data;
+	pframe = (unsigned char *)((union recv_frame *)precvframe)->u.hdr.rx_data;
 
 	/* start to decrypt recvframe */
 	if ((prxattrib->encrypt == _WEP40_) || (prxattrib->encrypt == _WEP104_)) {
@@ -217,7 +232,7 @@ void rtw_wep_decrypt(struct adapter  *padapter, u8 *precvframe)
 		keylength = psecuritypriv->dot11DefKeylen[keyindex];
 		memcpy(&wepkey[0], iv, 3);
 		memcpy(&wepkey[3], &psecuritypriv->dot11DefKey[keyindex].skey[0], keylength);
-		length = ((struct recv_frame *)precvframe)->pkt->len-prxattrib->hdrlen-prxattrib->iv_len;
+		length = ((union recv_frame *)precvframe)->u.hdr.len-prxattrib->hdrlen-prxattrib->iv_len;
 
 		payload = pframe+prxattrib->iv_len+prxattrib->hdrlen;
 
@@ -237,6 +252,8 @@ void rtw_wep_decrypt(struct adapter  *padapter, u8 *precvframe)
 				 &crc, &payload[length-4]));
 		}
 	}
+_func_exit_;
+	return;
 }
 
 /* 3		===== TKIP related ===== */
@@ -246,9 +263,10 @@ static u32 secmicgetuint32(u8 *p)
 {
 	s32 i;
 	u32 res = 0;
-
+_func_enter_;
 	for (i = 0; i < 4; i++)
 		res |= ((u32)(*p++)) << (8*i);
+_func_exit_;
 	return res;
 }
 
@@ -256,33 +274,39 @@ static void secmicputuint32(u8 *p, u32 val)
 /*  Convert from Us3232 to Byte[] in a portable way */
 {
 	long i;
-
+_func_enter_;
 	for (i = 0; i < 4; i++) {
-		*p++ = (u8)(val & 0xff);
+		*p++ = (u8) (val & 0xff);
 		val >>= 8;
 	}
+_func_exit_;
 }
 
 static void secmicclear(struct mic_data *pmicdata)
 {
 /*  Reset the state to the empty message. */
+_func_enter_;
 	pmicdata->L = pmicdata->K0;
 	pmicdata->R = pmicdata->K1;
 	pmicdata->nBytesInM = 0;
 	pmicdata->M = 0;
+_func_exit_;
 }
 
 void rtw_secmicsetkey(struct mic_data *pmicdata, u8 *key)
 {
 	/*  Set the key */
+_func_enter_;
 	pmicdata->K0 = secmicgetuint32(key);
 	pmicdata->K1 = secmicgetuint32(key + 4);
 	/*  and reset the message */
 	secmicclear(pmicdata);
+_func_exit_;
 }
 
 void rtw_secmicappendbyte(struct mic_data *pmicdata, u8 b)
 {
+_func_enter_;
 	/*  Append the byte to our word-sized buffer */
 	pmicdata->M |= ((unsigned long)b) << (8*pmicdata->nBytesInM);
 	pmicdata->nBytesInM++;
@@ -301,19 +325,23 @@ void rtw_secmicappendbyte(struct mic_data *pmicdata, u8 b)
 		pmicdata->M = 0;
 		pmicdata->nBytesInM = 0;
 	}
+_func_exit_;
 }
 
 void rtw_secmicappend(struct mic_data *pmicdata, u8 *src, u32 nbytes)
 {
+_func_enter_;
 	/*  This is simple */
 	while (nbytes > 0) {
 		rtw_secmicappendbyte(pmicdata, *src++);
 		nbytes--;
 	}
+_func_exit_;
 }
 
 void rtw_secgetmic(struct mic_data *pmicdata, u8 *dst)
 {
+_func_enter_;
 	/*  Append the minimum padding */
 	rtw_secmicappendbyte(pmicdata, 0x5a);
 	rtw_secmicappendbyte(pmicdata, 0);
@@ -328,13 +356,14 @@ void rtw_secgetmic(struct mic_data *pmicdata, u8 *dst)
 	secmicputuint32(dst+4, pmicdata->R);
 	/*  Reset to the empty message. */
 	secmicclear(pmicdata);
+_func_exit_;
 }
 
 void rtw_seccalctkipmic(u8 *key, u8 *header, u8 *data, u32 data_len, u8 *mic_code, u8 pri)
 {
 	struct mic_data	micdata;
 	u8 priority[4] = {0x0, 0x0, 0x0, 0x0};
-
+_func_enter_;
 	rtw_secmicsetkey(&micdata, key);
 	priority[0] = pri;
 
@@ -357,6 +386,7 @@ void rtw_seccalctkipmic(u8 *key, u8 *header, u8 *data, u32 data_len, u8 *mic_cod
 	rtw_secmicappend(&micdata, data, data_len);
 
 	rtw_secgetmic(&micdata, mic_code);
+_func_exit_;
 }
 
 
@@ -385,73 +415,73 @@ void rtw_seccalctkipmic(u8 *key, u8 *header, u8 *data, u32 data_len, u8 *mic_cod
 /* 2-unsigned char by 2-unsigned char subset of the full AES S-box table */
 static const unsigned short Sbox1[2][256] = {  /* Sbox for hash (can be in ROM)     */
 {
-	0xC6A5, 0xF884, 0xEE99, 0xF68D, 0xFF0D, 0xD6BD, 0xDEB1, 0x9154,
-	0x6050, 0x0203, 0xCEA9, 0x567D, 0xE719, 0xB562, 0x4DE6, 0xEC9A,
-	0x8F45, 0x1F9D, 0x8940, 0xFA87, 0xEF15, 0xB2EB, 0x8EC9, 0xFB0B,
-	0x41EC, 0xB367, 0x5FFD, 0x45EA, 0x23BF, 0x53F7, 0xE496, 0x9B5B,
-	0x75C2, 0xE11C, 0x3DAE, 0x4C6A, 0x6C5A, 0x7E41, 0xF502, 0x834F,
-	0x685C, 0x51F4, 0xD134, 0xF908, 0xE293, 0xAB73, 0x6253, 0x2A3F,
-	0x080C, 0x9552, 0x4665, 0x9D5E, 0x3028, 0x37A1, 0x0A0F, 0x2FB5,
-	0x0E09, 0x2436, 0x1B9B, 0xDF3D, 0xCD26, 0x4E69, 0x7FCD, 0xEA9F,
-	0x121B, 0x1D9E, 0x5874, 0x342E, 0x362D, 0xDCB2, 0xB4EE, 0x5BFB,
-	0xA4F6, 0x764D, 0xB761, 0x7DCE, 0x527B, 0xDD3E, 0x5E71, 0x1397,
-	0xA6F5, 0xB968, 0x0000, 0xC12C, 0x4060, 0xE31F, 0x79C8, 0xB6ED,
-	0xD4BE, 0x8D46, 0x67D9, 0x724B, 0x94DE, 0x98D4, 0xB0E8, 0x854A,
-	0xBB6B, 0xC52A, 0x4FE5, 0xED16, 0x86C5, 0x9AD7, 0x6655, 0x1194,
-	0x8ACF, 0xE910, 0x0406, 0xFE81, 0xA0F0, 0x7844, 0x25BA, 0x4BE3,
-	0xA2F3, 0x5DFE, 0x80C0, 0x058A, 0x3FAD, 0x21BC, 0x7048, 0xF104,
-	0x63DF, 0x77C1, 0xAF75, 0x4263, 0x2030, 0xE51A, 0xFD0E, 0xBF6D,
-	0x814C, 0x1814, 0x2635, 0xC32F, 0xBEE1, 0x35A2, 0x88CC, 0x2E39,
-	0x9357, 0x55F2, 0xFC82, 0x7A47, 0xC8AC, 0xBAE7, 0x322B, 0xE695,
-	0xC0A0, 0x1998, 0x9ED1, 0xA37F, 0x4466, 0x547E, 0x3BAB, 0x0B83,
-	0x8CCA, 0xC729, 0x6BD3, 0x283C, 0xA779, 0xBCE2, 0x161D, 0xAD76,
-	0xDB3B, 0x6456, 0x744E, 0x141E, 0x92DB, 0x0C0A, 0x486C, 0xB8E4,
-	0x9F5D, 0xBD6E, 0x43EF, 0xC4A6, 0x39A8, 0x31A4, 0xD337, 0xF28B,
-	0xD532, 0x8B43, 0x6E59, 0xDAB7, 0x018C, 0xB164, 0x9CD2, 0x49E0,
-	0xD8B4, 0xACFA, 0xF307, 0xCF25, 0xCAAF, 0xF48E, 0x47E9, 0x1018,
-	0x6FD5, 0xF088, 0x4A6F, 0x5C72, 0x3824, 0x57F1, 0x73C7, 0x9751,
-	0xCB23, 0xA17C, 0xE89C, 0x3E21, 0x96DD, 0x61DC, 0x0D86, 0x0F85,
-	0xE090, 0x7C42, 0x71C4, 0xCCAA, 0x90D8, 0x0605, 0xF701, 0x1C12,
-	0xC2A3, 0x6A5F, 0xAEF9, 0x69D0, 0x1791, 0x9958, 0x3A27, 0x27B9,
-	0xD938, 0xEB13, 0x2BB3, 0x2233, 0xD2BB, 0xA970, 0x0789, 0x33A7,
-	0x2DB6, 0x3C22, 0x1592, 0xC920, 0x8749, 0xAAFF, 0x5078, 0xA57A,
-	0x038F, 0x59F8, 0x0980, 0x1A17, 0x65DA, 0xD731, 0x84C6, 0xD0B8,
-	0x82C3, 0x29B0, 0x5A77, 0x1E11, 0x7BCB, 0xA8FC, 0x6DD6, 0x2C3A,
+   0xC6A5, 0xF884, 0xEE99, 0xF68D, 0xFF0D, 0xD6BD, 0xDEB1, 0x9154,
+   0x6050, 0x0203, 0xCEA9, 0x567D, 0xE719, 0xB562, 0x4DE6, 0xEC9A,
+   0x8F45, 0x1F9D, 0x8940, 0xFA87, 0xEF15, 0xB2EB, 0x8EC9, 0xFB0B,
+   0x41EC, 0xB367, 0x5FFD, 0x45EA, 0x23BF, 0x53F7, 0xE496, 0x9B5B,
+   0x75C2, 0xE11C, 0x3DAE, 0x4C6A, 0x6C5A, 0x7E41, 0xF502, 0x834F,
+   0x685C, 0x51F4, 0xD134, 0xF908, 0xE293, 0xAB73, 0x6253, 0x2A3F,
+   0x080C, 0x9552, 0x4665, 0x9D5E, 0x3028, 0x37A1, 0x0A0F, 0x2FB5,
+   0x0E09, 0x2436, 0x1B9B, 0xDF3D, 0xCD26, 0x4E69, 0x7FCD, 0xEA9F,
+   0x121B, 0x1D9E, 0x5874, 0x342E, 0x362D, 0xDCB2, 0xB4EE, 0x5BFB,
+   0xA4F6, 0x764D, 0xB761, 0x7DCE, 0x527B, 0xDD3E, 0x5E71, 0x1397,
+   0xA6F5, 0xB968, 0x0000, 0xC12C, 0x4060, 0xE31F, 0x79C8, 0xB6ED,
+   0xD4BE, 0x8D46, 0x67D9, 0x724B, 0x94DE, 0x98D4, 0xB0E8, 0x854A,
+   0xBB6B, 0xC52A, 0x4FE5, 0xED16, 0x86C5, 0x9AD7, 0x6655, 0x1194,
+   0x8ACF, 0xE910, 0x0406, 0xFE81, 0xA0F0, 0x7844, 0x25BA, 0x4BE3,
+   0xA2F3, 0x5DFE, 0x80C0, 0x058A, 0x3FAD, 0x21BC, 0x7048, 0xF104,
+   0x63DF, 0x77C1, 0xAF75, 0x4263, 0x2030, 0xE51A, 0xFD0E, 0xBF6D,
+   0x814C, 0x1814, 0x2635, 0xC32F, 0xBEE1, 0x35A2, 0x88CC, 0x2E39,
+   0x9357, 0x55F2, 0xFC82, 0x7A47, 0xC8AC, 0xBAE7, 0x322B, 0xE695,
+   0xC0A0, 0x1998, 0x9ED1, 0xA37F, 0x4466, 0x547E, 0x3BAB, 0x0B83,
+   0x8CCA, 0xC729, 0x6BD3, 0x283C, 0xA779, 0xBCE2, 0x161D, 0xAD76,
+   0xDB3B, 0x6456, 0x744E, 0x141E, 0x92DB, 0x0C0A, 0x486C, 0xB8E4,
+   0x9F5D, 0xBD6E, 0x43EF, 0xC4A6, 0x39A8, 0x31A4, 0xD337, 0xF28B,
+   0xD532, 0x8B43, 0x6E59, 0xDAB7, 0x018C, 0xB164, 0x9CD2, 0x49E0,
+   0xD8B4, 0xACFA, 0xF307, 0xCF25, 0xCAAF, 0xF48E, 0x47E9, 0x1018,
+   0x6FD5, 0xF088, 0x4A6F, 0x5C72, 0x3824, 0x57F1, 0x73C7, 0x9751,
+   0xCB23, 0xA17C, 0xE89C, 0x3E21, 0x96DD, 0x61DC, 0x0D86, 0x0F85,
+   0xE090, 0x7C42, 0x71C4, 0xCCAA, 0x90D8, 0x0605, 0xF701, 0x1C12,
+   0xC2A3, 0x6A5F, 0xAEF9, 0x69D0, 0x1791, 0x9958, 0x3A27, 0x27B9,
+   0xD938, 0xEB13, 0x2BB3, 0x2233, 0xD2BB, 0xA970, 0x0789, 0x33A7,
+   0x2DB6, 0x3C22, 0x1592, 0xC920, 0x8749, 0xAAFF, 0x5078, 0xA57A,
+   0x038F, 0x59F8, 0x0980, 0x1A17, 0x65DA, 0xD731, 0x84C6, 0xD0B8,
+   0x82C3, 0x29B0, 0x5A77, 0x1E11, 0x7BCB, 0xA8FC, 0x6DD6, 0x2C3A,
   },
 
   {  /* second half of table is unsigned char-reversed version of first! */
-	0xA5C6, 0x84F8, 0x99EE, 0x8DF6, 0x0DFF, 0xBDD6, 0xB1DE, 0x5491,
-	0x5060, 0x0302, 0xA9CE, 0x7D56, 0x19E7, 0x62B5, 0xE64D, 0x9AEC,
-	0x458F, 0x9D1F, 0x4089, 0x87FA, 0x15EF, 0xEBB2, 0xC98E, 0x0BFB,
-	0xEC41, 0x67B3, 0xFD5F, 0xEA45, 0xBF23, 0xF753, 0x96E4, 0x5B9B,
-	0xC275, 0x1CE1, 0xAE3D, 0x6A4C, 0x5A6C, 0x417E, 0x02F5, 0x4F83,
-	0x5C68, 0xF451, 0x34D1, 0x08F9, 0x93E2, 0x73AB, 0x5362, 0x3F2A,
-	0x0C08, 0x5295, 0x6546, 0x5E9D, 0x2830, 0xA137, 0x0F0A, 0xB52F,
-	0x090E, 0x3624, 0x9B1B, 0x3DDF, 0x26CD, 0x694E, 0xCD7F, 0x9FEA,
-	0x1B12, 0x9E1D, 0x7458, 0x2E34, 0x2D36, 0xB2DC, 0xEEB4, 0xFB5B,
-	0xF6A4, 0x4D76, 0x61B7, 0xCE7D, 0x7B52, 0x3EDD, 0x715E, 0x9713,
-	0xF5A6, 0x68B9, 0x0000, 0x2CC1, 0x6040, 0x1FE3, 0xC879, 0xEDB6,
-	0xBED4, 0x468D, 0xD967, 0x4B72, 0xDE94, 0xD498, 0xE8B0, 0x4A85,
-	0x6BBB, 0x2AC5, 0xE54F, 0x16ED, 0xC586, 0xD79A, 0x5566, 0x9411,
-	0xCF8A, 0x10E9, 0x0604, 0x81FE, 0xF0A0, 0x4478, 0xBA25, 0xE34B,
-	0xF3A2, 0xFE5D, 0xC080, 0x8A05, 0xAD3F, 0xBC21, 0x4870, 0x04F1,
-	0xDF63, 0xC177, 0x75AF, 0x6342, 0x3020, 0x1AE5, 0x0EFD, 0x6DBF,
-	0x4C81, 0x1418, 0x3526, 0x2FC3, 0xE1BE, 0xA235, 0xCC88, 0x392E,
-	0x5793, 0xF255, 0x82FC, 0x477A, 0xACC8, 0xE7BA, 0x2B32, 0x95E6,
-	0xA0C0, 0x9819, 0xD19E, 0x7FA3, 0x6644, 0x7E54, 0xAB3B, 0x830B,
-	0xCA8C, 0x29C7, 0xD36B, 0x3C28, 0x79A7, 0xE2BC, 0x1D16, 0x76AD,
-	0x3BDB, 0x5664, 0x4E74, 0x1E14, 0xDB92, 0x0A0C, 0x6C48, 0xE4B8,
-	0x5D9F, 0x6EBD, 0xEF43, 0xA6C4, 0xA839, 0xA431, 0x37D3, 0x8BF2,
-	0x32D5, 0x438B, 0x596E, 0xB7DA, 0x8C01, 0x64B1, 0xD29C, 0xE049,
-	0xB4D8, 0xFAAC, 0x07F3, 0x25CF, 0xAFCA, 0x8EF4, 0xE947, 0x1810,
-	0xD56F, 0x88F0, 0x6F4A, 0x725C, 0x2438, 0xF157, 0xC773, 0x5197,
-	0x23CB, 0x7CA1, 0x9CE8, 0x213E, 0xDD96, 0xDC61, 0x860D, 0x850F,
-	0x90E0, 0x427C, 0xC471, 0xAACC, 0xD890, 0x0506, 0x01F7, 0x121C,
-	0xA3C2, 0x5F6A, 0xF9AE, 0xD069, 0x9117, 0x5899, 0x273A, 0xB927,
-	0x38D9, 0x13EB, 0xB32B, 0x3322, 0xBBD2, 0x70A9, 0x8907, 0xA733,
-	0xB62D, 0x223C, 0x9215, 0x20C9, 0x4987, 0xFFAA, 0x7850, 0x7AA5,
-	0x8F03, 0xF859, 0x8009, 0x171A, 0xDA65, 0x31D7, 0xC684, 0xB8D0,
-	0xC382, 0xB029, 0x775A, 0x111E, 0xCB7B, 0xFCA8, 0xD66D, 0x3A2C,
+   0xA5C6, 0x84F8, 0x99EE, 0x8DF6, 0x0DFF, 0xBDD6, 0xB1DE, 0x5491,
+   0x5060, 0x0302, 0xA9CE, 0x7D56, 0x19E7, 0x62B5, 0xE64D, 0x9AEC,
+   0x458F, 0x9D1F, 0x4089, 0x87FA, 0x15EF, 0xEBB2, 0xC98E, 0x0BFB,
+   0xEC41, 0x67B3, 0xFD5F, 0xEA45, 0xBF23, 0xF753, 0x96E4, 0x5B9B,
+   0xC275, 0x1CE1, 0xAE3D, 0x6A4C, 0x5A6C, 0x417E, 0x02F5, 0x4F83,
+   0x5C68, 0xF451, 0x34D1, 0x08F9, 0x93E2, 0x73AB, 0x5362, 0x3F2A,
+   0x0C08, 0x5295, 0x6546, 0x5E9D, 0x2830, 0xA137, 0x0F0A, 0xB52F,
+   0x090E, 0x3624, 0x9B1B, 0x3DDF, 0x26CD, 0x694E, 0xCD7F, 0x9FEA,
+   0x1B12, 0x9E1D, 0x7458, 0x2E34, 0x2D36, 0xB2DC, 0xEEB4, 0xFB5B,
+   0xF6A4, 0x4D76, 0x61B7, 0xCE7D, 0x7B52, 0x3EDD, 0x715E, 0x9713,
+   0xF5A6, 0x68B9, 0x0000, 0x2CC1, 0x6040, 0x1FE3, 0xC879, 0xEDB6,
+   0xBED4, 0x468D, 0xD967, 0x4B72, 0xDE94, 0xD498, 0xE8B0, 0x4A85,
+   0x6BBB, 0x2AC5, 0xE54F, 0x16ED, 0xC586, 0xD79A, 0x5566, 0x9411,
+   0xCF8A, 0x10E9, 0x0604, 0x81FE, 0xF0A0, 0x4478, 0xBA25, 0xE34B,
+   0xF3A2, 0xFE5D, 0xC080, 0x8A05, 0xAD3F, 0xBC21, 0x4870, 0x04F1,
+   0xDF63, 0xC177, 0x75AF, 0x6342, 0x3020, 0x1AE5, 0x0EFD, 0x6DBF,
+   0x4C81, 0x1418, 0x3526, 0x2FC3, 0xE1BE, 0xA235, 0xCC88, 0x392E,
+   0x5793, 0xF255, 0x82FC, 0x477A, 0xACC8, 0xE7BA, 0x2B32, 0x95E6,
+   0xA0C0, 0x9819, 0xD19E, 0x7FA3, 0x6644, 0x7E54, 0xAB3B, 0x830B,
+   0xCA8C, 0x29C7, 0xD36B, 0x3C28, 0x79A7, 0xE2BC, 0x1D16, 0x76AD,
+   0x3BDB, 0x5664, 0x4E74, 0x1E14, 0xDB92, 0x0A0C, 0x6C48, 0xE4B8,
+   0x5D9F, 0x6EBD, 0xEF43, 0xA6C4, 0xA839, 0xA431, 0x37D3, 0x8BF2,
+   0x32D5, 0x438B, 0x596E, 0xB7DA, 0x8C01, 0x64B1, 0xD29C, 0xE049,
+   0xB4D8, 0xFAAC, 0x07F3, 0x25CF, 0xAFCA, 0x8EF4, 0xE947, 0x1810,
+   0xD56F, 0x88F0, 0x6F4A, 0x725C, 0x2438, 0xF157, 0xC773, 0x5197,
+   0x23CB, 0x7CA1, 0x9CE8, 0x213E, 0xDD96, 0xDC61, 0x860D, 0x850F,
+   0x90E0, 0x427C, 0xC471, 0xAACC, 0xD890, 0x0506, 0x01F7, 0x121C,
+   0xA3C2, 0x5F6A, 0xF9AE, 0xD069, 0x9117, 0x5899, 0x273A, 0xB927,
+   0x38D9, 0x13EB, 0xB32B, 0x3322, 0xBBD2, 0x70A9, 0x8907, 0xA733,
+   0xB62D, 0x223C, 0x9215, 0x20C9, 0x4987, 0xFFAA, 0x7850, 0x7AA5,
+   0x8F03, 0xF859, 0x8009, 0x171A, 0xDA65, 0x31D7, 0xC684, 0xB8D0,
+   0xC382, 0xB029, 0x775A, 0x111E, 0xCB7B, 0xFCA8, 0xD66D, 0x3A2C,
   }
 };
 
@@ -475,6 +505,7 @@ static const unsigned short Sbox1[2][256] = {  /* Sbox for hash (can be in ROM) 
 static void phase1(u16 *p1k, const u8 *tk, const u8 *ta, u32 iv32)
 {
 	int  i;
+_func_enter_;
 	/* Initialize the 80 bits of P1K[] from IV32 and TA[0..5]     */
 	p1k[0]      = Lo16(iv32);
 	p1k[1]      = Hi16(iv32);
@@ -492,6 +523,7 @@ static void phase1(u16 *p1k, const u8 *tk, const u8 *ta, u32 iv32)
 		p1k[4] += _S_(p1k[3] ^ TK16((i&1)+0));
 		p1k[4] +=  (unsigned short)i;   /* avoid "slide attacks" */
 	}
+_func_exit_;
 }
 
 /*
@@ -521,6 +553,7 @@ static void phase2(u8 *rc4key, const u8 *tk, const u16 *p1k, u16 iv16)
 {
 	int  i;
 	u16 PPK[6];			/* temporary key for mixing    */
+_func_enter_;
 	/* Note: all adds in the PPK[] equations below are mod 2**16	 */
 	for (i = 0; i < 5; i++)
 		PPK[i] = p1k[i];	/* first, copy P1K to PPK      */
@@ -557,6 +590,7 @@ static void phase2(u8 *rc4key, const u8 *tk, const u16 *p1k, u16 iv16)
 		rc4key[4+2*i] = Lo8(PPK[i]);
 		rc4key[5+2*i] = Hi8(PPK[i]);
 	}
+_func_exit_;
 }
 
 /* The hlen isn't include the IV */
@@ -578,6 +612,7 @@ u32	rtw_tkip_encrypt(struct adapter *padapter, u8 *pxmitframe)
 	struct	security_priv	*psecuritypriv = &padapter->securitypriv;
 	struct	xmit_priv		*pxmitpriv = &padapter->xmitpriv;
 	u32	res = _SUCCESS;
+_func_enter_;
 
 	if (((struct xmit_frame *)pxmitframe)->buf_addr == NULL)
 		return _FAIL;
@@ -622,14 +657,14 @@ u32	rtw_tkip_encrypt(struct adapter *padapter, u8 *pxmitframe)
 					arcfour_encrypt(&mycontext, payload, payload, length);
 					arcfour_encrypt(&mycontext, payload+length, crc, 4);
 				} else {
-					length = pxmitpriv->frag_len-pattrib->hdrlen-pattrib->iv_len-pattrib->icv_len;
+					length = pxmitpriv->frag_len-pattrib->hdrlen-pattrib->iv_len-pattrib->icv_len ;
 					*((__le32 *)crc) = getcrc32(payload, length);/* modified by Amy*/
 					arcfour_init(&mycontext, rc4key, 16);
 					arcfour_encrypt(&mycontext, payload, payload, length);
 					arcfour_encrypt(&mycontext, payload+length, crc, 4);
 
 					pframe += pxmitpriv->frag_len;
-					pframe = (u8 *)round_up((size_t)(pframe), 4);
+					pframe = (u8 *)RND4((size_t)(pframe));
 				}
 			}
 		} else {
@@ -637,6 +672,7 @@ u32	rtw_tkip_encrypt(struct adapter *padapter, u8 *pxmitframe)
 			res = _FAIL;
 		}
 	}
+_func_exit_;
 	return res;
 }
 
@@ -654,12 +690,13 @@ u32 rtw_tkip_decrypt(struct adapter *padapter, u8 *precvframe)
 	u8	*pframe, *payload, *iv, *prwskey;
 	union pn48 dot11txpn;
 	struct	sta_info		*stainfo;
-	struct	rx_pkt_attrib	 *prxattrib = &((struct recv_frame *)precvframe)->attrib;
+	struct	rx_pkt_attrib	 *prxattrib = &((union recv_frame *)precvframe)->u.hdr.attrib;
 	struct	security_priv	*psecuritypriv = &padapter->securitypriv;
 	u32		res = _SUCCESS;
 
+_func_enter_;
 
-	pframe = (unsigned char *)((struct recv_frame *)precvframe)->pkt->data;
+	pframe = (unsigned char *)((union recv_frame *)precvframe)->u.hdr.rx_data;
 
 	/* 4 start to decrypt recvframe */
 	if (prxattrib->encrypt == _TKIP_) {
@@ -679,7 +716,7 @@ u32 rtw_tkip_decrypt(struct adapter *padapter, u8 *precvframe)
 
 			iv = pframe+prxattrib->hdrlen;
 			payload = pframe+prxattrib->iv_len+prxattrib->hdrlen;
-			length = ((struct recv_frame *)precvframe)->pkt->len-prxattrib->hdrlen-prxattrib->iv_len;
+			length = ((union recv_frame *)precvframe)->u.hdr.len-prxattrib->hdrlen-prxattrib->iv_len;
 
 			GET_TKIP_PN(iv, dot11txpn);
 
@@ -710,6 +747,7 @@ u32 rtw_tkip_decrypt(struct adapter *padapter, u8 *precvframe)
 			res = _FAIL;
 		}
 	}
+_func_exit_;
 exit:
 	return res;
 }
@@ -783,17 +821,19 @@ static void aes128k128d(u8 *key, u8 *data, u8 *ciphertext);
 static void xor_128(u8 *a, u8 *b, u8 *out)
 {
 	int i;
-
+_func_enter_;
 	for (i = 0; i < 16; i++)
 		out[i] = a[i] ^ b[i];
+_func_exit_;
 }
 
 static void xor_32(u8 *a, u8 *b, u8 *out)
 {
 	int i;
-
+_func_enter_;
 	for (i = 0; i < 4; i++)
 		out[i] = a[i] ^ b[i];
+_func_exit_;
 }
 
 static u8 sbox(u8 a)
@@ -809,7 +849,7 @@ static void next_key(u8 *key, int round)
 		0x01, 0x02, 0x04, 0x08, 0x10, 0x20, 0x40, 0x80,
 		0x1b, 0x36, 0x36, 0x36
 	};
-
+_func_enter_;
 	sbox_key[0] = sbox(key[13]);
 	sbox_key[1] = sbox(key[14]);
 	sbox_key[2] = sbox(key[15]);
@@ -823,17 +863,21 @@ static void next_key(u8 *key, int round)
 	xor_32(&key[4], &key[0], &key[4]);
 	xor_32(&key[8], &key[4], &key[8]);
 	xor_32(&key[12], &key[8], &key[12]);
+_func_exit_;
 }
 
 static void byte_sub(u8 *in, u8 *out)
 {
 	int i;
+_func_enter_;
 	for (i = 0; i < 16; i++)
 		out[i] = sbox(in[i]);
+_func_exit_;
 }
 
 static void shift_row(u8 *in, u8 *out)
 {
+_func_enter_;
 	out[0] =  in[0];
 	out[1] =  in[5];
 	out[2] =  in[10];
@@ -850,6 +894,7 @@ static void shift_row(u8 *in, u8 *out)
 	out[13] = in[1];
 	out[14] = in[6];
 	out[15] = in[11];
+_func_exit_;
 }
 
 static void mix_column(u8 *in, u8 *out)
@@ -858,12 +903,12 @@ static void mix_column(u8 *in, u8 *out)
 	u8 add1b[4];
 	u8 add1bf7[4];
 	u8 rotl[4];
-	u8 swap_halves[4];
+	u8 swap_halfs[4];
 	u8 andf7[4];
 	u8 rotr[4];
 	u8 temp[4];
 	u8 tempb[4];
-
+_func_enter_;
 	for (i = 0 ; i < 4; i++) {
 		if ((in[i] & 0x80) == 0x80)
 			add1b[i] = 0x1b;
@@ -871,10 +916,10 @@ static void mix_column(u8 *in, u8 *out)
 			add1b[i] = 0x00;
 	}
 
-	swap_halves[0] = in[2];    /* Swap halves */
-	swap_halves[1] = in[3];
-	swap_halves[2] = in[0];
-	swap_halves[3] = in[1];
+	swap_halfs[0] = in[2];    /* Swap halves */
+	swap_halfs[1] = in[3];
+	swap_halfs[2] = in[0];
+	swap_halfs[3] = in[1];
 
 	rotl[0] = in[3];	/* Rotate left 8 bits */
 	rotl[1] = in[0];
@@ -905,8 +950,9 @@ static void mix_column(u8 *in, u8 *out)
 	rotr[3] = temp[0];
 
 	xor_32(add1bf7, rotr, temp);
-	xor_32(swap_halves, rotl, tempb);
+	xor_32(swap_halfs, rotl, tempb);
 	xor_32(temp, tempb, out);
+_func_exit_;
 }
 
 static void aes128k128d(u8 *key, u8 *data, u8 *ciphertext)
@@ -916,7 +962,7 @@ static void aes128k128d(u8 *key, u8 *data, u8 *ciphertext)
 	u8 intermediatea[16];
 	u8 intermediateb[16];
 	u8 round_key[16];
-
+_func_enter_;
 	for (i = 0; i < 16; i++)
 		round_key[i] = key[i];
 	for (round = 0; round < 11; round++) {
@@ -938,6 +984,7 @@ static void aes128k128d(u8 *key, u8 *data, u8 *ciphertext)
 			next_key(round_key, round);
 		}
 	}
+_func_exit_;
 }
 
 /************************************************/
@@ -948,7 +995,7 @@ static void construct_mic_iv(u8 *mic_iv, int qc_exists, int a4_exists, u8 *mpdu,
 			     uint payload_length, u8 *pn_vector)
 {
 	int i;
-
+_func_enter_;
 	mic_iv[0] = 0x59;
 	if (qc_exists && a4_exists)
 		mic_iv[1] = mpdu[30] & 0x0f;    /* QoS_TC	   */
@@ -960,8 +1007,9 @@ static void construct_mic_iv(u8 *mic_iv, int qc_exists, int a4_exists, u8 *mpdu,
 		mic_iv[i] = mpdu[i + 8];	/* mic_iv[2:7] = A2[0:5] = mpdu[10:15] */
 	for (i = 8; i < 14; i++)
 		mic_iv[i] = pn_vector[13 - i];	/* mic_iv[8:13] = PN[5:0] */
-	mic_iv[14] = (unsigned char)(payload_length / 256);
-	mic_iv[15] = (unsigned char)(payload_length % 256);
+	mic_iv[14] = (unsigned char) (payload_length / 256);
+	mic_iv[15] = (unsigned char) (payload_length % 256);
+_func_exit_;
 }
 
 /************************************************/
@@ -971,6 +1019,7 @@ static void construct_mic_iv(u8 *mic_iv, int qc_exists, int a4_exists, u8 *mpdu,
 /************************************************/
 static void construct_mic_header1(u8 *mic_header1, int header_length, u8 *mpdu)
 {
+_func_enter_;
 	mic_header1[0] = (u8)((header_length - 2) / 256);
 	mic_header1[1] = (u8)((header_length - 2) % 256);
 	mic_header1[2] = mpdu[0] & 0xcf;    /* Mute CF poll & CF ack bits */
@@ -987,6 +1036,7 @@ static void construct_mic_header1(u8 *mic_header1, int header_length, u8 *mpdu)
 	mic_header1[13] = mpdu[13];
 	mic_header1[14] = mpdu[14];
 	mic_header1[15] = mpdu[15];
+_func_exit_;
 }
 
 /************************************************/
@@ -997,7 +1047,7 @@ static void construct_mic_header1(u8 *mic_header1, int header_length, u8 *mpdu)
 static void construct_mic_header2(u8 *mic_header2, u8 *mpdu, int a4_exists, int qc_exists)
 {
 	int i;
-
+_func_enter_;
 	for (i = 0; i < 16; i++)
 		mic_header2[i] = 0x00;
 
@@ -1029,6 +1079,7 @@ static void construct_mic_header2(u8 *mic_header2, u8 *mpdu, int a4_exists, int 
 		mic_header2[15] = mpdu[31] & 0x00;
 	}
 
+_func_exit_;
 }
 
 /************************************************/
@@ -1039,7 +1090,7 @@ static void construct_mic_header2(u8 *mic_header2, u8 *mpdu, int a4_exists, int 
 static void construct_ctr_preload(u8 *ctr_preload, int a4_exists, int qc_exists, u8 *mpdu, u8 *pn_vector, int c)
 {
 	int i;
-
+_func_enter_;
 	for (i = 0; i < 16; i++)
 		ctr_preload[i] = 0x00;
 	i = 0;
@@ -1054,8 +1105,9 @@ static void construct_ctr_preload(u8 *ctr_preload, int a4_exists, int qc_exists,
 		ctr_preload[i] = mpdu[i + 8];		       /* ctr_preload[2:7] = A2[0:5] = mpdu[10:15] */
 	for (i = 8; i < 14; i++)
 		ctr_preload[i] =    pn_vector[13 - i];	  /* ctr_preload[8:13] = PN[5:0] */
-	ctr_preload[14] =  (unsigned char)(c / 256); /* Ctr */
-	ctr_preload[15] =  (unsigned char)(c % 256);
+	ctr_preload[14] =  (unsigned char) (c / 256); /* Ctr */
+	ctr_preload[15] =  (unsigned char) (c % 256);
+_func_exit_;
 }
 
 /************************************/
@@ -1065,9 +1117,10 @@ static void construct_ctr_preload(u8 *ctr_preload, int a4_exists, int qc_exists,
 static void bitwise_xor(u8 *ina, u8 *inb, u8 *out)
 {
 	int i;
-
+_func_enter_;
 	for (i = 0; i < 16; i++)
 		out[i] = ina[i] ^ inb[i];
+_func_exit_;
 }
 
 static int aes_cipher(u8 *key, uint hdrlen, u8 *pframe, uint plen)
@@ -1089,15 +1142,16 @@ static int aes_cipher(u8 *key, uint hdrlen, u8 *pframe, uint plen)
 	uint	frtype  = GetFrameType(pframe);
 	uint	frsubtype  = GetFrameSubType(pframe);
 
-	frsubtype >>= 4;
+_func_enter_;
+	frsubtype = frsubtype>>4;
 
-	memset(mic_iv, 0, 16);
-	memset(mic_header1, 0, 16);
-	memset(mic_header2, 0, 16);
-	memset(ctr_preload, 0, 16);
-	memset(chain_buffer, 0, 16);
-	memset(aes_out, 0, 16);
-	memset(padded_buffer, 0, 16);
+	_rtw_memset((void *)mic_iv, 0, 16);
+	_rtw_memset((void *)mic_header1, 0, 16);
+	_rtw_memset((void *)mic_header2, 0, 16);
+	_rtw_memset((void *)ctr_preload, 0, 16);
+	_rtw_memset((void *)chain_buffer, 0, 16);
+	_rtw_memset((void *)aes_out, 0, 16);
+	_rtw_memset((void *)padded_buffer, 0, 16);
 
 	if ((hdrlen == WLAN_HDR_A3_LEN) || (hdrlen ==  WLAN_HDR_A3_QOS_LEN))
 		a4_exists = 0;
@@ -1132,7 +1186,7 @@ static int aes_cipher(u8 *key, uint hdrlen, u8 *pframe, uint plen)
 	num_blocks = plen / 16;
 
 	/* Find start of payload */
-	payload_index = hdrlen + 8;
+	payload_index = (hdrlen + 8);
 
 	/* Calculate MIC */
 	aes128k128d(key, mic_iv, aes_out);
@@ -1163,7 +1217,7 @@ static int aes_cipher(u8 *key, uint hdrlen, u8 *pframe, uint plen)
 
 	/* Insert MIC into payload */
 	for (j = 0; j < 8; j++)
-		pframe[payload_index+j] = mic[j];
+	pframe[payload_index+j] = mic[j];	/* message[payload_index+j] = mic[j]; */
 
 	payload_index = hdrlen + 8;
 	for (i = 0; i < num_blocks; i++) {
@@ -1199,6 +1253,7 @@ static int aes_cipher(u8 *key, uint hdrlen, u8 *pframe, uint plen)
 	bitwise_xor(aes_out, padded_buffer, chain_buffer);
 	for (j = 0; j < 8; j++)
 		pframe[payload_index++] = chain_buffer[j];
+_func_exit_;
 	return _SUCCESS;
 }
 
@@ -1219,6 +1274,7 @@ u32	rtw_aes_encrypt(struct adapter *padapter, u8 *pxmitframe)
 
 /*	uint	offset = 0; */
 	u32 res = _SUCCESS;
+_func_enter_;
 
 	if (((struct xmit_frame *)pxmitframe)->buf_addr == NULL)
 		return _FAIL;
@@ -1229,7 +1285,7 @@ u32	rtw_aes_encrypt(struct adapter *padapter, u8 *pxmitframe)
 	pframe = ((struct xmit_frame *)pxmitframe)->buf_addr + hw_hdr_offset;
 
 	/* 4 start to encrypt each fragment */
-	if (pattrib->encrypt == _AES_) {
+	if ((pattrib->encrypt == _AES_)) {
 		if (pattrib->psta)
 			stainfo = pattrib->psta;
 		else
@@ -1248,11 +1304,11 @@ u32	rtw_aes_encrypt(struct adapter *padapter, u8 *pxmitframe)
 
 					aes_cipher(prwskey, pattrib->hdrlen, pframe, length);
 				} else{
-					length = pxmitpriv->frag_len-pattrib->hdrlen-pattrib->iv_len-pattrib->icv_len;
+					length = pxmitpriv->frag_len-pattrib->hdrlen-pattrib->iv_len-pattrib->icv_len ;
 
 					aes_cipher(prwskey, pattrib->hdrlen, pframe, length);
 					pframe += pxmitpriv->frag_len;
-					pframe = (u8 *)round_up((size_t)(pframe), 8);
+					pframe = (u8 *)RND4((size_t)(pframe));
 				}
 			}
 		} else{
@@ -1262,6 +1318,7 @@ u32	rtw_aes_encrypt(struct adapter *padapter, u8 *pxmitframe)
 	}
 
 
+_func_exit_;
 		return res;
 }
 
@@ -1272,7 +1329,6 @@ static int aes_decipher(u8 *key, uint	hdrlen,
 	uint	qc_exists, a4_exists, i, j, payload_remainder,
 			num_blocks, payload_index;
 	int res = _SUCCESS;
-
 	u8 pn_vector[6];
 	u8 mic_iv[16];
 	u8 mic_header1[16];
@@ -1288,15 +1344,16 @@ static int aes_decipher(u8 *key, uint	hdrlen,
 /*	uint	offset = 0; */
 	uint	frtype  = GetFrameType(pframe);
 	uint	frsubtype  = GetFrameSubType(pframe);
-	frsubtype >>= 4;
+_func_enter_;
+	frsubtype = frsubtype>>4;
 
-	memset(mic_iv, 0, 16);
-	memset(mic_header1, 0, 16);
-	memset(mic_header2, 0, 16);
-	memset(ctr_preload, 0, 16);
-	memset(chain_buffer, 0, 16);
-	memset(aes_out, 0, 16);
-	memset(padded_buffer, 0, 16);
+	_rtw_memset((void *)mic_iv, 0, 16);
+	_rtw_memset((void *)mic_header1, 0, 16);
+	_rtw_memset((void *)mic_header2, 0, 16);
+	_rtw_memset((void *)ctr_preload, 0, 16);
+	_rtw_memset((void *)chain_buffer, 0, 16);
+	_rtw_memset((void *)aes_out, 0, 16);
+	_rtw_memset((void *)padded_buffer, 0, 16);
 
 	/* start to decrypt the payload */
 
@@ -1341,7 +1398,7 @@ static int aes_decipher(u8 *key, uint	hdrlen,
 		bitwise_xor(aes_out, &pframe[payload_index], chain_buffer);
 
 		for (j = 0; j < 16; j++)
-			pframe[payload_index++] = chain_buffer[j];
+			 pframe[payload_index++] = chain_buffer[j];
 	}
 
 	if (payload_remainder > 0) {    /* If there is a short final block, then pad it,*/
@@ -1377,7 +1434,7 @@ static int aes_decipher(u8 *key, uint	hdrlen,
 	num_blocks = (plen-8) / 16;
 
 	/* Find start of payload */
-	payload_index = hdrlen + 8;
+	payload_index = (hdrlen + 8);
 
 	/* Calculate MIC */
 	aes128k128d(key, mic_iv, aes_out);
@@ -1457,6 +1514,7 @@ static int aes_decipher(u8 *key, uint	hdrlen,
 			res = _FAIL;
 		}
 	}
+_func_exit_;
 	return res;
 }
 
@@ -1466,13 +1524,13 @@ u32	rtw_aes_decrypt(struct adapter *padapter, u8 *precvframe)
 	int		length;
 	u8	*pframe, *prwskey;	/*  *payload,*iv */
 	struct	sta_info		*stainfo;
-	struct	rx_pkt_attrib	 *prxattrib = &((struct recv_frame *)precvframe)->attrib;
+	struct	rx_pkt_attrib	 *prxattrib = &((union recv_frame *)precvframe)->u.hdr.attrib;
 	struct	security_priv	*psecuritypriv = &padapter->securitypriv;
 	u32	res = _SUCCESS;
-
-	pframe = (unsigned char *)((struct recv_frame *)precvframe)->pkt->data;
+_func_enter_;
+	pframe = (unsigned char *)((union recv_frame *)precvframe)->u.hdr.rx_data;
 	/* 4 start to encrypt each fragment */
-	if (prxattrib->encrypt == _AES_) {
+	if ((prxattrib->encrypt == _AES_)) {
 		stainfo = rtw_get_stainfo(&padapter->stapriv, &prxattrib->ta[0]);
 		if (stainfo != NULL) {
 			RT_TRACE(_module_rtl871x_security_c_, _drv_err_, ("rtw_aes_decrypt: stainfo!= NULL!!!\n"));
@@ -1494,13 +1552,14 @@ u32	rtw_aes_decrypt(struct adapter *padapter, u8 *precvframe)
 			} else {
 				prwskey = &stainfo->dot118021x_UncstKey.skey[0];
 			}
-			length = ((struct recv_frame *)precvframe)->pkt->len-prxattrib->hdrlen-prxattrib->iv_len;
+			length = ((union recv_frame *)precvframe)->u.hdr.len-prxattrib->hdrlen-prxattrib->iv_len;
 			res = aes_decipher(prwskey, prxattrib->hdrlen, pframe, length);
 		} else {
 			RT_TRACE(_module_rtl871x_security_c_, _drv_err_, ("rtw_aes_encrypt: stainfo==NULL!!!\n"));
 			res = _FAIL;
 		}
 	}
+_func_exit_;
 exit:
 	return res;
 }
@@ -1691,3 +1750,30 @@ do {									\
 	d##2 = TE0(s##2) ^ TE1(s##3) ^ TE2(s##0) ^ TE3(s##1) ^ rk[4 * i + 2]; \
 	d##3 = TE0(s##3) ^ TE1(s##0) ^ TE2(s##1) ^ TE3(s##2) ^ rk[4 * i + 3]; \
 } while (0);
+
+/**
+ * omac1_aes_128 - One-Key CBC MAC (OMAC1) hash with AES-128 (aka AES-CMAC)
+ * @key: 128-bit key for the hash operation
+ * @data: Data buffer for which a MAC is determined
+ * @data_len: Length of data buffer in bytes
+ * @mac: Buffer for MAC (128 bits, i.e., 16 bytes)
+ * Returns: 0 on success, -1 on failure
+ *
+ * This is a mode for using block cipher (AES in this case) for authentication.
+ * OMAC1 was standardized with the name CMAC by NIST in a Special Publication
+ * (SP) 800-38B.
+ */
+void rtw_use_tkipkey_handler(void *FunctionContext)
+{
+	struct adapter *padapter = (struct adapter *)FunctionContext;
+
+_func_enter_;
+
+	RT_TRACE(_module_rtl871x_security_c_, _drv_err_, ("^^^rtw_use_tkipkey_handler ^^^\n"));
+
+	padapter->securitypriv.busetkipkey = true;
+
+	RT_TRACE(_module_rtl871x_security_c_, _drv_err_, ("^^^rtw_use_tkipkey_handler padapter->securitypriv.busetkipkey=%d^^^\n", padapter->securitypriv.busetkipkey));
+
+_func_exit_;
+}

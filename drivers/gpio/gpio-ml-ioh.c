@@ -106,7 +106,7 @@ static const int num_ports[] = {6, 12, 16, 16, 15, 16, 16, 12};
 static void ioh_gpio_set(struct gpio_chip *gpio, unsigned nr, int val)
 {
 	u32 reg_val;
-	struct ioh_gpio *chip =	gpiochip_get_data(gpio);
+	struct ioh_gpio *chip =	container_of(gpio, struct ioh_gpio, gpio);
 	unsigned long flags;
 
 	spin_lock_irqsave(&chip->spinlock, flags);
@@ -122,15 +122,15 @@ static void ioh_gpio_set(struct gpio_chip *gpio, unsigned nr, int val)
 
 static int ioh_gpio_get(struct gpio_chip *gpio, unsigned nr)
 {
-	struct ioh_gpio *chip =	gpiochip_get_data(gpio);
+	struct ioh_gpio *chip =	container_of(gpio, struct ioh_gpio, gpio);
 
-	return !!(ioread32(&chip->reg->regs[chip->ch].pi) & (1 << nr));
+	return ioread32(&chip->reg->regs[chip->ch].pi) & (1 << nr);
 }
 
 static int ioh_gpio_direction_output(struct gpio_chip *gpio, unsigned nr,
 				     int val)
 {
-	struct ioh_gpio *chip =	gpiochip_get_data(gpio);
+	struct ioh_gpio *chip =	container_of(gpio, struct ioh_gpio, gpio);
 	u32 pm;
 	u32 reg_val;
 	unsigned long flags;
@@ -155,7 +155,7 @@ static int ioh_gpio_direction_output(struct gpio_chip *gpio, unsigned nr,
 
 static int ioh_gpio_direction_input(struct gpio_chip *gpio, unsigned nr)
 {
-	struct ioh_gpio *chip =	gpiochip_get_data(gpio);
+	struct ioh_gpio *chip =	container_of(gpio, struct ioh_gpio, gpio);
 	u32 pm;
 	unsigned long flags;
 
@@ -225,7 +225,7 @@ static void ioh_gpio_restore_reg_conf(struct ioh_gpio *chip)
 
 static int ioh_gpio_to_irq(struct gpio_chip *gpio, unsigned offset)
 {
-	struct ioh_gpio *chip = gpiochip_get_data(gpio);
+	struct ioh_gpio *chip = container_of(gpio, struct ioh_gpio, gpio);
 	return chip->irq_base + offset;
 }
 
@@ -450,7 +450,7 @@ static int ioh_gpio_probe(struct pci_dev *pdev,
 		chip->ch = i;
 		spin_lock_init(&chip->spinlock);
 		ioh_gpio_setup(chip, num_ports[i]);
-		ret = gpiochip_add_data(&chip->gpio, chip);
+		ret = gpiochip_add(&chip->gpio);
 		if (ret) {
 			dev_err(&pdev->dev, "IOH gpio: Failed to register GPIO\n");
 			goto err_gpiochip_add;
@@ -459,35 +459,46 @@ static int ioh_gpio_probe(struct pci_dev *pdev,
 
 	chip = chip_save;
 	for (j = 0; j < 8; j++, chip++) {
-		irq_base = devm_irq_alloc_descs(&pdev->dev, -1, IOH_IRQ_BASE,
-						num_ports[j], NUMA_NO_NODE);
+		irq_base = irq_alloc_descs(-1, IOH_IRQ_BASE, num_ports[j],
+					   NUMA_NO_NODE);
 		if (irq_base < 0) {
 			dev_warn(&pdev->dev,
 				"ml_ioh_gpio: Failed to get IRQ base num\n");
+			chip->irq_base = -1;
 			ret = irq_base;
-			goto err_gpiochip_add;
+			goto err_irq_alloc_descs;
 		}
 		chip->irq_base = irq_base;
 		ioh_gpio_alloc_generic_chip(chip, irq_base, num_ports[j]);
 	}
 
 	chip = chip_save;
-	ret = devm_request_irq(&pdev->dev, pdev->irq, ioh_gpio_handler,
-			       IRQF_SHARED, KBUILD_MODNAME, chip);
+	ret = request_irq(pdev->irq, ioh_gpio_handler,
+			     IRQF_SHARED, KBUILD_MODNAME, chip);
 	if (ret != 0) {
 		dev_err(&pdev->dev,
 			"%s request_irq failed\n", __func__);
-		goto err_gpiochip_add;
+		goto err_request_irq;
 	}
 
 	pci_set_drvdata(pdev, chip);
 
 	return 0;
 
+err_request_irq:
+	chip = chip_save;
+err_irq_alloc_descs:
+	while (--j >= 0) {
+		chip--;
+		irq_free_descs(chip->irq_base, num_ports[j]);
+	}
+
+	chip = chip_save;
 err_gpiochip_add:
 	while (--i >= 0) {
 		chip--;
-		gpiochip_remove(&chip->gpio);
+		if (gpiochip_remove(&chip->gpio))
+			dev_err(&pdev->dev, "Failed gpiochip_remove(%d)\n", i);
 	}
 	kfree(chip_save);
 
@@ -508,14 +519,21 @@ err_pci_enable:
 
 static void ioh_gpio_remove(struct pci_dev *pdev)
 {
+	int err;
 	int i;
 	struct ioh_gpio *chip = pci_get_drvdata(pdev);
 	void *chip_save;
 
 	chip_save = chip;
 
-	for (i = 0; i < 8; i++, chip++)
-		gpiochip_remove(&chip->gpio);
+	free_irq(pdev->irq, chip);
+
+	for (i = 0; i < 8; i++, chip++) {
+		irq_free_descs(chip->irq_base, num_ports[i]);
+		err = gpiochip_remove(&chip->gpio);
+		if (err)
+			dev_err(&pdev->dev, "Failed gpiochip_remove\n");
+	}
 
 	chip = chip_save;
 	pci_iounmap(pdev, chip->base);

@@ -64,7 +64,6 @@
 #include <linux/i8042.h>
 #include <linux/input.h>
 #include <linux/input/sparse-keymap.h>
-#include <acpi/video.h>
 
 #define MSI_DRIVER_VERSION "0.5"
 
@@ -574,6 +573,7 @@ static struct attribute_group msipf_old_attribute_group = {
 static struct platform_driver msipf_driver = {
 	.driver = {
 		.name = "msi-laptop-pf",
+		.owner = THIS_MODULE,
 		.pm = &msi_laptop_pm,
 	},
 };
@@ -821,7 +821,7 @@ static bool msi_laptop_i8042_filter(unsigned char data, unsigned char str,
 {
 	static bool extended;
 
-	if (str & I8042_STR_AUXDATA)
+	if (str & 0x20)
 		return false;
 
 	/* 0x54 wwan, 0x62 bluetooth, 0x76 wlan, 0xE4 touchpad toggle*/
@@ -976,13 +976,21 @@ static int __init msi_laptop_input_setup(void)
 
 	err = input_register_device(msi_laptop_input_dev);
 	if (err)
-		goto err_free_dev;
+		goto err_free_keymap;
 
 	return 0;
 
+err_free_keymap:
+	sparse_keymap_free(msi_laptop_input_dev);
 err_free_dev:
 	input_free_device(msi_laptop_input_dev);
 	return err;
+}
+
+static void msi_laptop_input_destroy(void)
+{
+	sparse_keymap_free(msi_laptop_input_dev);
+	input_unregister_device(msi_laptop_input_dev);
 }
 
 static int __init load_scm_model_init(struct platform_device *sdev)
@@ -1029,7 +1037,7 @@ static int __init load_scm_model_init(struct platform_device *sdev)
 	return 0;
 
 fail_filter:
-	input_unregister_device(msi_laptop_input_dev);
+	msi_laptop_input_destroy();
 
 fail_input:
 	rfkill_cleanup();
@@ -1062,8 +1070,9 @@ static int __init msi_init(void)
 
 	/* Register backlight stuff */
 
-	if (quirks->old_ec_model ||
-	    acpi_video_get_backlight_type() == acpi_backlight_vendor) {
+	if (!quirks->old_ec_model || acpi_video_backlight_support()) {
+		pr_info("Brightness ignored, must be controlled by ACPI video driver\n");
+	} else {
 		struct backlight_properties props;
 		memset(&props, 0, sizeof(struct backlight_properties));
 		props.type = BACKLIGHT_PLATFORM;
@@ -1150,7 +1159,7 @@ static void __exit msi_cleanup(void)
 {
 	if (quirks->load_scm_model) {
 		i8042_remove_filter(msi_laptop_i8042_filter);
-		input_unregister_device(msi_laptop_input_dev);
+		msi_laptop_input_destroy();
 		cancel_delayed_work_sync(&msi_rfkill_dwork);
 		cancel_work_sync(&msi_rfkill_work);
 		rfkill_cleanup();

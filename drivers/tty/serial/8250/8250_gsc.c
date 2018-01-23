@@ -42,7 +42,7 @@ static int __init serial_init_chip(struct parisc_device *dev)
 		 * the user what they're missing.
 		 */
 		if (parisc_parent(dev)->id.hw_type != HPHW_IOA)
-			dev_info(&dev->dev,
+			printk(KERN_INFO
 				"Serial: device 0x%llx not configured.\n"
 				"Enable support for Wax, Lasi, Asp or Dino.\n",
 				(unsigned long long)dev->hpa.start);
@@ -60,19 +60,14 @@ static int __init serial_init_chip(struct parisc_device *dev)
 					7272727 : 1843200;
 	uart.port.mapbase	= address;
 	uart.port.membase	= ioremap_nocache(address, 16);
-	if (!uart.port.membase) {
-		dev_warn(&dev->dev, "Failed to map memory\n");
-		return -ENOMEM;
-	}
 	uart.port.irq	= dev->irq;
 	uart.port.flags	= UPF_BOOT_AUTOCONF;
 	uart.port.dev	= &dev->dev;
 
 	err = serial8250_register_8250_port(&uart);
 	if (err < 0) {
-		dev_warn(&dev->dev,
-			"serial8250_register_8250_port returned error %d\n",
-			err);
+		printk(KERN_WARNING
+			"serial8250_register_8250_port returned error %d\n", err);
 		iounmap(uart.port.membase);
 		return err;
 	}

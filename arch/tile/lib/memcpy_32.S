@@ -24,6 +24,7 @@
 
 #define IS_MEMCPY	  0
 #define IS_COPY_FROM_USER  1
+#define IS_COPY_FROM_USER_ZEROING  2
 #define IS_COPY_TO_USER   -1
 
 	.section .text.memcpy_common, "ax"
@@ -41,31 +42,40 @@
 	9
 
 
-/* raw_copy_from_user takes the kernel target address in r0,
+/* __copy_from_user_inatomic takes the kernel target address in r0,
  * the user source in r1, and the bytes to copy in r2.
  * It returns the number of uncopiable bytes (hopefully zero) in r0.
  */
-ENTRY(raw_copy_from_user)
-.type raw_copy_from_user, @function
-	FEEDBACK_ENTER_EXPLICIT(raw_copy_from_user, \
+ENTRY(__copy_from_user_inatomic)
+.type __copy_from_user_inatomic, @function
+	FEEDBACK_ENTER_EXPLICIT(__copy_from_user_inatomic, \
 	  .text.memcpy_common, \
-	  .Lend_memcpy_common - raw_copy_from_user)
+	  .Lend_memcpy_common - __copy_from_user_inatomic)
 	{ movei r29, IS_COPY_FROM_USER; j memcpy_common }
-	.size raw_copy_from_user, . - raw_copy_from_user
+	.size __copy_from_user_inatomic, . - __copy_from_user_inatomic
 
-/* raw_copy_to_user takes the user target address in r0,
+/* __copy_from_user_zeroing is like __copy_from_user_inatomic, but
+ * any uncopiable bytes are zeroed in the target.
+ */
+ENTRY(__copy_from_user_zeroing)
+.type __copy_from_user_zeroing, @function
+	FEEDBACK_REENTER(__copy_from_user_inatomic)
+	{ movei r29, IS_COPY_FROM_USER_ZEROING; j memcpy_common }
+	.size __copy_from_user_zeroing, . - __copy_from_user_zeroing
+
+/* __copy_to_user_inatomic takes the user target address in r0,
  * the kernel source in r1, and the bytes to copy in r2.
  * It returns the number of uncopiable bytes (hopefully zero) in r0.
  */
-ENTRY(raw_copy_to_user)
-.type raw_copy_to_user, @function
-	FEEDBACK_REENTER(raw_copy_from_user)
+ENTRY(__copy_to_user_inatomic)
+.type __copy_to_user_inatomic, @function
+	FEEDBACK_REENTER(__copy_from_user_inatomic)
 	{ movei r29, IS_COPY_TO_USER; j memcpy_common }
-	.size raw_copy_to_user, . - raw_copy_to_user
+	.size __copy_to_user_inatomic, . - __copy_to_user_inatomic
 
 ENTRY(memcpy)
 .type memcpy, @function
-	FEEDBACK_REENTER(raw_copy_from_user)
+	FEEDBACK_REENTER(__copy_from_user_inatomic)
 	{ movei r29, IS_MEMCPY }
 	.size memcpy, . - memcpy
 	/* Fall through */
@@ -510,7 +520,12 @@ copy_from_user_fixup_loop:
 	{ bnzt r2, copy_from_user_fixup_loop }
 
 .Lcopy_from_user_fixup_zero_remainder:
-	move lr, r27
+	{ bbs r29, 2f }  /* low bit set means IS_COPY_FROM_USER */
+	/* byte-at-a-time loop faulted, so zero the rest. */
+	{ move r3, r2; bz r2, 2f /* should be impossible, but handle it. */ }
+1:      { sb r0, zero; addi r0, r0, 1; addi r3, r3, -1 }
+	{ bnzt r3, 1b }
+2:	move lr, r27
 	{ move r0, r2; jrp lr }
 
 copy_to_user_fixup_loop:

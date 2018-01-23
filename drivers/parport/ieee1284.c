@@ -23,7 +23,7 @@
 #include <linux/kernel.h>
 #include <linux/interrupt.h>
 #include <linux/timer.h>
-#include <linux/sched/signal.h>
+#include <linux/sched.h>
 
 #undef DEBUG /* undef me for production */
 

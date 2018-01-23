@@ -49,17 +49,16 @@ struct ttm_range_manager {
 
 static int ttm_bo_man_get_node(struct ttm_mem_type_manager *man,
 			       struct ttm_buffer_object *bo,
-			       const struct ttm_place *place,
+			       struct ttm_placement *placement,
 			       struct ttm_mem_reg *mem)
 {
 	struct ttm_range_manager *rman = (struct ttm_range_manager *) man->priv;
 	struct drm_mm *mm = &rman->mm;
-	struct drm_mm_node *node;
-	enum drm_mm_insert_mode mode;
+	struct drm_mm_node *node = NULL;
 	unsigned long lpfn;
 	int ret;
 
-	lpfn = place->lpfn;
+	lpfn = placement->lpfn;
 	if (!lpfn)
 		lpfn = man->size;
 
@@ -67,15 +66,11 @@ static int ttm_bo_man_get_node(struct ttm_mem_type_manager *man,
 	if (!node)
 		return -ENOMEM;
 
-	mode = DRM_MM_INSERT_BEST;
-	if (place->flags & TTM_PL_FLAG_TOPDOWN)
-		mode = DRM_MM_INSERT_HIGH;
-
 	spin_lock(&rman->lock);
-	ret = drm_mm_insert_node_in_range(mm, node,
-					  mem->num_pages,
-					  mem->page_alignment, 0,
-					  place->fpfn, lpfn, mode);
+	ret = drm_mm_insert_node_in_range(mm, node, mem->num_pages,
+					  mem->page_alignment,
+					  placement->fpfn, lpfn,
+					  DRM_MM_SEARCH_BEST);
 	spin_unlock(&rman->lock);
 
 	if (unlikely(ret)) {
@@ -139,18 +134,17 @@ static void ttm_bo_man_debug(struct ttm_mem_type_manager *man,
 			     const char *prefix)
 {
 	struct ttm_range_manager *rman = (struct ttm_range_manager *) man->priv;
-	struct drm_printer p = drm_debug_printer(prefix);
 
 	spin_lock(&rman->lock);
-	drm_mm_print(&rman->mm, &p);
+	drm_mm_debug_table(&rman->mm, prefix);
 	spin_unlock(&rman->lock);
 }
 
 const struct ttm_mem_type_manager_func ttm_bo_manager_func = {
-	.init = ttm_bo_man_init,
-	.takedown = ttm_bo_man_takedown,
-	.get_node = ttm_bo_man_get_node,
-	.put_node = ttm_bo_man_put_node,
-	.debug = ttm_bo_man_debug
+	ttm_bo_man_init,
+	ttm_bo_man_takedown,
+	ttm_bo_man_get_node,
+	ttm_bo_man_put_node,
+	ttm_bo_man_debug
 };
 EXPORT_SYMBOL(ttm_bo_manager_func);

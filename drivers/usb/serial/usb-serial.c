@@ -38,6 +38,7 @@
 #include <linux/usb/serial.h>
 #include <linux/kfifo.h>
 #include <linux/idr.h>
+#include "pl2303.h"
 
 #define DRIVER_AUTHOR "Greg Kroah-Hartman <gregkh@linuxfoundation.org>"
 #define DRIVER_DESC "USB Serial Driver core"
@@ -95,8 +96,7 @@ static int allocate_minors(struct usb_serial *serial, int num_ports)
 	mutex_lock(&table_lock);
 	for (i = 0; i < num_ports; ++i) {
 		port = serial->port[i];
-		minor = idr_alloc(&serial_minors, port, 0,
-					USB_SERIAL_TTY_MINORS, GFP_KERNEL);
+		minor = idr_alloc(&serial_minors, port, 0, 0, GFP_KERNEL);
 		if (minor < 0)
 			goto error;
 		port->minor = minor;
@@ -254,7 +254,7 @@ static int serial_open(struct tty_struct *tty, struct file *filp)
  *
  * Shut down a USB serial port. Serialized against activate by the
  * tport mutex and kept to matching open/close pairs
- * of calls by the initialized flag.
+ * of calls by the ASYNCB_INITIALIZED flag.
  *
  * Not called if tty is console.
  */
@@ -687,60 +687,12 @@ static void serial_port_dtr_rts(struct tty_port *port, int on)
 		drv->dtr_rts(p, on);
 }
 
-static ssize_t port_number_show(struct device *dev,
-				struct device_attribute *attr, char *buf)
-{
-	struct usb_serial_port *port = to_usb_serial_port(dev);
-
-	return sprintf(buf, "%u\n", port->port_number);
-}
-static DEVICE_ATTR_RO(port_number);
-
-static struct attribute *usb_serial_port_attrs[] = {
-	&dev_attr_port_number.attr,
-	NULL
-};
-ATTRIBUTE_GROUPS(usb_serial_port);
-
 static const struct tty_port_operations serial_port_ops = {
 	.carrier_raised		= serial_port_carrier_raised,
 	.dtr_rts		= serial_port_dtr_rts,
 	.activate		= serial_port_activate,
 	.shutdown		= serial_port_shutdown,
 };
-
-static void find_endpoints(struct usb_serial *serial,
-					struct usb_serial_endpoints *epds)
-{
-	struct device *dev = &serial->interface->dev;
-	struct usb_host_interface *iface_desc;
-	struct usb_endpoint_descriptor *epd;
-	unsigned int i;
-
-	BUILD_BUG_ON(ARRAY_SIZE(epds->bulk_in) < USB_MAXENDPOINTS / 2);
-	BUILD_BUG_ON(ARRAY_SIZE(epds->bulk_out) < USB_MAXENDPOINTS / 2);
-	BUILD_BUG_ON(ARRAY_SIZE(epds->interrupt_in) < USB_MAXENDPOINTS / 2);
-	BUILD_BUG_ON(ARRAY_SIZE(epds->interrupt_out) < USB_MAXENDPOINTS / 2);
-
-	iface_desc = serial->interface->cur_altsetting;
-	for (i = 0; i < iface_desc->desc.bNumEndpoints; ++i) {
-		epd = &iface_desc->endpoint[i].desc;
-
-		if (usb_endpoint_is_bulk_in(epd)) {
-			dev_dbg(dev, "found bulk in on endpoint %u\n", i);
-			epds->bulk_in[epds->num_bulk_in++] = epd;
-		} else if (usb_endpoint_is_bulk_out(epd)) {
-			dev_dbg(dev, "found bulk out on endpoint %u\n", i);
-			epds->bulk_out[epds->num_bulk_out++] = epd;
-		} else if (usb_endpoint_is_int_in(epd)) {
-			dev_dbg(dev, "found interrupt in on endpoint %u\n", i);
-			epds->interrupt_in[epds->num_interrupt_in++] = epd;
-		} else if (usb_endpoint_is_int_out(epd)) {
-			dev_dbg(dev, "found interrupt out on endpoint %u\n", i);
-			epds->interrupt_out[epds->num_interrupt_out++] = epd;
-		}
-	}
-}
 
 static int usb_serial_probe(struct usb_interface *interface,
 			       const struct usb_device_id *id)
@@ -749,15 +701,23 @@ static int usb_serial_probe(struct usb_interface *interface,
 	struct usb_device *dev = interface_to_usbdev(interface);
 	struct usb_serial *serial = NULL;
 	struct usb_serial_port *port;
+	struct usb_host_interface *iface_desc;
 	struct usb_endpoint_descriptor *endpoint;
-	struct usb_serial_endpoints *epds;
+	struct usb_endpoint_descriptor *interrupt_in_endpoint[MAX_NUM_PORTS];
+	struct usb_endpoint_descriptor *interrupt_out_endpoint[MAX_NUM_PORTS];
+	struct usb_endpoint_descriptor *bulk_in_endpoint[MAX_NUM_PORTS];
+	struct usb_endpoint_descriptor *bulk_out_endpoint[MAX_NUM_PORTS];
 	struct usb_serial_driver *type = NULL;
 	int retval;
 	int buffer_size;
 	int i;
 	int j;
+	int num_interrupt_in = 0;
+	int num_interrupt_out = 0;
+	int num_bulk_in = 0;
+	int num_bulk_out = 0;
 	int num_ports = 0;
-	unsigned char max_endpoints;
+	int max_endpoints;
 
 	mutex_lock(&table_lock);
 	type = search_serial_device(interface);
@@ -776,8 +736,8 @@ static int usb_serial_probe(struct usb_interface *interface,
 
 	serial = create_serial(dev, interface, type);
 	if (!serial) {
-		retval = -ENOMEM;
-		goto err_put_module;
+		module_put(type->driver.owner);
+		return -ENOMEM;
 	}
 
 	/* if this device type has a probe function, call it */
@@ -789,48 +749,129 @@ static int usb_serial_probe(struct usb_interface *interface,
 
 		if (retval) {
 			dev_dbg(ddev, "sub driver rejected device\n");
-			goto err_put_serial;
+			usb_serial_put(serial);
+			module_put(type->driver.owner);
+			return retval;
 		}
 	}
 
 	/* descriptor matches, let's find the endpoints needed */
-	epds = kzalloc(sizeof(*epds), GFP_KERNEL);
-	if (!epds) {
-		retval = -ENOMEM;
-		goto err_put_serial;
+	/* check out the endpoints */
+	iface_desc = interface->cur_altsetting;
+	for (i = 0; i < iface_desc->desc.bNumEndpoints; ++i) {
+		endpoint = &iface_desc->endpoint[i].desc;
+
+		if (usb_endpoint_is_bulk_in(endpoint)) {
+			/* we found a bulk in endpoint */
+			dev_dbg(ddev, "found bulk in on endpoint %d\n", i);
+			if (num_bulk_in < MAX_NUM_PORTS) {
+				bulk_in_endpoint[num_bulk_in] = endpoint;
+				++num_bulk_in;
+			}
+		}
+
+		if (usb_endpoint_is_bulk_out(endpoint)) {
+			/* we found a bulk out endpoint */
+			dev_dbg(ddev, "found bulk out on endpoint %d\n", i);
+			if (num_bulk_out < MAX_NUM_PORTS) {
+				bulk_out_endpoint[num_bulk_out] = endpoint;
+				++num_bulk_out;
+			}
+		}
+
+		if (usb_endpoint_is_int_in(endpoint)) {
+			/* we found a interrupt in endpoint */
+			dev_dbg(ddev, "found interrupt in on endpoint %d\n", i);
+			if (num_interrupt_in < MAX_NUM_PORTS) {
+				interrupt_in_endpoint[num_interrupt_in] =
+						endpoint;
+				++num_interrupt_in;
+			}
+		}
+
+		if (usb_endpoint_is_int_out(endpoint)) {
+			/* we found an interrupt out endpoint */
+			dev_dbg(ddev, "found interrupt out on endpoint %d\n", i);
+			if (num_interrupt_out < MAX_NUM_PORTS) {
+				interrupt_out_endpoint[num_interrupt_out] =
+						endpoint;
+				++num_interrupt_out;
+			}
+		}
 	}
 
-	find_endpoints(serial, epds);
+#if defined(CONFIG_USB_SERIAL_PL2303) || defined(CONFIG_USB_SERIAL_PL2303_MODULE)
+	/* BEGIN HORRIBLE HACK FOR PL2303 */
+	/* this is needed due to the looney way its endpoints are set up */
+	if (((le16_to_cpu(dev->descriptor.idVendor) == PL2303_VENDOR_ID) &&
+	     (le16_to_cpu(dev->descriptor.idProduct) == PL2303_PRODUCT_ID)) ||
+	    ((le16_to_cpu(dev->descriptor.idVendor) == ATEN_VENDOR_ID) &&
+	     (le16_to_cpu(dev->descriptor.idProduct) == ATEN_PRODUCT_ID)) ||
+	    ((le16_to_cpu(dev->descriptor.idVendor) == ALCOR_VENDOR_ID) &&
+	     (le16_to_cpu(dev->descriptor.idProduct) == ALCOR_PRODUCT_ID)) ||
+	    ((le16_to_cpu(dev->descriptor.idVendor) == SIEMENS_VENDOR_ID) &&
+	     (le16_to_cpu(dev->descriptor.idProduct) == SIEMENS_PRODUCT_ID_EF81))) {
+		if (interface != dev->actconfig->interface[0]) {
+			/* check out the endpoints of the other interface*/
+			iface_desc = dev->actconfig->interface[0]->cur_altsetting;
+			for (i = 0; i < iface_desc->desc.bNumEndpoints; ++i) {
+				endpoint = &iface_desc->endpoint[i].desc;
+				if (usb_endpoint_is_int_in(endpoint)) {
+					/* we found a interrupt in endpoint */
+					dev_dbg(ddev, "found interrupt in for Prolific device on separate interface\n");
+					if (num_interrupt_in < MAX_NUM_PORTS) {
+						interrupt_in_endpoint[num_interrupt_in] = endpoint;
+						++num_interrupt_in;
+					}
+				}
+			}
+		}
 
-	if (epds->num_bulk_in < type->num_bulk_in ||
-			epds->num_bulk_out < type->num_bulk_out ||
-			epds->num_interrupt_in < type->num_interrupt_in ||
-			epds->num_interrupt_out < type->num_interrupt_out) {
-		dev_err(ddev, "required endpoints missing\n");
-		retval = -ENODEV;
-		goto err_free_epds;
+		/* Now make sure the PL-2303 is configured correctly.
+		 * If not, give up now and hope this hack will work
+		 * properly during a later invocation of usb_serial_probe
+		 */
+		if (num_bulk_in == 0 || num_bulk_out == 0) {
+			dev_info(ddev, "PL-2303 hack: descriptors matched but endpoints did not\n");
+			usb_serial_put(serial);
+			module_put(type->driver.owner);
+			return -ENODEV;
+		}
 	}
+	/* END HORRIBLE HACK FOR PL2303 */
+#endif
 
-	if (type->calc_num_ports) {
-		retval = type->calc_num_ports(serial, epds);
-		if (retval < 0)
-			goto err_free_epds;
-		num_ports = retval;
+#ifdef CONFIG_USB_SERIAL_GENERIC
+	if (type == &usb_serial_generic_device) {
+		num_ports = num_bulk_out;
+		if (num_ports == 0) {
+			dev_err(ddev, "Generic device with no bulk out, not allowed.\n");
+			usb_serial_put(serial);
+			module_put(type->driver.owner);
+			return -EIO;
+		}
+		dev_info(ddev, "The \"generic\" usb-serial driver is only for testing and one-off prototypes.\n");
+		dev_info(ddev, "Tell linux-usb@vger.kernel.org to add your device to a proper driver.\n");
 	}
-
-	if (!num_ports)
-		num_ports = type->num_ports;
+#endif
+	if (!num_ports) {
+		/* if this device type has a calc_num_ports function, call it */
+		if (type->calc_num_ports)
+			num_ports = type->calc_num_ports(serial);
+		if (!num_ports)
+			num_ports = type->num_ports;
+	}
 
 	if (num_ports > MAX_NUM_PORTS) {
 		dev_warn(ddev, "too many ports requested: %d\n", num_ports);
 		num_ports = MAX_NUM_PORTS;
 	}
 
-	serial->num_ports = (unsigned char)num_ports;
-	serial->num_bulk_in = epds->num_bulk_in;
-	serial->num_bulk_out = epds->num_bulk_out;
-	serial->num_interrupt_in = epds->num_interrupt_in;
-	serial->num_interrupt_out = epds->num_interrupt_out;
+	serial->num_ports = num_ports;
+	serial->num_bulk_in = num_bulk_in;
+	serial->num_bulk_out = num_bulk_out;
+	serial->num_interrupt_in = num_interrupt_in;
+	serial->num_interrupt_out = num_interrupt_out;
 
 	/* found all that we need */
 	dev_info(ddev, "%s converter detected\n", type->description);
@@ -838,13 +879,13 @@ static int usb_serial_probe(struct usb_interface *interface,
 	/* create our ports, we need as many as the max endpoints */
 	/* we don't use num_ports here because some devices have more
 	   endpoint pairs than ports */
-	max_endpoints = max(epds->num_bulk_in, epds->num_bulk_out);
-	max_endpoints = max(max_endpoints, epds->num_interrupt_in);
-	max_endpoints = max(max_endpoints, epds->num_interrupt_out);
-	max_endpoints = max(max_endpoints, serial->num_ports);
+	max_endpoints = max(num_bulk_in, num_bulk_out);
+	max_endpoints = max(max_endpoints, num_interrupt_in);
+	max_endpoints = max(max_endpoints, num_interrupt_out);
+	max_endpoints = max(max_endpoints, (int)serial->num_ports);
 	serial->num_port_pointers = max_endpoints;
 
-	dev_dbg(ddev, "setting up %d port structure(s)\n", max_endpoints);
+	dev_dbg(ddev, "setting up %d port structures for this device", max_endpoints);
 	for (i = 0; i < max_endpoints; ++i) {
 		port = kzalloc(sizeof(struct usb_serial_port), GFP_KERNEL);
 		if (!port)
@@ -861,13 +902,12 @@ static int usb_serial_probe(struct usb_interface *interface,
 		port->dev.driver = NULL;
 		port->dev.bus = &usb_serial_bus_type;
 		port->dev.release = &usb_serial_port_release;
-		port->dev.groups = usb_serial_port_groups;
 		device_initialize(&port->dev);
 	}
 
 	/* set up the endpoint information */
-	for (i = 0; i < epds->num_bulk_in; ++i) {
-		endpoint = epds->bulk_in[i];
+	for (i = 0; i < num_bulk_in; ++i) {
+		endpoint = bulk_in_endpoint[i];
 		port = serial->port[i];
 		buffer_size = max_t(int, serial->type->bulk_in_size,
 				usb_endpoint_maxp(endpoint));
@@ -895,8 +935,8 @@ static int usb_serial_probe(struct usb_interface *interface,
 		port->bulk_in_buffer = port->bulk_in_buffers[0];
 	}
 
-	for (i = 0; i < epds->num_bulk_out; ++i) {
-		endpoint = epds->bulk_out[i];
+	for (i = 0; i < num_bulk_out; ++i) {
+		endpoint = bulk_out_endpoint[i];
 		port = serial->port[i];
 		if (kfifo_alloc(&port->write_fifo, PAGE_SIZE, GFP_KERNEL))
 			goto probe_error;
@@ -928,8 +968,8 @@ static int usb_serial_probe(struct usb_interface *interface,
 	}
 
 	if (serial->type->read_int_callback) {
-		for (i = 0; i < epds->num_interrupt_in; ++i) {
-			endpoint = epds->interrupt_in[i];
+		for (i = 0; i < num_interrupt_in; ++i) {
+			endpoint = interrupt_in_endpoint[i];
 			port = serial->port[i];
 			port->interrupt_in_urb = usb_alloc_urb(0, GFP_KERNEL);
 			if (!port->interrupt_in_urb)
@@ -948,13 +988,13 @@ static int usb_serial_probe(struct usb_interface *interface,
 				serial->type->read_int_callback, port,
 				endpoint->bInterval);
 		}
-	} else if (epds->num_interrupt_in) {
+	} else if (num_interrupt_in) {
 		dev_dbg(ddev, "The device claims to support interrupt in transfers, but read_int_callback is not defined\n");
 	}
 
 	if (serial->type->write_int_callback) {
-		for (i = 0; i < epds->num_interrupt_out; ++i) {
-			endpoint = epds->interrupt_out[i];
+		for (i = 0; i < num_interrupt_out; ++i) {
+			endpoint = interrupt_out_endpoint[i];
 			port = serial->port[i];
 			port->interrupt_out_urb = usb_alloc_urb(0, GFP_KERNEL);
 			if (!port->interrupt_out_urb)
@@ -974,7 +1014,7 @@ static int usb_serial_probe(struct usb_interface *interface,
 				serial->type->write_int_callback, port,
 				endpoint->bInterval);
 		}
-	} else if (epds->num_interrupt_out) {
+	} else if (num_interrupt_out) {
 		dev_dbg(ddev, "The device claims to support interrupt out transfers, but write_int_callback is not defined\n");
 	}
 
@@ -996,6 +1036,12 @@ static int usb_serial_probe(struct usb_interface *interface,
 		serial->attached = 1;
 	}
 
+	/* Avoid race with tty_open and serial_install by setting the
+	 * disconnected flag and not clearing it until all ports have been
+	 * registered.
+	 */
+	serial->disconnected = 1;
+
 	if (allocate_minors(serial, num_ports)) {
 		dev_err(ddev, "No more free serial minor numbers\n");
 		goto probe_error;
@@ -1005,7 +1051,7 @@ static int usb_serial_probe(struct usb_interface *interface,
 	for (i = 0; i < num_ports; ++i) {
 		port = serial->port[i];
 		dev_set_name(&port->dev, "ttyUSB%d", port->minor);
-		dev_dbg(ddev, "registering %s\n", dev_name(&port->dev));
+		dev_dbg(ddev, "registering %s", dev_name(&port->dev));
 		device_enable_async_suspend(&port->dev);
 
 		retval = device_add(&port->dev);
@@ -1013,23 +1059,17 @@ static int usb_serial_probe(struct usb_interface *interface,
 			dev_err(ddev, "Error registering port device, continuing\n");
 	}
 
-	if (num_ports > 0)
-		usb_serial_console_init(serial->port[0]->minor);
+	serial->disconnected = 0;
+
+	usb_serial_console_init(serial->port[0]->minor);
 exit:
-	kfree(epds);
 	module_put(type->driver.owner);
 	return 0;
 
 probe_error:
-	retval = -EIO;
-err_free_epds:
-	kfree(epds);
-err_put_serial:
 	usb_serial_put(serial);
-err_put_module:
 	module_put(type->driver.owner);
-
-	return retval;
+	return -EIO;
 }
 
 static void usb_serial_disconnect(struct usb_interface *interface)
@@ -1038,7 +1078,6 @@ static void usb_serial_disconnect(struct usb_interface *interface)
 	struct usb_serial *serial = usb_get_intfdata(interface);
 	struct device *dev = &interface->dev;
 	struct usb_serial_port *port;
-	struct tty_struct *tty;
 
 	usb_serial_console_disconnect(serial);
 
@@ -1049,16 +1088,18 @@ static void usb_serial_disconnect(struct usb_interface *interface)
 
 	for (i = 0; i < serial->num_ports; ++i) {
 		port = serial->port[i];
-		tty = tty_port_tty_get(&port->port);
-		if (tty) {
-			tty_vhangup(tty);
-			tty_kref_put(tty);
+		if (port) {
+			struct tty_struct *tty = tty_port_tty_get(&port->port);
+			if (tty) {
+				tty_vhangup(tty);
+				tty_kref_put(tty);
+			}
+			usb_serial_port_poison_urbs(port);
+			wake_up_interruptible(&port->port.delta_msr_wait);
+			cancel_work_sync(&port->work);
+			if (device_is_registered(&port->dev))
+				device_del(&port->dev);
 		}
-		usb_serial_port_poison_urbs(port);
-		wake_up_interruptible(&port->port.delta_msr_wait);
-		cancel_work_sync(&port->work);
-		if (device_is_registered(&port->dev))
-			device_del(&port->dev);
 	}
 	if (serial->type->disconnect)
 		serial->type->disconnect(serial);
@@ -1071,6 +1112,7 @@ static void usb_serial_disconnect(struct usb_interface *interface)
 int usb_serial_suspend(struct usb_interface *intf, pm_message_t message)
 {
 	struct usb_serial *serial = usb_get_intfdata(intf);
+	struct usb_serial_port *port;
 	int i, r = 0;
 
 	serial->suspending = 1;
@@ -1088,8 +1130,12 @@ int usb_serial_suspend(struct usb_interface *intf, pm_message_t message)
 		}
 	}
 
-	for (i = 0; i < serial->num_ports; ++i)
-		usb_serial_port_poison_urbs(serial->port[i]);
+	for (i = 0; i < serial->num_ports; ++i) {
+		port = serial->port[i];
+		if (port)
+			usb_serial_port_poison_urbs(port);
+	}
+
 err_out:
 	return r;
 }
@@ -1097,10 +1143,14 @@ EXPORT_SYMBOL(usb_serial_suspend);
 
 static void usb_serial_unpoison_port_urbs(struct usb_serial *serial)
 {
+	struct usb_serial_port *port;
 	int i;
 
-	for (i = 0; i < serial->num_ports; ++i)
-		usb_serial_port_unpoison_urbs(serial->port[i]);
+	for (i = 0; i < serial->num_ports; ++i) {
+		port = serial->port[i];
+		if (port)
+			usb_serial_port_unpoison_urbs(port);
+	}
 }
 
 int usb_serial_resume(struct usb_interface *intf)
@@ -1128,9 +1178,9 @@ static int usb_serial_reset_resume(struct usb_interface *intf)
 	usb_serial_unpoison_port_urbs(serial);
 
 	serial->suspending = 0;
-	if (serial->type->reset_resume) {
+	if (serial->type->reset_resume)
 		rv = serial->type->reset_resume(serial);
-	} else {
+	else {
 		rv = -EOPNOTSUPP;
 		intf->needs_binding = 1;
 	}
@@ -1250,7 +1300,6 @@ static void __exit usb_serial_exit(void)
 	tty_unregister_driver(usb_serial_tty_driver);
 	put_tty_driver(usb_serial_tty_driver);
 	bus_unregister(&usb_serial_bus_type);
-	idr_destroy(&serial_minors);
 }
 
 
@@ -1306,9 +1355,9 @@ static int usb_serial_register(struct usb_serial_driver *driver)
 	if (retval) {
 		pr_err("problem %d when registering driver %s\n", retval, driver->description);
 		list_del(&driver->driver_list);
-	} else {
+	} else
 		pr_info("USB Serial support registered for %s\n", driver->description);
-	}
+
 	mutex_unlock(&table_lock);
 	return retval;
 }
@@ -1376,7 +1425,7 @@ int usb_serial_register_drivers(struct usb_serial_driver *const serial_drivers[]
 
 	rc = usb_register(udriver);
 	if (rc)
-		goto failed_usb_register;
+		return rc;
 
 	for (sd = serial_drivers; *sd; ++sd) {
 		(*sd)->usb_driver = udriver;
@@ -1394,8 +1443,6 @@ int usb_serial_register_drivers(struct usb_serial_driver *const serial_drivers[]
 	while (sd-- > serial_drivers)
 		usb_serial_deregister(*sd);
 	usb_deregister(udriver);
-failed_usb_register:
-	kfree(udriver);
 	return rc;
 }
 EXPORT_SYMBOL_GPL(usb_serial_register_drivers);

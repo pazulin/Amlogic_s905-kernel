@@ -36,9 +36,6 @@
 #include <linux/debugfs.h>
 #include <linux/seq_file.h>
 #include <linux/i8042.h>
-#include <linux/dmi.h>
-#include <linux/device.h>
-#include <acpi/video.h>
 
 #define IDEAPAD_RFKILL_DEV_NUM	(3)
 
@@ -46,13 +43,6 @@
 #define CFG_3G_BIT	(17)
 #define CFG_WIFI_BIT	(18)
 #define CFG_CAMERA_BIT	(19)
-
-#if IS_ENABLED(CONFIG_ACPI_WMI)
-static const char *const ideapad_wmi_fnesc_events[] = {
-	"26CAB2E5-5CF1-46AE-AAC3-4A12B6BA50E6", /* Yoga 3 */
-	"56322276-8493-4CE8-A783-98C991274F5E", /* Yoga 700 */
-};
-#endif
 
 enum {
 	VPCCMD_R_VPC1 = 0x10,
@@ -95,8 +85,6 @@ struct ideapad_private {
 	struct backlight_device *blightdev;
 	struct dentry *debug;
 	unsigned long cfg;
-	bool has_hw_rfkill_switch;
-	const char *fnesc_guid;
 };
 
 static bool no_bt_rfkill;
@@ -449,7 +437,7 @@ static umode_t ideapad_is_visible(struct kobject *kobj,
 	return supported ? attr->mode : 0;
 }
 
-static const struct attribute_group ideapad_attribute_group = {
+static struct attribute_group ideapad_attribute_group = {
 	.is_visible = ideapad_is_visible,
 	.attrs = ideapad_attributes
 };
@@ -464,7 +452,7 @@ struct ideapad_rfk_data {
 	int type;
 };
 
-static const struct ideapad_rfk_data ideapad_rfk_data[] = {
+const struct ideapad_rfk_data ideapad_rfk_data[] = {
 	{ "ideapad_wlan",    CFG_WIFI_BIT, VPCCMD_W_WIFI, RFKILL_TYPE_WLAN },
 	{ "ideapad_bluetooth", CFG_BT_BIT, VPCCMD_W_BT, RFKILL_TYPE_BLUETOOTH },
 	{ "ideapad_3g",        CFG_3G_BIT, VPCCMD_W_3G, RFKILL_TYPE_WWAN },
@@ -473,9 +461,8 @@ static const struct ideapad_rfk_data ideapad_rfk_data[] = {
 static int ideapad_rfk_set(void *data, bool blocked)
 {
 	struct ideapad_rfk_priv *priv = data;
-	int opcode = ideapad_rfk_data[priv->dev].opcode;
 
-	return write_ec_cmd(priv->priv->adev->handle, opcode, !blocked);
+	return write_ec_cmd(priv->priv->adev->handle, priv->dev, !blocked);
 }
 
 static struct rfkill_ops ideapad_rfk_ops = {
@@ -484,14 +471,12 @@ static struct rfkill_ops ideapad_rfk_ops = {
 
 static void ideapad_sync_rfk_state(struct ideapad_private *priv)
 {
-	unsigned long hw_blocked = 0;
+	unsigned long hw_blocked;
 	int i;
 
-	if (priv->has_hw_rfkill_switch) {
-		if (read_ec_data(priv->adev->handle, VPCCMD_R_RF, &hw_blocked))
-			return;
-		hw_blocked = !hw_blocked;
-	}
+	if (read_ec_data(priv->adev->handle, VPCCMD_R_RF, &hw_blocked))
+		return;
+	hw_blocked = !hw_blocked;
 
 	for (i = 0; i < IDEAPAD_RFKILL_DEV_NUM; i++)
 		if (priv->rfk[i])
@@ -567,7 +552,6 @@ static void ideapad_sysfs_exit(struct ideapad_private *priv)
 static const struct key_entry ideapad_keymap[] = {
 	{ KE_KEY, 6,  { KEY_SWITCHVIDEOMODE } },
 	{ KE_KEY, 7,  { KEY_CAMERA } },
-	{ KE_KEY, 8,  { KEY_MICMUTE } },
 	{ KE_KEY, 11, { KEY_F16 } },
 	{ KE_KEY, 13, { KEY_WLAN } },
 	{ KE_KEY, 16, { KEY_PROG1 } },
@@ -576,8 +560,6 @@ static const struct key_entry ideapad_keymap[] = {
 	{ KE_KEY, 65, { KEY_PROG4 } },
 	{ KE_KEY, 66, { KEY_TOUCHPAD_OFF } },
 	{ KE_KEY, 67, { KEY_TOUCHPAD_ON } },
-	{ KE_KEY, 128, { KEY_ESC } },
-
 	{ KE_END, 0 },
 };
 
@@ -604,12 +586,14 @@ static int ideapad_input_init(struct ideapad_private *priv)
 	error = input_register_device(inputdev);
 	if (error) {
 		pr_err("Unable to register input device\n");
-		goto err_free_dev;
+		goto err_free_keymap;
 	}
 
 	priv->inputdev = inputdev;
 	return 0;
 
+err_free_keymap:
+	sparse_keymap_free(inputdev);
 err_free_dev:
 	input_free_device(inputdev);
 	return error;
@@ -617,6 +601,7 @@ err_free_dev:
 
 static void ideapad_input_exit(struct ideapad_private *priv)
 {
+	sparse_keymap_free(priv->inputdev);
 	input_unregister_device(priv->inputdev);
 	priv->inputdev = NULL;
 }
@@ -739,7 +724,8 @@ static int ideapad_backlight_init(struct ideapad_private *priv)
 
 static void ideapad_backlight_exit(struct ideapad_private *priv)
 {
-	backlight_device_unregister(priv->blightdev);
+	if (priv->blightdev)
+		backlight_device_unregister(priv->blightdev);
 	priv->blightdev = NULL;
 }
 
@@ -807,10 +793,8 @@ static void ideapad_acpi_notify(acpi_handle handle, u32 event, void *data)
 				break;
 			case 13:
 			case 11:
-			case 8:
 			case 7:
 			case 6:
-			case 1:
 				ideapad_input_report(priv, vpc_bit);
 				break;
 			case 5:
@@ -835,140 +819,6 @@ static void ideapad_acpi_notify(acpi_handle handle, u32 event, void *data)
 	}
 }
 
-#if IS_ENABLED(CONFIG_ACPI_WMI)
-static void ideapad_wmi_notify(u32 value, void *context)
-{
-	switch (value) {
-	case 128:
-		ideapad_input_report(context, value);
-		break;
-	default:
-		pr_info("Unknown WMI event %u\n", value);
-	}
-}
-#endif
-
-/*
- * Some ideapads don't have a hardware rfkill switch, reading VPCCMD_R_RF
- * always results in 0 on these models, causing ideapad_laptop to wrongly
- * report all radios as hardware-blocked.
- */
-static const struct dmi_system_id no_hw_rfkill_list[] = {
-	{
-		.ident = "Lenovo G40-30",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo G40-30"),
-		},
-	},
-	{
-		.ident = "Lenovo G50-30",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo G50-30"),
-		},
-	},
-	{
-		.ident = "Lenovo V310-15ISK",
-		.matches = {
-		        DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-		        DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo V310-15ISK"),
-		},
-	},
-	{
-		.ident = "Lenovo ideapad 310-15IKB",
-		.matches = {
-		        DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-		        DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo ideapad 310-15IKB"),
-		},
-	},
-	{
-		.ident = "Lenovo ideapad Y700-15ACZ",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo ideapad Y700-15ACZ"),
-		},
-	},
-	{
-		.ident = "Lenovo ideapad Y700-15ISK",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo ideapad Y700-15ISK"),
-		},
-	},
-	{
-		.ident = "Lenovo ideapad Y700 Touch-15ISK",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo ideapad Y700 Touch-15ISK"),
-		},
-	},
-	{
-		.ident = "Lenovo ideapad Y700-17ISK",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo ideapad Y700-17ISK"),
-		},
-	},
-	{
-		.ident = "Lenovo Yoga 2 11 / 13 / Pro",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo Yoga 2"),
-		},
-	},
-	{
-		.ident = "Lenovo Yoga 2 11 / 13 / Pro",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_BOARD_NAME, "Yoga2"),
-		},
-	},
-	{
-		.ident = "Lenovo Yoga 3 1170 / 1470",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo Yoga 3"),
-		},
-	},
-	{
-		.ident = "Lenovo Yoga 3 Pro 1370",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo YOGA 3"),
-		},
-	},
-	{
-		.ident = "Lenovo Yoga 700",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo YOGA 700"),
-		},
-	},
-	{
-		.ident = "Lenovo Yoga 900",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo YOGA 900"),
-		},
-	},
-	{
-		.ident = "Lenovo Yoga 900",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_BOARD_NAME, "VIUU4"),
-		},
-	},
-	{
-		.ident = "Lenovo YOGA 910-13IKB",
-		.matches = {
-			DMI_MATCH(DMI_SYS_VENDOR, "LENOVO"),
-			DMI_MATCH(DMI_PRODUCT_VERSION, "Lenovo YOGA 910-13IKB"),
-		},
-	},
-	{}
-};
-
 static int ideapad_acpi_add(struct platform_device *pdev)
 {
 	int ret, i;
@@ -983,7 +833,7 @@ static int ideapad_acpi_add(struct platform_device *pdev)
 	if (read_method_int(adev->handle, "_CFG", &cfg))
 		return -ENODEV;
 
-	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
+	priv = kzalloc(sizeof(*priv), GFP_KERNEL);
 	if (!priv)
 		return -ENOMEM;
 
@@ -991,11 +841,10 @@ static int ideapad_acpi_add(struct platform_device *pdev)
 	priv->cfg = cfg;
 	priv->adev = adev;
 	priv->platform_device = pdev;
-	priv->has_hw_rfkill_switch = !dmi_check_system(no_hw_rfkill_list);
 
 	ret = ideapad_sysfs_init(priv);
 	if (ret)
-		return ret;
+		goto sysfs_failed;
 
 	ret = ideapad_debugfs_init(priv);
 	if (ret)
@@ -1005,21 +854,16 @@ static int ideapad_acpi_add(struct platform_device *pdev)
 	if (ret)
 		goto input_failed;
 
-	/*
-	 * On some models without a hw-switch (the yoga 2 13 at least)
-	 * VPCCMD_W_RF must be explicitly set to 1 for the wifi to work.
-	 */
-	if (!priv->has_hw_rfkill_switch)
-		write_ec_cmd(priv->adev->handle, VPCCMD_W_RF, 1);
-
-	for (i = 0; i < IDEAPAD_RFKILL_DEV_NUM; i++)
+	for (i = 0; i < IDEAPAD_RFKILL_DEV_NUM; i++) {
 		if (test_bit(ideapad_rfk_data[i].cfgbit, &priv->cfg))
 			ideapad_register_rfkill(priv, i);
-
+		else
+			priv->rfk[i] = NULL;
+	}
 	ideapad_sync_rfk_state(priv);
 	ideapad_sync_touchpad_state(priv);
 
-	if (acpi_video_get_backlight_type() == acpi_backlight_vendor) {
+	if (!acpi_video_backlight_support()) {
 		ret = ideapad_backlight_init(priv);
 		if (ret && ret != -ENODEV)
 			goto backlight_failed;
@@ -1029,25 +873,7 @@ static int ideapad_acpi_add(struct platform_device *pdev)
 	if (ret)
 		goto notification_failed;
 
-#if IS_ENABLED(CONFIG_ACPI_WMI)
-	for (i = 0; i < ARRAY_SIZE(ideapad_wmi_fnesc_events); i++) {
-		ret = wmi_install_notify_handler(ideapad_wmi_fnesc_events[i],
-						 ideapad_wmi_notify, priv);
-		if (ret == AE_OK) {
-			priv->fnesc_guid = ideapad_wmi_fnesc_events[i];
-			break;
-		}
-	}
-	if (ret != AE_OK && ret != AE_NOT_EXIST)
-		goto notification_failed_wmi;
-#endif
-
 	return 0;
-#if IS_ENABLED(CONFIG_ACPI_WMI)
-notification_failed_wmi:
-	acpi_remove_notify_handler(priv->adev->handle,
-		ACPI_DEVICE_NOTIFY, ideapad_acpi_notify);
-#endif
 notification_failed:
 	ideapad_backlight_exit(priv);
 backlight_failed:
@@ -1058,6 +884,8 @@ input_failed:
 	ideapad_debugfs_exit(priv);
 debugfs_failed:
 	ideapad_sysfs_exit(priv);
+sysfs_failed:
+	kfree(priv);
 	return ret;
 }
 
@@ -1066,10 +894,6 @@ static int ideapad_acpi_remove(struct platform_device *pdev)
 	struct ideapad_private *priv = dev_get_drvdata(&pdev->dev);
 	int i;
 
-#if IS_ENABLED(CONFIG_ACPI_WMI)
-	if (priv->fnesc_guid)
-		wmi_remove_notify_handler(priv->fnesc_guid);
-#endif
 	acpi_remove_notify_handler(priv->adev->handle,
 		ACPI_DEVICE_NOTIFY, ideapad_acpi_notify);
 	ideapad_backlight_exit(priv);
@@ -1079,6 +903,7 @@ static int ideapad_acpi_remove(struct platform_device *pdev)
 	ideapad_debugfs_exit(priv);
 	ideapad_sysfs_exit(priv);
 	dev_set_drvdata(&pdev->dev, NULL);
+	kfree(priv);
 
 	return 0;
 }
@@ -1110,6 +935,7 @@ static struct platform_driver ideapad_acpi_driver = {
 	.remove = ideapad_acpi_remove,
 	.driver = {
 		.name   = "ideapad_acpi",
+		.owner  = THIS_MODULE,
 		.pm     = &ideapad_pm,
 		.acpi_match_table = ACPI_PTR(ideapad_device_ids),
 	},

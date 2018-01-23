@@ -9,7 +9,6 @@
 #include <asm/cacheflush.h>
 
 #include <linux/io.h>
-#include <linux/mm_types.h>
 
 static inline void enter_lazy_tlb(struct mm_struct *mm,
 				  struct task_struct *tsk)

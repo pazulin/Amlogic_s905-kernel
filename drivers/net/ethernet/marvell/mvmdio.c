@@ -53,7 +53,7 @@
 struct orion_mdio_dev {
 	struct mutex lock;
 	void __iomem *regs;
-	struct clk *clk[3];
+	struct clk *clk;
 	/*
 	 * If we have access to the error interrupt pin (which is
 	 * somewhat misnamed as it not only reflects internal errors
@@ -167,6 +167,11 @@ out:
 	return ret;
 }
 
+static int orion_mdio_reset(struct mii_bus *bus)
+{
+	return 0;
+}
+
 static irqreturn_t orion_mdio_err_irq(int irq, void *dev_id)
 {
 	struct orion_mdio_dev *dev = dev_id;
@@ -195,42 +200,45 @@ static int orion_mdio_probe(struct platform_device *pdev)
 		return -ENODEV;
 	}
 
-	bus = devm_mdiobus_alloc_size(&pdev->dev,
-				      sizeof(struct orion_mdio_dev));
-	if (!bus)
+	bus = mdiobus_alloc_size(sizeof(struct orion_mdio_dev));
+	if (!bus) {
+		dev_err(&pdev->dev, "Cannot allocate MDIO bus\n");
 		return -ENOMEM;
+	}
 
 	bus->name = "orion_mdio_bus";
 	bus->read = orion_mdio_read;
 	bus->write = orion_mdio_write;
+	bus->reset = orion_mdio_reset;
 	snprintf(bus->id, MII_BUS_ID_SIZE, "%s-mii",
 		 dev_name(&pdev->dev));
 	bus->parent = &pdev->dev;
+
+	bus->irq = kmalloc(sizeof(int) * PHY_MAX_ADDR, GFP_KERNEL);
+	if (!bus->irq) {
+		mdiobus_free(bus);
+		return -ENOMEM;
+	}
+
+	for (i = 0; i < PHY_MAX_ADDR; i++)
+		bus->irq[i] = PHY_POLL;
 
 	dev = bus->priv;
 	dev->regs = devm_ioremap(&pdev->dev, r->start, resource_size(r));
 	if (!dev->regs) {
 		dev_err(&pdev->dev, "Unable to remap SMI register\n");
-		return -ENODEV;
+		ret = -ENODEV;
+		goto out_mdio;
 	}
 
 	init_waitqueue_head(&dev->smi_busy_wait);
 
-	for (i = 0; i < ARRAY_SIZE(dev->clk); i++) {
-		dev->clk[i] = of_clk_get(pdev->dev.of_node, i);
-		if (IS_ERR(dev->clk[i]))
-			break;
-		clk_prepare_enable(dev->clk[i]);
-	}
+	dev->clk = devm_clk_get(&pdev->dev, NULL);
+	if (!IS_ERR(dev->clk))
+		clk_prepare_enable(dev->clk);
 
 	dev->err_interrupt = platform_get_irq(pdev, 0);
-	if (dev->err_interrupt > 0 &&
-	    resource_size(r) < MVMDIO_ERR_INT_MASK + 4) {
-		dev_err(&pdev->dev,
-			"disabling interrupt, resource size is too small\n");
-		dev->err_interrupt = 0;
-	}
-	if (dev->err_interrupt > 0) {
+	if (dev->err_interrupt != -ENXIO) {
 		ret = devm_request_irq(&pdev->dev, dev->err_interrupt,
 					orion_mdio_err_irq,
 					IRQF_SHARED, pdev->name, dev);
@@ -239,9 +247,6 @@ static int orion_mdio_probe(struct platform_device *pdev)
 
 		writel(MVMDIO_ERR_INT_SMI_DONE,
 			dev->regs + MVMDIO_ERR_INT_MASK);
-
-	} else if (dev->err_interrupt == -EPROBE_DEFER) {
-		return -EPROBE_DEFER;
 	}
 
 	mutex_init(&dev->lock);
@@ -260,16 +265,10 @@ static int orion_mdio_probe(struct platform_device *pdev)
 	return 0;
 
 out_mdio:
-	if (dev->err_interrupt > 0)
-		writel(0, dev->regs + MVMDIO_ERR_INT_MASK);
-
-	for (i = 0; i < ARRAY_SIZE(dev->clk); i++) {
-		if (IS_ERR(dev->clk[i]))
-			break;
-		clk_disable_unprepare(dev->clk[i]);
-		clk_put(dev->clk[i]);
-	}
-
+	if (!IS_ERR(dev->clk))
+		clk_disable_unprepare(dev->clk);
+	kfree(bus->irq);
+	mdiobus_free(bus);
 	return ret;
 }
 
@@ -277,18 +276,13 @@ static int orion_mdio_remove(struct platform_device *pdev)
 {
 	struct mii_bus *bus = platform_get_drvdata(pdev);
 	struct orion_mdio_dev *dev = bus->priv;
-	int i;
 
-	if (dev->err_interrupt > 0)
-		writel(0, dev->regs + MVMDIO_ERR_INT_MASK);
+	writel(0, dev->regs + MVMDIO_ERR_INT_MASK);
 	mdiobus_unregister(bus);
-
-	for (i = 0; i < ARRAY_SIZE(dev->clk); i++) {
-		if (IS_ERR(dev->clk[i]))
-			break;
-		clk_disable_unprepare(dev->clk[i]);
-		clk_put(dev->clk[i]);
-	}
+	kfree(bus->irq);
+	mdiobus_free(bus);
+	if (!IS_ERR(dev->clk))
+		clk_disable_unprepare(dev->clk);
 
 	return 0;
 }

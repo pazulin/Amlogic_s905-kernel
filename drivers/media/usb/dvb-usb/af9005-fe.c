@@ -15,6 +15,10 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *
  * see Documentation/dvb/README.dvb-usb for more information
  */
 #include "af9005.h"
@@ -25,7 +29,7 @@
 
 struct af9005_fe_state {
 	struct dvb_usb_device *d;
-	enum fe_status stat;
+	fe_status_t stat;
 
 	/* retraining parameters */
 	u32 original_fcw;
@@ -433,8 +437,7 @@ static int af9005_fe_refresh_state(struct dvb_frontend *fe)
 	return 0;
 }
 
-static int af9005_fe_read_status(struct dvb_frontend *fe,
-				 enum fe_status *stat)
+static int af9005_fe_read_status(struct dvb_frontend *fe, fe_status_t * stat)
 {
 	struct af9005_fe_state *state = fe->demodulator_priv;
 	u8 temp;
@@ -478,7 +481,7 @@ static int af9005_fe_read_status(struct dvb_frontend *fe,
 		return ret;
 	if (temp != state->strong) {
 		deb_info("adjust for strong signal %d\n", temp);
-		state->strong = temp;
+			state->strong = temp;
 	}
 	return 0;
 }
@@ -1223,9 +1226,9 @@ static int af9005_fe_set_frontend(struct dvb_frontend *fe)
 	return 0;
 }
 
-static int af9005_fe_get_frontend(struct dvb_frontend *fe,
-				  struct dtv_frontend_properties *fep)
+static int af9005_fe_get_frontend(struct dvb_frontend *fe)
 {
+	struct dtv_frontend_properties *fep = &fe->dtv_property_cache;
 	struct af9005_fe_state *state = fe->demodulator_priv;
 	int ret;
 	u8 temp;
@@ -1426,7 +1429,7 @@ static void af9005_fe_release(struct dvb_frontend *fe)
 	kfree(state);
 }
 
-static const struct dvb_frontend_ops af9005_fe_ops;
+static struct dvb_frontend_ops af9005_fe_ops;
 
 struct dvb_frontend *af9005_fe_attach(struct dvb_usb_device *d)
 {
@@ -1451,7 +1454,7 @@ struct dvb_frontend *af9005_fe_attach(struct dvb_usb_device *d)
 	return NULL;
 }
 
-static const struct dvb_frontend_ops af9005_fe_ops = {
+static struct dvb_frontend_ops af9005_fe_ops = {
 	.delsys = { SYS_DVBT },
 	.info = {
 		 .name = "AF9005 USB DVB-T",

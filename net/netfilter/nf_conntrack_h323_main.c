@@ -637,6 +637,7 @@ static const struct nf_conntrack_expect_policy h245_exp_policy = {
 static struct nf_conntrack_helper nf_conntrack_helper_h245 __read_mostly = {
 	.name			= "H.245",
 	.me			= THIS_MODULE,
+	.data_len		= sizeof(struct nf_ct_h323_master),
 	.tuple.src.l3num	= AF_UNSPEC,
 	.tuple.dst.protonum	= IPPROTO_UDP,
 	.help			= h245_help,
@@ -727,15 +728,14 @@ static int expect_h245(struct sk_buff *skb, struct nf_conn *ct,
 
 /* If the calling party is on the same side of the forward-to party,
  * we don't need to track the second call */
-static int callforward_do_filter(struct net *net,
-				 const union nf_inet_addr *src,
+static int callforward_do_filter(const union nf_inet_addr *src,
 				 const union nf_inet_addr *dst,
 				 u_int8_t family)
 {
 	const struct nf_afinfo *afinfo;
 	int ret = 0;
 
-	/* rcu_read_lock()ed by nf_hook_thresh */
+	/* rcu_read_lock()ed by nf_hook_slow() */
 	afinfo = nf_get_afinfo(family);
 	if (!afinfo)
 		return 0;
@@ -750,9 +750,9 @@ static int callforward_do_filter(struct net *net,
 
 		memset(&fl2, 0, sizeof(fl2));
 		fl2.daddr = dst->ip;
-		if (!afinfo->route(net, (struct dst_entry **)&rt1,
+		if (!afinfo->route(&init_net, (struct dst_entry **)&rt1,
 				   flowi4_to_flowi(&fl1), false)) {
-			if (!afinfo->route(net, (struct dst_entry **)&rt2,
+			if (!afinfo->route(&init_net, (struct dst_entry **)&rt2,
 					   flowi4_to_flowi(&fl2), false)) {
 				if (rt_nexthop(rt1, fl1.daddr) ==
 				    rt_nexthop(rt2, fl2.daddr) &&
@@ -774,12 +774,12 @@ static int callforward_do_filter(struct net *net,
 
 		memset(&fl2, 0, sizeof(fl2));
 		fl2.daddr = dst->in6;
-		if (!afinfo->route(net, (struct dst_entry **)&rt1,
+		if (!afinfo->route(&init_net, (struct dst_entry **)&rt1,
 				   flowi6_to_flowi(&fl1), false)) {
-			if (!afinfo->route(net, (struct dst_entry **)&rt2,
+			if (!afinfo->route(&init_net, (struct dst_entry **)&rt2,
 					   flowi6_to_flowi(&fl2), false)) {
-				if (ipv6_addr_equal(rt6_nexthop(rt1, &fl1.daddr),
-						    rt6_nexthop(rt2, &fl2.daddr)) &&
+				if (ipv6_addr_equal(rt6_nexthop(rt1),
+						    rt6_nexthop(rt2)) &&
 				    rt1->dst.dev == rt2->dst.dev)
 					ret = 1;
 				dst_release(&rt2->dst);
@@ -807,7 +807,6 @@ static int expect_callforwarding(struct sk_buff *skb,
 	__be16 port;
 	union nf_inet_addr addr;
 	struct nf_conntrack_expect *exp;
-	struct net *net = nf_ct_net(ct);
 	typeof(nat_callforwarding_hook) nat_callforwarding;
 
 	/* Read alternativeAddress */
@@ -817,7 +816,7 @@ static int expect_callforwarding(struct sk_buff *skb,
 	/* If the calling party is on the same side of the forward-to party,
 	 * we don't need to track the second call */
 	if (callforward_filter &&
-	    callforward_do_filter(net, &addr, &ct->tuplehash[!dir].tuple.src.u3,
+	    callforward_do_filter(&addr, &ct->tuplehash[!dir].tuple.src.u3,
 				  nf_ct_l3num(ct))) {
 		pr_debug("nf_ct_q931: Call Forwarding not tracked\n");
 		return 0;
@@ -1214,6 +1213,7 @@ static struct nf_conntrack_helper nf_conntrack_helper_q931[] __read_mostly = {
 	{
 		.name			= "Q.931",
 		.me			= THIS_MODULE,
+		.data_len		= sizeof(struct nf_ct_h323_master),
 		.tuple.src.l3num	= AF_INET,
 		.tuple.src.u.tcp.port	= cpu_to_be16(Q931_PORT),
 		.tuple.dst.protonum	= IPPROTO_TCP,
@@ -1268,6 +1268,19 @@ static struct nf_conntrack_expect *find_expect(struct nf_conn *ct,
 	if (exp && exp->master == ct)
 		return exp;
 	return NULL;
+}
+
+/****************************************************************************/
+static int set_expect_timeout(struct nf_conntrack_expect *exp,
+			      unsigned int timeout)
+{
+	if (!exp || !del_timer(&exp->timeout))
+		return 0;
+
+	exp->timeout.expires = jiffies + timeout * HZ;
+	add_timer(&exp->timeout);
+
+	return 1;
 }
 
 /****************************************************************************/
@@ -1463,7 +1476,7 @@ static int process_rcf(struct sk_buff *skb, struct nf_conn *ct,
 		nf_ct_refresh(ct, skb, info->timeout * HZ);
 
 		/* Set expect timeout */
-		spin_lock_bh(&nf_conntrack_expect_lock);
+		spin_lock_bh(&nf_conntrack_lock);
 		exp = find_expect(ct, &ct->tuplehash[dir].tuple.dst.u3,
 				  info->sig_port[!dir]);
 		if (exp) {
@@ -1471,10 +1484,9 @@ static int process_rcf(struct sk_buff *skb, struct nf_conn *ct,
 				 "timeout to %u seconds for",
 				 info->timeout);
 			nf_ct_dump_tuple(&exp->tuple);
-			mod_timer_pending(&exp->timeout,
-					  jiffies + info->timeout * HZ);
+			set_expect_timeout(exp, info->timeout);
 		}
-		spin_unlock_bh(&nf_conntrack_expect_lock);
+		spin_unlock_bh(&nf_conntrack_lock);
 	}
 
 	return 0;
@@ -1798,6 +1810,7 @@ static struct nf_conntrack_helper nf_conntrack_helper_ras[] __read_mostly = {
 	{
 		.name			= "RAS",
 		.me			= THIS_MODULE,
+		.data_len		= sizeof(struct nf_ct_h323_master),
 		.tuple.src.l3num	= AF_INET,
 		.tuple.src.u.udp.port	= cpu_to_be16(RAS_PORT),
 		.tuple.dst.protonum	= IPPROTO_UDP,
@@ -1807,6 +1820,7 @@ static struct nf_conntrack_helper nf_conntrack_helper_ras[] __read_mostly = {
 	{
 		.name			= "RAS",
 		.me			= THIS_MODULE,
+		.data_len		= sizeof(struct nf_ct_h323_master),
 		.tuple.src.l3num	= AF_INET6,
 		.tuple.src.u.udp.port	= cpu_to_be16(RAS_PORT),
 		.tuple.dst.protonum	= IPPROTO_UDP,
@@ -1831,8 +1845,6 @@ static void __exit nf_conntrack_h323_fini(void)
 static int __init nf_conntrack_h323_init(void)
 {
 	int ret;
-
-	NF_CT_HELPER_BUILD_BUG_ON(sizeof(struct nf_ct_h323_master));
 
 	h323_buffer = kmalloc(65536, GFP_KERNEL);
 	if (!h323_buffer)

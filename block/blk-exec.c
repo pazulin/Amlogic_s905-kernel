@@ -9,7 +9,11 @@
 #include <linux/sched/sysctl.h>
 
 #include "blk.h"
-#include "blk-mq-sched.h"
+
+/*
+ * for max sense size
+ */
+#include <scsi/scsi_cmnd.h>
 
 /**
  * blk_end_sync_rq - executes a completion event on a request
@@ -49,33 +53,43 @@ void blk_execute_rq_nowait(struct request_queue *q, struct gendisk *bd_disk,
 			   rq_end_io_fn *done)
 {
 	int where = at_head ? ELEVATOR_INSERT_FRONT : ELEVATOR_INSERT_BACK;
+	bool is_pm_resume;
 
 	WARN_ON(irqs_disabled());
-	WARN_ON(!blk_rq_is_passthrough(rq));
 
 	rq->rq_disk = bd_disk;
 	rq->end_io = done;
 
 	/*
 	 * don't check dying flag for MQ because the request won't
-	 * be reused after dying flag is set
+	 * be resued after dying flag is set
 	 */
 	if (q->mq_ops) {
-		blk_mq_sched_insert_request(rq, at_head, true, false, false);
+		blk_mq_insert_request(rq, at_head, true, false);
 		return;
 	}
+
+	/*
+	 * need to check this before __blk_run_queue(), because rq can
+	 * be freed before that returns.
+	 */
+	is_pm_resume = rq->cmd_type == REQ_TYPE_PM_RESUME;
 
 	spin_lock_irq(q->queue_lock);
 
 	if (unlikely(blk_queue_dying(q))) {
-		rq->rq_flags |= RQF_QUIET;
-		__blk_end_request_all(rq, -ENXIO);
+		rq->cmd_flags |= REQ_QUIET; 
+		rq->errors = -ENXIO;
+		__blk_end_request_all(rq, rq->errors);
 		spin_unlock_irq(q->queue_lock);
 		return;
 	}
 
 	__elv_add_request(q, rq, where);
 	__blk_run_queue(q);
+	/* the queue is stopped so it won't be run */
+	if (is_pm_resume)
+		__blk_run_queue_uncond(q);
 	spin_unlock_irq(q->queue_lock);
 }
 EXPORT_SYMBOL_GPL(blk_execute_rq_nowait);
@@ -91,11 +105,19 @@ EXPORT_SYMBOL_GPL(blk_execute_rq_nowait);
  *    Insert a fully prepared request at the back of the I/O scheduler queue
  *    for execution and wait for completion.
  */
-void blk_execute_rq(struct request_queue *q, struct gendisk *bd_disk,
+int blk_execute_rq(struct request_queue *q, struct gendisk *bd_disk,
 		   struct request *rq, int at_head)
 {
 	DECLARE_COMPLETION_ONSTACK(wait);
+	char sense[SCSI_SENSE_BUFFERSIZE];
+	int err = 0;
 	unsigned long hang_check;
+
+	if (!rq->sense) {
+		memset(sense, 0, sizeof(sense));
+		rq->sense = sense;
+		rq->sense_len = 0;
+	}
 
 	rq->end_io_data = &wait;
 	blk_execute_rq_nowait(q, bd_disk, rq, at_head, blk_end_sync_rq);
@@ -106,5 +128,10 @@ void blk_execute_rq(struct request_queue *q, struct gendisk *bd_disk,
 		while (!wait_for_completion_io_timeout(&wait, hang_check * (HZ/2)));
 	else
 		wait_for_completion_io(&wait);
+
+	if (rq->errors)
+		err = -EIO;
+
+	return err;
 }
 EXPORT_SYMBOL(blk_execute_rq);

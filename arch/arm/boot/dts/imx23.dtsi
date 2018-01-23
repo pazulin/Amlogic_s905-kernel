@@ -9,21 +9,11 @@
  * http://www.gnu.org/copyleft/gpl.html
  */
 
+#include "skeleton.dtsi"
 #include "imx23-pinfunc.h"
 
 / {
-	#address-cells = <1>;
-	#size-cells = <1>;
-
 	interrupt-parent = <&icoll>;
-	/*
-	 * The decompressor and also some bootloaders rely on a
-	 * pre-existing /chosen node to be available to insert the
-	 * command line and merge other ATAGS info.
-	 * Also for U-Boot there must be a pre-existing /memory node.
-	 */
-	chosen {};
-	memory { device_type = "memory"; reg = <0 0>; };
 
 	aliases {
 		gpio0 = &gpio0;
@@ -33,17 +23,15 @@
 		serial1 = &auart1;
 		spi0 = &ssp0;
 		spi1 = &ssp1;
-		usbphy0 = &usbphy0;
 	};
 
 	cpus {
-		#address-cells = <1>;
+		#address-cells = <0>;
 		#size-cells = <0>;
 
-		cpu@0 {
+		cpu {
 			compatible = "arm,arm926ej-s";
 			device_type = "cpu";
-			reg = <0>;
 		};
 	};
 
@@ -122,7 +110,6 @@
 
 				gpio0: gpio@0 {
 					compatible = "fsl,imx23-gpio", "fsl,mxs-gpio";
-					reg = <0>;
 					interrupts = <16>;
 					gpio-controller;
 					#gpio-cells = <2>;
@@ -132,7 +119,6 @@
 
 				gpio1: gpio@1 {
 					compatible = "fsl,imx23-gpio", "fsl,mxs-gpio";
-					reg = <1>;
 					interrupts = <17>;
 					gpio-controller;
 					#gpio-cells = <2>;
@@ -142,7 +128,6 @@
 
 				gpio2: gpio@2 {
 					compatible = "fsl,imx23-gpio", "fsl,mxs-gpio";
-					reg = <2>;
 					interrupts = <18>;
 					gpio-controller;
 					#gpio-cells = <2>;
@@ -179,17 +164,6 @@
 					fsl,pinmux-ids = <
 						MX23_PAD_I2C_SCL__AUART1_TX
 						MX23_PAD_I2C_SDA__AUART1_RX
-					>;
-					fsl,drive-strength = <MXS_DRIVE_4mA>;
-					fsl,voltage = <MXS_VOLTAGE_HIGH>;
-					fsl,pull-up = <MXS_PULL_DISABLE>;
-				};
-
-				auart1_2pins_a: auart1-2pins@0 {
-					reg = <0>;
-					fsl,pinmux-ids = <
-						MX23_PAD_GPMI_D14__AUART2_RX
-						MX23_PAD_GPMI_D15__AUART2_TX
 					>;
 					fsl,drive-strength = <MXS_DRIVE_4mA>;
 					fsl,voltage = <MXS_VOLTAGE_HIGH>;
@@ -274,40 +248,6 @@
 					fsl,pull-up = <MXS_PULL_DISABLE>;
 				};
 
-				mmc1_4bit_pins_a: mmc1-4bit@0 {
-					reg = <0>;
-					fsl,pinmux-ids = <
-						MX23_PAD_GPMI_D00__SSP2_DATA0
-						MX23_PAD_GPMI_D01__SSP2_DATA1
-						MX23_PAD_GPMI_D02__SSP2_DATA2
-						MX23_PAD_GPMI_D03__SSP2_DATA3
-						MX23_PAD_GPMI_RDY1__SSP2_CMD
-						MX23_PAD_GPMI_WRN__SSP2_SCK
-					>;
-					fsl,drive-strength = <MXS_DRIVE_8mA>;
-					fsl,voltage = <MXS_VOLTAGE_HIGH>;
-					fsl,pull-up = <MXS_PULL_ENABLE>;
-				};
-
-				mmc1_8bit_pins_a: mmc1-8bit@0 {
-					reg = <0>;
-					fsl,pinmux-ids = <
-						MX23_PAD_GPMI_D00__SSP2_DATA0
-						MX23_PAD_GPMI_D01__SSP2_DATA1
-						MX23_PAD_GPMI_D02__SSP2_DATA2
-						MX23_PAD_GPMI_D03__SSP2_DATA3
-						MX23_PAD_GPMI_D04__SSP2_DATA4
-						MX23_PAD_GPMI_D05__SSP2_DATA5
-						MX23_PAD_GPMI_D06__SSP2_DATA6
-						MX23_PAD_GPMI_D07__SSP2_DATA7
-						MX23_PAD_GPMI_RDY1__SSP2_CMD
-						MX23_PAD_GPMI_WRN__SSP2_SCK
-					>;
-					fsl,drive-strength = <MXS_DRIVE_8mA>;
-					fsl,voltage = <MXS_VOLTAGE_HIGH>;
-					fsl,pull-up = <MXS_PULL_ENABLE>;
-				};
-
 				pwm2_pins_a: pwm2@0 {
 					reg = <0>;
 					fsl,pinmux-ids = <
@@ -367,39 +307,6 @@
 					fsl,voltage = <MXS_VOLTAGE_HIGH>;
 					fsl,pull-up = <MXS_PULL_ENABLE>;
 				};
-
-				i2c_pins_a: i2c@0 {
-					reg = <0>;
-					fsl,pinmux-ids = <
-						MX23_PAD_I2C_SCL__I2C_SCL
-						MX23_PAD_I2C_SDA__I2C_SDA
-					>;
-					fsl,drive-strength = <MXS_DRIVE_8mA>;
-					fsl,voltage = <MXS_VOLTAGE_HIGH>;
-					fsl,pull-up = <MXS_PULL_ENABLE>;
-				};
-
-				i2c_pins_b: i2c@1 {
-					reg = <1>;
-					fsl,pinmux-ids = <
-						MX23_PAD_LCD_ENABLE__I2C_SCL
-						MX23_PAD_LCD_HSYNC__I2C_SDA
-					>;
-					fsl,drive-strength = <MXS_DRIVE_8mA>;
-					fsl,voltage = <MXS_VOLTAGE_HIGH>;
-					fsl,pull-up = <MXS_PULL_ENABLE>;
-				};
-
-				i2c_pins_c: i2c@2 {
-					reg = <2>;
-					fsl,pinmux-ids = <
-						MX23_PAD_SSP1_DATA1__I2C_SCL
-						MX23_PAD_SSP1_DATA2__I2C_SDA
-					>;
-					fsl,drive-strength = <MXS_DRIVE_8mA>;
-					fsl,voltage = <MXS_VOLTAGE_HIGH>;
-					fsl,pull-up = <MXS_PULL_ENABLE>;
-				};
 			};
 
 			digctl@8001c000 {
@@ -442,11 +349,9 @@
 			};
 
 			ocotp@8002c000 {
-				compatible = "fsl,imx23-ocotp", "fsl,ocotp";
-				#address-cells = <1>;
-				#size-cells = <1>;
+				compatible = "fsl,ocotp";
 				reg = <0x8002c000 0x2000>;
-				clocks = <&clks 15>;
+				status = "disabled";
 			};
 
 			axi-ahb@8002e000 {
@@ -475,7 +380,7 @@
 				reg = <0x80038000 0x2000>;
 				status = "disabled";
 			};
-		};
+                };
 
 		apbx@80040000 {
 			compatible = "simple-bus";
@@ -523,13 +428,12 @@
 				status = "disabled";
 			};
 
-			lradc: lradc@80050000 {
+			lradc@80050000 {
 				compatible = "fsl,imx23-lradc";
 				reg = <0x80050000 0x2000>;
 				interrupts = <36 37 38 39 40 41 42 43 44>;
 				status = "disabled";
 				clocks = <&clks 26>;
-				#io-channel-cells = <1>;
 			};
 
 			spdif@80054000 {
@@ -539,13 +443,8 @@
 				status = "disabled";
 			};
 
-			i2c: i2c@80058000 {
-				#address-cells = <1>;
-				#size-cells = <0>;
-				compatible = "fsl,imx23-i2c";
+			i2c@80058000 {
 				reg = <0x80058000 0x2000>;
-				interrupts = <27>;
-				clock-frequency = <100000>;
 				dmas = <&dma_apbx 3>;
 				dma-names = "rx-tx";
 				status = "disabled";
@@ -626,10 +525,5 @@
 			clocks = <&clks 40>;
 			status = "disabled";
 		};
-	};
-
-	iio-hwmon {
-		compatible = "iio-hwmon";
-		io-channels = <&lradc 8>;
 	};
 };

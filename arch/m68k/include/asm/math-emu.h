@@ -105,21 +105,21 @@ struct fp_data {
 #ifdef FPU_EMU_DEBUG
 extern unsigned int fp_debugprint;
 
-#define dprint(bit, fmt, ...) ({			\
+#define dprint(bit, fmt, args...) ({			\
 	if (fp_debugprint & (1 << (bit)))		\
-		pr_info(fmt, ##__VA_ARGS__);		\
+		printk(fmt, ## args);			\
 })
 #else
-#define dprint(bit, fmt, ...)	no_printk(fmt, ##__VA_ARGS__)
+#define dprint(bit, fmt, args...)
 #endif
 
 #define uprint(str) ({					\
 	static int __count = 3;				\
 							\
 	if (__count > 0) {				\
-		pr_err("You just hit an unimplemented "	\
+		printk("You just hit an unimplemented "	\
 		       "fpu instruction (%s)\n", str);	\
-		pr_err("Please report this to ....\n");	\
+		printk("Please report this to ....\n");	\
 		__count--;				\
 	}						\
 })

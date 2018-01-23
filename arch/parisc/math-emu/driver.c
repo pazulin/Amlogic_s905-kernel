@@ -27,8 +27,7 @@
  *  Copyright (C) 2001	      Hewlett-Packard <bame@debian.org>
  */
 
-#include <linux/sched/signal.h>
-
+#include <linux/sched.h>
 #include "float.h"
 #include "math-emu.h"
 

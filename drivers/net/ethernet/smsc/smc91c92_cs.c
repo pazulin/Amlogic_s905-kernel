@@ -52,7 +52,7 @@
 #include <pcmcia/ss.h>
 
 #include <asm/io.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 
 /*====================================================================*/
 
@@ -113,7 +113,6 @@ struct smc_private {
     struct mii_if_info		mii_if;
     int				duplex;
     int				rx_ovrn;
-    unsigned long		last_rx;
 };
 
 /* Special definitions for Megahertz multifunction cards */
@@ -295,6 +294,7 @@ static const struct net_device_ops smc_netdev_ops = {
 	.ndo_set_config 	= s9k_config,
 	.ndo_set_rx_mode	= set_rx_mode,
 	.ndo_do_ioctl		= smc_ioctl,
+	.ndo_change_mtu		= eth_change_mtu,
 	.ndo_set_mac_address 	= eth_mac_addr,
 	.ndo_validate_addr	= eth_validate_addr,
 };
@@ -318,7 +318,7 @@ static int smc91c92_probe(struct pcmcia_device *link)
 
     /* The SMC91c92-specific entries in the device structure. */
     dev->netdev_ops = &smc_netdev_ops;
-    dev->ethtool_ops = &ethtool_ops;
+    SET_ETHTOOL_OPS(dev, &ethtool_ops);
     dev->watchdog_timeo = TX_TIMEOUT;
 
     smc->mii_if.dev = dev;
@@ -1070,8 +1070,11 @@ static int smc_open(struct net_device *dev)
     smc->packets_waiting = 0;
 
     smc_reset(dev);
-    setup_timer(&smc->media, media_check, (u_long)dev);
-    mod_timer(&smc->media, jiffies + HZ);
+    init_timer(&smc->media);
+    smc->media.function = media_check;
+    smc->media.data = (u_long) dev;
+    smc->media.expires = jiffies + HZ;
+    add_timer(&smc->media);
 
     return 0;
 } /* smc_open */
@@ -1172,7 +1175,7 @@ static void smc_hardware_send_packet(struct net_device * dev)
 
     smc->saved_skb = NULL;
     dev_kfree_skb_irq(skb);
-    netif_trans_update(dev);
+    dev->trans_start = jiffies;
     netif_start_queue(dev);
 }
 
@@ -1187,7 +1190,7 @@ static void smc_tx_timeout(struct net_device *dev)
 		  inw(ioaddr)&0xff, inw(ioaddr + 2));
     dev->stats.tx_errors++;
     smc_reset(dev);
-    netif_trans_update(dev); /* prevent tx timeout */
+    dev->trans_start = jiffies; /* prevent tx timeout */
     smc->saved_skb = NULL;
     netif_wake_queue(dev);
 }
@@ -1492,7 +1495,6 @@ static void smc_rx(struct net_device *dev)
     if (!(rx_status & RS_ERRORS)) {
 	/* do stuff to make a new packet */
 	struct sk_buff *skb;
-	struct smc_private *smc = netdev_priv(dev);
 	
 	/* Note: packet_length adds 5 or 6 extra bytes here! */
 	skb = netdev_alloc_skb(dev, packet_length+2);
@@ -1511,7 +1513,7 @@ static void smc_rx(struct net_device *dev)
 	skb->protocol = eth_type_trans(skb, dev);
 	
 	netif_rx(skb);
-	smc->last_rx = jiffies;
+	dev->last_rx = jiffies;
 	dev->stats.rx_packets++;
 	dev->stats.rx_bytes += packet_length;
 	if (rx_status & RS_MULTICAST)
@@ -1792,7 +1794,7 @@ static void media_check(u_long arg)
     }
 
     /* Ignore collisions unless we've had no rx's recently */
-    if (time_after(jiffies, smc->last_rx + HZ)) {
+    if (time_after(jiffies, dev->last_rx + HZ)) {
 	if (smc->tx_err || (smc->media_status & EPH_16COL))
 	    media |= EPH_16COL;
     }
@@ -1843,60 +1845,56 @@ static int smc_link_ok(struct net_device *dev)
     }
 }
 
-static int smc_netdev_get_ecmd(struct net_device *dev,
-			       struct ethtool_link_ksettings *ecmd)
+static int smc_netdev_get_ecmd(struct net_device *dev, struct ethtool_cmd *ecmd)
 {
-	u16 tmp;
-	unsigned int ioaddr = dev->base_addr;
-	u32 supported;
+    u16 tmp;
+    unsigned int ioaddr = dev->base_addr;
 
-	supported = (SUPPORTED_TP | SUPPORTED_AUI |
-		     SUPPORTED_10baseT_Half | SUPPORTED_10baseT_Full);
+    ecmd->supported = (SUPPORTED_TP | SUPPORTED_AUI |
+	SUPPORTED_10baseT_Half | SUPPORTED_10baseT_Full);
+		
+    SMC_SELECT_BANK(1);
+    tmp = inw(ioaddr + CONFIG);
+    ecmd->port = (tmp & CFG_AUI_SELECT) ? PORT_AUI : PORT_TP;
+    ecmd->transceiver = XCVR_INTERNAL;
+    ethtool_cmd_speed_set(ecmd, SPEED_10);
+    ecmd->phy_address = ioaddr + MGMT;
 
-	SMC_SELECT_BANK(1);
-	tmp = inw(ioaddr + CONFIG);
-	ecmd->base.port = (tmp & CFG_AUI_SELECT) ? PORT_AUI : PORT_TP;
-	ecmd->base.speed = SPEED_10;
-	ecmd->base.phy_address = ioaddr + MGMT;
+    SMC_SELECT_BANK(0);
+    tmp = inw(ioaddr + TCR);
+    ecmd->duplex = (tmp & TCR_FDUPLX) ? DUPLEX_FULL : DUPLEX_HALF;
 
-	SMC_SELECT_BANK(0);
-	tmp = inw(ioaddr + TCR);
-	ecmd->base.duplex = (tmp & TCR_FDUPLX) ? DUPLEX_FULL : DUPLEX_HALF;
-
-	ethtool_convert_legacy_u32_to_link_mode(ecmd->link_modes.supported,
-						supported);
-
-	return 0;
+    return 0;
 }
 
-static int smc_netdev_set_ecmd(struct net_device *dev,
-			       const struct ethtool_link_ksettings *ecmd)
+static int smc_netdev_set_ecmd(struct net_device *dev, struct ethtool_cmd *ecmd)
 {
-	u16 tmp;
-	unsigned int ioaddr = dev->base_addr;
+    u16 tmp;
+    unsigned int ioaddr = dev->base_addr;
 
-	if (ecmd->base.speed != SPEED_10)
-		return -EINVAL;
-	if (ecmd->base.duplex != DUPLEX_HALF &&
-	    ecmd->base.duplex != DUPLEX_FULL)
-		return -EINVAL;
-	if (ecmd->base.port != PORT_TP && ecmd->base.port != PORT_AUI)
-		return -EINVAL;
+    if (ethtool_cmd_speed(ecmd) != SPEED_10)
+	return -EINVAL;
+    if (ecmd->duplex != DUPLEX_HALF && ecmd->duplex != DUPLEX_FULL)
+    	return -EINVAL;
+    if (ecmd->port != PORT_TP && ecmd->port != PORT_AUI)
+	return -EINVAL;
+    if (ecmd->transceiver != XCVR_INTERNAL)
+    	return -EINVAL;
 
-	if (ecmd->base.port == PORT_AUI)
-		smc_set_xcvr(dev, 1);
-	else
-		smc_set_xcvr(dev, 0);
+    if (ecmd->port == PORT_AUI)
+	smc_set_xcvr(dev, 1);
+    else
+	smc_set_xcvr(dev, 0);
 
-	SMC_SELECT_BANK(0);
-	tmp = inw(ioaddr + TCR);
-	if (ecmd->base.duplex == DUPLEX_FULL)
-		tmp |= TCR_FDUPLX;
-	else
-		tmp &= ~TCR_FDUPLX;
-	outw(tmp, ioaddr + TCR);
-
-	return 0;
+    SMC_SELECT_BANK(0);
+    tmp = inw(ioaddr + TCR);
+    if (ecmd->duplex == DUPLEX_FULL)
+	tmp |= TCR_FDUPLX;
+    else
+	tmp &= ~TCR_FDUPLX;
+    outw(tmp, ioaddr + TCR);
+	
+    return 0;
 }
 
 static int check_if_running(struct net_device *dev)
@@ -1912,8 +1910,7 @@ static void smc_get_drvinfo(struct net_device *dev, struct ethtool_drvinfo *info
 	strlcpy(info->version, DRV_VERSION, sizeof(info->version));
 }
 
-static int smc_get_link_ksettings(struct net_device *dev,
-				  struct ethtool_link_ksettings *ecmd)
+static int smc_get_settings(struct net_device *dev, struct ethtool_cmd *ecmd)
 {
 	struct smc_private *smc = netdev_priv(dev);
 	unsigned int ioaddr = dev->base_addr;
@@ -1924,7 +1921,7 @@ static int smc_get_link_ksettings(struct net_device *dev,
 	spin_lock_irqsave(&smc->lock, flags);
 	SMC_SELECT_BANK(3);
 	if (smc->cfg & CFG_MII_SELECT)
-		ret = mii_ethtool_get_link_ksettings(&smc->mii_if, ecmd);
+		ret = mii_ethtool_gset(&smc->mii_if, ecmd);
 	else
 		ret = smc_netdev_get_ecmd(dev, ecmd);
 	SMC_SELECT_BANK(saved_bank);
@@ -1932,8 +1929,7 @@ static int smc_get_link_ksettings(struct net_device *dev,
 	return ret;
 }
 
-static int smc_set_link_ksettings(struct net_device *dev,
-				  const struct ethtool_link_ksettings *ecmd)
+static int smc_set_settings(struct net_device *dev, struct ethtool_cmd *ecmd)
 {
 	struct smc_private *smc = netdev_priv(dev);
 	unsigned int ioaddr = dev->base_addr;
@@ -1944,7 +1940,7 @@ static int smc_set_link_ksettings(struct net_device *dev,
 	spin_lock_irqsave(&smc->lock, flags);
 	SMC_SELECT_BANK(3);
 	if (smc->cfg & CFG_MII_SELECT)
-		ret = mii_ethtool_set_link_ksettings(&smc->mii_if, ecmd);
+		ret = mii_ethtool_sset(&smc->mii_if, ecmd);
 	else
 		ret = smc_netdev_set_ecmd(dev, ecmd);
 	SMC_SELECT_BANK(saved_bank);
@@ -1988,10 +1984,10 @@ static int smc_nway_reset(struct net_device *dev)
 static const struct ethtool_ops ethtool_ops = {
 	.begin = check_if_running,
 	.get_drvinfo = smc_get_drvinfo,
+	.get_settings = smc_get_settings,
+	.set_settings = smc_set_settings,
 	.get_link = smc_get_link,
 	.nway_reset = smc_nway_reset,
-	.get_link_ksettings = smc_get_link_ksettings,
-	.set_link_ksettings = smc_set_link_ksettings,
 };
 
 static int smc_ioctl (struct net_device *dev, struct ifreq *rq, int cmd)

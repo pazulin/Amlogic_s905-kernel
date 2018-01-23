@@ -36,7 +36,6 @@ static inline struct nf_icmp_net *icmpv6_pernet(struct net *net)
 
 static bool icmpv6_pkt_to_tuple(const struct sk_buff *skb,
 				unsigned int dataoff,
-				struct net *net,
 				struct nf_conntrack_tuple *tuple)
 {
 	const struct icmp6hdr *hp;
@@ -57,12 +56,12 @@ static const u_int8_t invmap[] = {
 	[ICMPV6_ECHO_REQUEST - 128]	= ICMPV6_ECHO_REPLY + 1,
 	[ICMPV6_ECHO_REPLY - 128]	= ICMPV6_ECHO_REQUEST + 1,
 	[ICMPV6_NI_QUERY - 128]		= ICMPV6_NI_REPLY + 1,
-	[ICMPV6_NI_REPLY - 128]		= ICMPV6_NI_QUERY + 1
+	[ICMPV6_NI_REPLY - 128]		= ICMPV6_NI_QUERY +1
 };
 
 static const u_int8_t noct_valid_new[] = {
 	[ICMPV6_MGM_QUERY - 130] = 1,
-	[ICMPV6_MGM_REPORT - 130] = 1,
+	[ICMPV6_MGM_REPORT -130] = 1,
 	[ICMPV6_MGM_REDUCTION - 130] = 1,
 	[NDISC_ROUTER_SOLICITATION - 130] = 1,
 	[NDISC_ROUTER_ADVERTISEMENT - 130] = 1,
@@ -85,13 +84,13 @@ static bool icmpv6_invert_tuple(struct nf_conntrack_tuple *tuple,
 }
 
 /* Print out the per-protocol part of the tuple. */
-static void icmpv6_print_tuple(struct seq_file *s,
+static int icmpv6_print_tuple(struct seq_file *s,
 			      const struct nf_conntrack_tuple *tuple)
 {
-	seq_printf(s, "type=%u code=%u id=%u ",
-		   tuple->dst.u.icmp.type,
-		   tuple->dst.u.icmp.code,
-		   ntohs(tuple->src.u.icmp.id));
+	return seq_printf(s, "type=%u code=%u id=%u ",
+			  tuple->dst.u.icmp.type,
+			  tuple->dst.u.icmp.code,
+			  ntohs(tuple->src.u.icmp.id));
 }
 
 static unsigned int *icmpv6_get_timeouts(struct net *net)
@@ -145,27 +144,27 @@ static int
 icmpv6_error_message(struct net *net, struct nf_conn *tmpl,
 		     struct sk_buff *skb,
 		     unsigned int icmp6off,
+		     enum ip_conntrack_info *ctinfo,
 		     unsigned int hooknum)
 {
 	struct nf_conntrack_tuple intuple, origtuple;
 	const struct nf_conntrack_tuple_hash *h;
 	const struct nf_conntrack_l4proto *inproto;
-	enum ip_conntrack_info ctinfo;
-	struct nf_conntrack_zone tmp;
+	u16 zone = tmpl ? nf_ct_zone(tmpl) : NF_CT_DEFAULT_ZONE;
 
-	NF_CT_ASSERT(!skb_nfct(skb));
+	NF_CT_ASSERT(skb->nfct == NULL);
 
 	/* Are they talking about one of our connections? */
 	if (!nf_ct_get_tuplepr(skb,
 			       skb_network_offset(skb)
 				+ sizeof(struct ipv6hdr)
 				+ sizeof(struct icmp6hdr),
-			       PF_INET6, net, &origtuple)) {
+			       PF_INET6, &origtuple)) {
 		pr_debug("icmpv6_error: Can't get tuple\n");
 		return -NF_ACCEPT;
 	}
 
-	/* rcu_read_lock()ed by nf_hook_thresh */
+	/* rcu_read_lock()ed by nf_hook_slow */
 	inproto = __nf_ct_l4proto_find(PF_INET6, origtuple.dst.protonum);
 
 	/* Ordinarily, we'd expect the inverted tupleproto, but it's
@@ -176,27 +175,27 @@ icmpv6_error_message(struct net *net, struct nf_conn *tmpl,
 		return -NF_ACCEPT;
 	}
 
-	ctinfo = IP_CT_RELATED;
+	*ctinfo = IP_CT_RELATED;
 
-	h = nf_conntrack_find_get(net, nf_ct_zone_tmpl(tmpl, skb, &tmp),
-				  &intuple);
+	h = nf_conntrack_find_get(net, zone, &intuple);
 	if (!h) {
 		pr_debug("icmpv6_error: no match\n");
 		return -NF_ACCEPT;
 	} else {
 		if (NF_CT_DIRECTION(h) == IP_CT_DIR_REPLY)
-			ctinfo += IP_CT_IS_REPLY;
+			*ctinfo += IP_CT_IS_REPLY;
 	}
 
 	/* Update skb to refer to this connection */
-	nf_ct_set(skb, nf_ct_tuplehash_to_ctrack(h), ctinfo);
+	skb->nfct = &nf_ct_tuplehash_to_ctrack(h)->ct_general;
+	skb->nfctinfo = *ctinfo;
 	return NF_ACCEPT;
 }
 
 static int
 icmpv6_error(struct net *net, struct nf_conn *tmpl,
 	     struct sk_buff *skb, unsigned int dataoff,
-	     u8 pf, unsigned int hooknum)
+	     enum ip_conntrack_info *ctinfo, u_int8_t pf, unsigned int hooknum)
 {
 	const struct icmp6hdr *icmp6h;
 	struct icmp6hdr _ih;
@@ -221,7 +220,9 @@ icmpv6_error(struct net *net, struct nf_conn *tmpl,
 	type = icmp6h->icmp6_type - 130;
 	if (type >= 0 && type < sizeof(noct_valid_new) &&
 	    noct_valid_new[type]) {
-		nf_ct_set(skb, NULL, IP_CT_UNTRACKED);
+		skb->nfct = &nf_ct_untracked_get()->ct_general;
+		skb->nfctinfo = IP_CT_NEW;
+		nf_conntrack_get(skb->nfct);
 		return NF_ACCEPT;
 	}
 
@@ -229,7 +230,7 @@ icmpv6_error(struct net *net, struct nf_conn *tmpl,
 	if (icmp6h->icmp6_type >= 128)
 		return NF_ACCEPT;
 
-	return icmpv6_error_message(net, tmpl, skb, dataoff, hooknum);
+	return icmpv6_error_message(net, tmpl, skb, dataoff, ctinfo, hooknum);
 }
 
 #if IS_ENABLED(CONFIG_NF_CT_NETLINK)

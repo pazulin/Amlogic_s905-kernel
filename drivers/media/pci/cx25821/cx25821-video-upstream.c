@@ -14,6 +14,10 @@
  *  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  *
  *  GNU General Public License for more details.
+ *
+ *  You should have received a copy of the GNU General Public License
+ *  along with this program; if not, write to the Free Software
+ *  Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -326,9 +330,8 @@ int cx25821_write_frame(struct cx25821_channel *chan,
 
 	if (frame_size - curpos < count)
 		count = frame_size - curpos;
-	if (copy_from_user((__force char *)out->_data_buf_virt_addr + frame_offset + curpos,
-				data, count))
-		return -EFAULT;
+	memcpy((char *)out->_data_buf_virt_addr + frame_offset + curpos,
+			data, count);
 	curpos += count;
 	if (curpos == frame_size) {
 		out->_frame_count++;

@@ -12,7 +12,6 @@ static inline int irqchip_in_kernel(struct kvm *kvm)
 #endif
 #ifdef CONFIG_KVM_XICS
 	ret = ret || (kvm->arch.xics != NULL);
-	ret = ret || (kvm->arch.xive != NULL);
 #endif
 	smp_rmb();
 	return ret;

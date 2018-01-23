@@ -29,17 +29,13 @@
 	 */
 tsb_miss_dtlb:
 	mov		TLB_TAG_ACCESS, %g4
-	ldxa		[%g4] ASI_DMMU, %g4
-	srlx		%g4, PAGE_SHIFT, %g4
 	ba,pt		%xcc, tsb_miss_page_table_walk
-	 sllx		%g4, PAGE_SHIFT, %g4
+	 ldxa		[%g4] ASI_DMMU, %g4
 
 tsb_miss_itlb:
 	mov		TLB_TAG_ACCESS, %g4
-	ldxa		[%g4] ASI_IMMU, %g4
-	srlx		%g4, PAGE_SHIFT, %g4
 	ba,pt		%xcc, tsb_miss_page_table_walk
-	 sllx		%g4, PAGE_SHIFT, %g4
+	 ldxa		[%g4] ASI_IMMU, %g4
 
 	/* At this point we have:
 	 * %g1 --	PAGE_SIZE TSB entry address
@@ -117,11 +113,26 @@ tsb_miss_page_table_walk_sun4v_fastpath:
 	/* Valid PTE is now in %g5.  */
 
 #if defined(CONFIG_HUGETLB_PAGE) || defined(CONFIG_TRANSPARENT_HUGEPAGE)
-	sethi		%uhi(_PAGE_PMD_HUGE), %g7
+661:	sethi		%uhi(_PAGE_SZALL_4U), %g7
 	sllx		%g7, 32, %g7
+	.section	.sun4v_2insn_patch, "ax"
+	.word		661b
+	mov		_PAGE_SZALL_4V, %g7
+	nop
+	.previous
 
-	andcc		%g5, %g7, %g0
-	be,pt		%xcc, 60f
+	and		%g5, %g7, %g2
+
+661:	sethi		%uhi(_PAGE_SZHUGE_4U), %g7
+	sllx		%g7, 32, %g7
+	.section	.sun4v_2insn_patch, "ax"
+	.word		661b
+	mov		_PAGE_SZHUGE_4V, %g7
+	nop
+	.previous
+
+	cmp		%g2, %g7
+	bne,pt		%xcc, 60f
 	 nop
 
 	/* It is a huge page, use huge page TSB entry address we
@@ -272,10 +283,6 @@ tsb_do_dtlb_fault:
 	ldx	[%g4 + HV_FAULT_D_ADDR_OFFSET], %g5
 	nop
 	.previous
-
-	/* Clear context ID bits.  */
-	srlx		%g5, PAGE_SHIFT, %g5
-	sllx		%g5, PAGE_SHIFT, %g5
 
 	be,pt	%xcc, sparc64_realfault_common
 	 mov	FAULT_CODE_DTLB, %g4

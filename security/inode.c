@@ -20,15 +20,19 @@
 #include <linux/init.h>
 #include <linux/namei.h>
 #include <linux/security.h>
-#include <linux/lsm_hooks.h>
 #include <linux/magic.h>
 
 static struct vfsmount *mount;
 static int mount_count;
 
+static inline int positive(struct dentry *dentry)
+{
+	return dentry->d_inode && !d_unhashed(dentry);
+}
+
 static int fill_super(struct super_block *sb, void *data, int silent)
 {
-	static const struct tree_descr files[] = {{""}};
+	static struct tree_descr files[] = {{""}};
 
 	return simple_fill_super(sb, SECURITYFS_MAGIC, files);
 }
@@ -70,7 +74,7 @@ static struct file_system_type fs_type = {
  * pointer must be passed to the securityfs_remove() function when the file is
  * to be removed (no automatic cleanup happens if your module is unloaded,
  * you are responsible here).  If an error occurs, the function will return
- * the error value (via ERR_PTR).
+ * the erorr value (via ERR_PTR).
  *
  * If securityfs is not enabled in the kernel, the value %-ENODEV is
  * returned.
@@ -98,14 +102,14 @@ struct dentry *securityfs_create_file(const char *name, umode_t mode,
 	if (!parent)
 		parent = mount->mnt_root;
 
-	dir = d_inode(parent);
+	dir = parent->d_inode;
 
-	inode_lock(dir);
+	mutex_lock(&dir->i_mutex);
 	dentry = lookup_one_len(name, parent, strlen(name));
 	if (IS_ERR(dentry))
 		goto out;
 
-	if (d_really_is_positive(dentry)) {
+	if (dentry->d_inode) {
 		error = -EEXIST;
 		goto out1;
 	}
@@ -118,7 +122,7 @@ struct dentry *securityfs_create_file(const char *name, umode_t mode,
 
 	inode->i_ino = get_next_ino();
 	inode->i_mode = mode;
-	inode->i_atime = inode->i_mtime = inode->i_ctime = current_time(inode);
+	inode->i_atime = inode->i_mtime = inode->i_ctime = CURRENT_TIME;
 	inode->i_private = data;
 	if (is_dir) {
 		inode->i_op = &simple_dir_inode_operations;
@@ -130,14 +134,14 @@ struct dentry *securityfs_create_file(const char *name, umode_t mode,
 	}
 	d_instantiate(dentry, inode);
 	dget(dentry);
-	inode_unlock(dir);
+	mutex_unlock(&dir->i_mutex);
 	return dentry;
 
 out1:
 	dput(dentry);
 	dentry = ERR_PTR(error);
 out:
-	inode_unlock(dir);
+	mutex_unlock(&dir->i_mutex);
 	simple_release_fs(&mount, &mount_count);
 	return dentry;
 }
@@ -157,11 +161,12 @@ EXPORT_SYMBOL_GPL(securityfs_create_file);
  * This function returns a pointer to a dentry if it succeeds.  This
  * pointer must be passed to the securityfs_remove() function when the file is
  * to be removed (no automatic cleanup happens if your module is unloaded,
- * you are responsible here).  If an error occurs, the function will return
- * the error value (via ERR_PTR).
+ * you are responsible here).  If an error occurs, %NULL will be returned.
  *
  * If securityfs is not enabled in the kernel, the value %-ENODEV is
- * returned.
+ * returned.  It is not wise to check for this value, but rather, check for
+ * %NULL or !%NULL instead as to eliminate the need for #ifdef in the calling
+ * code.
  */
 struct dentry *securityfs_create_dir(const char *name, struct dentry *parent)
 {
@@ -186,58 +191,44 @@ EXPORT_SYMBOL_GPL(securityfs_create_dir);
  */
 void securityfs_remove(struct dentry *dentry)
 {
-	struct inode *dir;
+	struct dentry *parent;
 
 	if (!dentry || IS_ERR(dentry))
 		return;
 
-	dir = d_inode(dentry->d_parent);
-	inode_lock(dir);
-	if (simple_positive(dentry)) {
-		if (d_is_dir(dentry))
-			simple_rmdir(dir, dentry);
-		else
-			simple_unlink(dir, dentry);
-		dput(dentry);
+	parent = dentry->d_parent;
+	if (!parent || !parent->d_inode)
+		return;
+
+	mutex_lock(&parent->d_inode->i_mutex);
+	if (positive(dentry)) {
+		if (dentry->d_inode) {
+			if (S_ISDIR(dentry->d_inode->i_mode))
+				simple_rmdir(parent->d_inode, dentry);
+			else
+				simple_unlink(parent->d_inode, dentry);
+			dput(dentry);
+		}
 	}
-	inode_unlock(dir);
+	mutex_unlock(&parent->d_inode->i_mutex);
 	simple_release_fs(&mount, &mount_count);
 }
 EXPORT_SYMBOL_GPL(securityfs_remove);
 
-#ifdef CONFIG_SECURITY
-static struct dentry *lsm_dentry;
-static ssize_t lsm_read(struct file *filp, char __user *buf, size_t count,
-			loff_t *ppos)
-{
-	return simple_read_from_buffer(buf, count, ppos, lsm_names,
-		strlen(lsm_names));
-}
-
-static const struct file_operations lsm_ops = {
-	.read = lsm_read,
-	.llseek = generic_file_llseek,
-};
-#endif
+static struct kobject *security_kobj;
 
 static int __init securityfs_init(void)
 {
 	int retval;
 
-	retval = sysfs_create_mount_point(kernel_kobj, "security");
-	if (retval)
-		return retval;
+	security_kobj = kobject_create_and_add("security", kernel_kobj);
+	if (!security_kobj)
+		return -EINVAL;
 
 	retval = register_filesystem(&fs_type);
-	if (retval) {
-		sysfs_remove_mount_point(kernel_kobj, "security");
-		return retval;
-	}
-#ifdef CONFIG_SECURITY
-	lsm_dentry = securityfs_create_file("lsm", 0444, NULL, NULL,
-						&lsm_ops);
-#endif
-	return 0;
+	if (retval)
+		kobject_put(security_kobj);
+	return retval;
 }
 
 core_initcall(securityfs_init);

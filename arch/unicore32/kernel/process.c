@@ -13,9 +13,6 @@
 
 #include <linux/module.h>
 #include <linux/sched.h>
-#include <linux/sched/debug.h>
-#include <linux/sched/task.h>
-#include <linux/sched/task_stack.h>
 #include <linux/kernel.h>
 #include <linux/mm.h>
 #include <linux/stddef.h>
@@ -63,7 +60,6 @@ void machine_halt(void)
  * Function pointers to optional machine specific functions
  */
 void (*pm_power_off)(void) = NULL;
-EXPORT_SYMBOL(pm_power_off);
 
 void machine_power_off(void)
 {
@@ -178,7 +174,7 @@ void __show_regs(struct pt_regs *regs)
 		buf, interrupts_enabled(regs) ? "n" : "ff",
 		fast_interrupts_enabled(regs) ? "n" : "ff",
 		processor_modes[processor_mode(regs)],
-		uaccess_kernel() ? "kernel" : "user");
+		segment_eq(get_fs(), get_ds()) ? "kernel" : "user");
 	{
 		unsigned int ctrl;
 
@@ -202,6 +198,13 @@ void show_regs(struct pt_regs *regs)
 			task_pid_nr(current), current->comm);
 	__show_regs(regs);
 	__backtrace();
+}
+
+/*
+ * Free current thread data structures etc..
+ */
+void exit_thread(void)
+{
 }
 
 void flush_thread(void)
@@ -298,7 +301,8 @@ unsigned long get_wchan(struct task_struct *p)
 
 unsigned long arch_randomize_brk(struct mm_struct *mm)
 {
-	return randomize_page(mm->brk, 0x02000000);
+	unsigned long range_end = mm->brk + 0x02000000;
+	return randomize_range(mm->brk, range_end, 0) ? : mm->brk;
 }
 
 /*

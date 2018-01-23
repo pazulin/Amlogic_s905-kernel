@@ -20,15 +20,16 @@
    Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
-#include "cx231xx.h"
 #include <linux/init.h>
 #include <linux/list.h>
 #include <linux/module.h>
 #include <linux/slab.h>
+#include <linux/usb.h>
 #include <linux/vmalloc.h>
 #include <media/v4l2-common.h>
 #include <media/tuner.h>
 
+#include "cx231xx.h"
 #include "cx231xx-reg.h"
 
 /* #define ENABLE_DEBUG_ISOC_FRAMES */
@@ -98,10 +99,10 @@ int cx231xx_register_extension(struct cx231xx_ops *ops)
 
 	mutex_lock(&cx231xx_devlist_mutex);
 	list_add_tail(&ops->next, &cx231xx_extension_devlist);
-	list_for_each_entry(dev, &cx231xx_devlist, devlist) {
+	list_for_each_entry(dev, &cx231xx_devlist, devlist)
 		ops->init(dev);
-		dev_info(dev->dev, "%s initialized\n", ops->name);
-	}
+
+	printk(KERN_INFO DRIVER_NAME ": %s initialized\n", ops->name);
 	mutex_unlock(&cx231xx_devlist_mutex);
 	return 0;
 }
@@ -112,11 +113,11 @@ void cx231xx_unregister_extension(struct cx231xx_ops *ops)
 	struct cx231xx *dev = NULL;
 
 	mutex_lock(&cx231xx_devlist_mutex);
-	list_for_each_entry(dev, &cx231xx_devlist, devlist) {
+	list_for_each_entry(dev, &cx231xx_devlist, devlist)
 		ops->fini(dev);
-		dev_info(dev->dev, "%s removed\n", ops->name);
-	}
 
+
+	printk(KERN_INFO DRIVER_NAME ": %s removed\n", ops->name);
 	list_del(&ops->next);
 	mutex_unlock(&cx231xx_devlist_mutex);
 }
@@ -176,9 +177,16 @@ int cx231xx_send_usb_command(struct cx231xx_i2c *i2c_bus,
 	saddr_len = req_data->saddr_len;
 
 	/* Set wValue */
-	ven_req.wValue = (req_data->dev_addr << 9 | _i2c_period << 4 |
-			  saddr_len << 2 | _i2c_nostop << 1 | I2C_SYNC |
-			  _i2c_reserve << 6);
+	if (saddr_len == 1)	/* need check saddr_len == 0  */
+		ven_req.wValue =
+		    req_data->
+		    dev_addr << 9 | _i2c_period << 4 | saddr_len << 2 |
+		    _i2c_nostop << 1 | I2C_SYNC | _i2c_reserve << 6;
+	else
+		ven_req.wValue =
+		    req_data->
+		    dev_addr << 9 | _i2c_period << 4 | saddr_len << 2 |
+		    _i2c_nostop << 1 | I2C_SYNC | _i2c_reserve << 6;
 
 	/* set channel number */
 	if (req_data->direction & I2C_M_RD) {
@@ -219,9 +227,10 @@ int cx231xx_send_usb_command(struct cx231xx_i2c *i2c_bus,
 
 	/* call common vendor command request */
 	status = cx231xx_send_vendor_cmd(dev, &ven_req);
-	if (status < 0 && !dev->i2c_scan_running) {
-		dev_err(dev->dev, "%s: failed with status -%d\n",
-			__func__, status);
+	if (status < 0) {
+		cx231xx_info
+		    ("UsbInterface::sendCommand, failed with status -%d\n",
+		     status);
 	}
 
 	return status;
@@ -241,7 +250,8 @@ static int __usb_control_msg(struct cx231xx *dev, unsigned int pipe,
 	int rc, i;
 
 	if (reg_debug) {
-		printk(KERN_DEBUG "%s: (pipe 0x%08x): %s:  %02x %02x %02x %02x %02x %02x %02x %02x ",
+		printk(KERN_DEBUG "%s: (pipe 0x%08x): "
+				"%s:  %02x %02x %02x %02x %02x %02x %02x %02x ",
 				dev->name,
 				pipe,
 				(requesttype & USB_DIR_IN) ? "IN" : "OUT",
@@ -330,7 +340,7 @@ int cx231xx_read_ctrl_reg(struct cx231xx *dev, u8 req, u16 reg,
 	return ret;
 }
 
-int cx231xx_send_vendor_cmd(struct cx231xx *dev,
+int cx231xx_send_h837_vendor_cmd(struct cx231xx *dev,
 				struct VENDOR_REQUEST_IN *ven_req)
 {
 	int ret;
@@ -353,14 +363,82 @@ int cx231xx_send_vendor_cmd(struct cx231xx *dev,
 	 * If the cx23102 read more than 4 bytes with i2c bus,
 	 * need chop to 4 byte per request
 	 */
+	if ((ven_req->wLength > 4) && (ven_req->bRequest <= VRT_GET_I2C2)) {
+		unsend_size = 0;
+		pdata = ven_req->pBuff;
+
+
+		unsend_size = ven_req->wLength;
+
+		/* the first package */
+		ven_req->wValue = ven_req->wValue & 0xFFFB;
+		ven_req->wValue = (ven_req->wValue & 0xFFBD) | 0x2;
+		ret = __usb_control_msg(dev, pipe, ven_req->bRequest,
+			ven_req->direction | USB_TYPE_VENDOR | USB_RECIP_DEVICE,
+			ven_req->wValue, ven_req->wIndex, pdata,
+			0x0004, HZ);
+		unsend_size = unsend_size - 4;
+
+		/* the middle package */
+		ven_req->wValue = (ven_req->wValue & 0xFFBD) | 0x42;
+		while (unsend_size - 4 > 0) {
+			pdata = pdata + 4;
+			ret = __usb_control_msg(dev, pipe,
+				ven_req->bRequest,
+				ven_req->direction | USB_TYPE_VENDOR | USB_RECIP_DEVICE,
+				ven_req->wValue, ven_req->wIndex, pdata,
+				0x0004, HZ);
+			unsend_size = unsend_size - 4;
+		}
+
+		/* the last package */
+		ven_req->wValue = (ven_req->wValue & 0xFFBD) | 0x40;
+		pdata = pdata + 4;
+		ret = __usb_control_msg(dev, pipe, ven_req->bRequest,
+			ven_req->direction | USB_TYPE_VENDOR | USB_RECIP_DEVICE,
+			ven_req->wValue, ven_req->wIndex, pdata,
+			unsend_size, HZ);
+	} else {
+		if (ven_req->bRequest <= VRT_GET_I2C2)
+			ven_req->wValue &= ~0x42;
+		ret = __usb_control_msg(dev, pipe, ven_req->bRequest,
+				ven_req->direction | USB_TYPE_VENDOR | USB_RECIP_DEVICE,
+				ven_req->wValue, ven_req->wIndex,
+				ven_req->pBuff, ven_req->wLength, HZ);
+	}
+
+	return ret;
+}
+
+int cx231xx_send_vendor_cmd(struct cx231xx *dev,
+				struct VENDOR_REQUEST_IN *ven_req)
+{
+	int ret;
+	int pipe = 0;
+	int unsend_size = 0;
+	u8 *pdata;
+
+	if (is_model_avermedia_h837_series(dev->model))
+		return cx231xx_send_h837_vendor_cmd(dev, ven_req);
+
+	if (dev->state & DEV_DISCONNECTED)
+		return -ENODEV;
+
+	if ((ven_req->wLength > URB_MAX_CTRL_SIZE))
+		return -EINVAL;
+
+	if (ven_req->direction)
+		pipe = usb_rcvctrlpipe(dev->udev, 0);
+	else
+		pipe = usb_sndctrlpipe(dev->udev, 0);
+
+	/*
+	 * If the cx23102 read more than 4 bytes with i2c bus,
+	 * need chop to 4 byte per request
+	 */
 	if ((ven_req->wLength > 4) && ((ven_req->bRequest == 0x4) ||
 					(ven_req->bRequest == 0x5) ||
-					(ven_req->bRequest == 0x6) ||
-
-					/* Internal Master 3 Bus can send
-					 * and receive only 4 bytes per time
-					 */
-					(ven_req->bRequest == 0x2))) {
+					(ven_req->bRequest == 0x6))) {
 		unsend_size = 0;
 		pdata = ven_req->pBuff;
 
@@ -445,7 +523,8 @@ int cx231xx_write_ctrl_reg(struct cx231xx *dev, u8 req, u16 reg, char *buf,
 	if (reg_debug) {
 		int byte;
 
-		cx231xx_isocdbg("(pipe 0x%08x): OUT: %02x %02x %02x %02x %02x %02x %02x %02x >>>",
+		cx231xx_isocdbg("(pipe 0x%08x): "
+			"OUT: %02x %02x %02x %02x %02x %02x %02x %02x >>>",
 			pipe,
 			USB_DIR_OUT | USB_TYPE_VENDOR | USB_RECIP_DEVICE,
 			req, 0, val, reg & 0xff,
@@ -518,9 +597,9 @@ int cx231xx_set_video_alternate(struct cx231xx *dev)
 		    usb_set_interface(dev->udev, usb_interface_index,
 				      dev->video_mode.alt);
 		if (errCode < 0) {
-			dev_err(dev->dev,
-				"cannot change alt number to %d (error=%i)\n",
-				dev->video_mode.alt, errCode);
+			cx231xx_errdev
+			    ("cannot change alt number to %d (error=%i)\n",
+			     dev->video_mode.alt, errCode);
 			return errCode;
 		}
 	}
@@ -594,25 +673,25 @@ int cx231xx_set_alt_setting(struct cx231xx *dev, u8 index, u8 alt)
 	}
 
 	if (alt > 0 && max_pkt_size == 0) {
-		dev_err(dev->dev,
-			"can't change interface %d alt no. to %d: Max. Pkt size = 0\n",
-			usb_interface_index, alt);
+		cx231xx_errdev
+		("can't change interface %d alt no. to %d: Max. Pkt size = 0\n",
+		usb_interface_index, alt);
 		/*To workaround error number=-71 on EP0 for videograbber,
 		 need add following codes.*/
 		if (dev->board.no_alt_vanc)
 			return -1;
 	}
 
-	cx231xx_coredbg("setting alternate %d with wMaxPacketSize=%u,Interface = %d\n",
-			alt, max_pkt_size,
+	cx231xx_coredbg("setting alternate %d with wMaxPacketSize=%u,"
+			"Interface = %d\n", alt, max_pkt_size,
 			usb_interface_index);
 
 	if (usb_interface_index > 0) {
 		status = usb_set_interface(dev->udev, usb_interface_index, alt);
 		if (status < 0) {
-			dev_err(dev->dev,
-				"can't change interface %d alt no. to %d (err=%i)\n",
-				usb_interface_index, alt, status);
+			cx231xx_errdev
+			("can't change interface %d alt no. to %d (err=%i)\n",
+			usb_interface_index, alt, status);
 			return status;
 		}
 	}
@@ -656,20 +735,22 @@ int cx231xx_demod_reset(struct cx231xx *dev)
 
 	cx231xx_coredbg("Enter cx231xx_demod_reset()\n");
 
-	value[1] = (u8) 0x3;
-	status = cx231xx_write_ctrl_reg(dev, VRT_SET_REGISTER,
-					PWR_CTL_EN, value, 4);
-	msleep(10);
+		value[1] = (u8) 0x3;
+		status = cx231xx_write_ctrl_reg(dev, VRT_SET_REGISTER,
+						PWR_CTL_EN, value, 4);
+			msleep(10);
 
-	value[1] = (u8) 0x0;
-	status = cx231xx_write_ctrl_reg(dev, VRT_SET_REGISTER,
-					PWR_CTL_EN, value, 4);
-	msleep(10);
+		value[1] = (u8) 0x0;
+		status = cx231xx_write_ctrl_reg(dev, VRT_SET_REGISTER,
+						PWR_CTL_EN, value, 4);
+			msleep(10);
 
-	value[1] = (u8) 0x3;
-	status = cx231xx_write_ctrl_reg(dev, VRT_SET_REGISTER,
-					PWR_CTL_EN, value, 4);
-	msleep(10);
+		value[1] = (u8) 0x3;
+		status = cx231xx_write_ctrl_reg(dev, VRT_SET_REGISTER,
+						PWR_CTL_EN, value, 4);
+			msleep(10);
+
+
 
 	status = cx231xx_read_ctrl_reg(dev, VRT_GET_REGISTER, PWR_CTL_EN,
 				 value, 4);
@@ -711,15 +792,25 @@ int cx231xx_set_mode(struct cx231xx *dev, enum cx231xx_mode set_mode)
 		case CX231XX_BOARD_CNXT_RDE_250:
 		case CX231XX_BOARD_CNXT_SHELBY:
 		case CX231XX_BOARD_CNXT_RDU_250:
-		errCode = cx231xx_set_agc_analog_digital_mux_select(dev, 0);
+			errCode = cx231xx_set_agc_analog_digital_mux_select(dev, 0);
+			break;
+		case CX231XX_BOARD_AVERMEDIA_H837M:
+		case CX231XX_BOARD_AVERMEDIA_H837B:
+		case CX231XX_BOARD_AVERMEDIA_H837A: {
+			cx231xx_set_power_mode(dev, POLARIS_AVMODE_DEFAULT);
+			msleep(20);
+			cx231xx_set_agc_analog_digital_mux_select(dev, 0);
+			cx231xx_set_power_mode(dev, POLARIS_AVMODE_DIGITAL);
+			msleep(50);
+			cx231xx_set_gpio_value(dev, AVERMEDIA_H837_LED_PIN, 0);
+			return 0;
+			}
 			break;
 		case CX231XX_BOARD_CNXT_RDE_253S:
 		case CX231XX_BOARD_CNXT_RDU_253S:
-		case CX231XX_BOARD_PV_PLAYTV_USB_HYBRID:
 			errCode = cx231xx_set_agc_analog_digital_mux_select(dev, 1);
 			break;
 		case CX231XX_BOARD_HAUPPAUGE_EXETER:
-		case CX231XX_BOARD_HAUPPAUGE_930C_HD_1113xx:
 			errCode = cx231xx_set_power_mode(dev,
 						POLARIS_AVMODE_DIGITAL);
 			break;
@@ -729,6 +820,13 @@ int cx231xx_set_mode(struct cx231xx *dev, enum cx231xx_mode set_mode)
 	} else/* Set Analog Power mode */ {
 	/* set AGC mode to Analog */
 		switch (dev->model) {
+		case CX231XX_BOARD_AVERMEDIA_H837A:
+		case CX231XX_BOARD_AVERMEDIA_H837B:
+		case CX231XX_BOARD_AVERMEDIA_H837M:
+			cx231xx_set_agc_analog_digital_mux_select(dev, 1);
+			cx231xx_set_power_mode(dev, POLARIS_AVMODE_DEFAULT);
+			cx231xx_set_gpio_value(dev, AVERMEDIA_H837_LED_PIN, 1);
+			return 0;
 		case CX231XX_BOARD_CNXT_CARRAERA:
 		case CX231XX_BOARD_CNXT_RDE_250:
 		case CX231XX_BOARD_CNXT_SHELBY:
@@ -738,47 +836,39 @@ int cx231xx_set_mode(struct cx231xx *dev, enum cx231xx_mode set_mode)
 		case CX231XX_BOARD_CNXT_RDE_253S:
 		case CX231XX_BOARD_CNXT_RDU_253S:
 		case CX231XX_BOARD_HAUPPAUGE_EXETER:
-		case CX231XX_BOARD_HAUPPAUGE_930C_HD_1113xx:
 		case CX231XX_BOARD_PV_PLAYTV_USB_HYBRID:
 		case CX231XX_BOARD_HAUPPAUGE_USB2_FM_PAL:
 		case CX231XX_BOARD_HAUPPAUGE_USB2_FM_NTSC:
-			errCode = cx231xx_set_agc_analog_digital_mux_select(dev, 0);
+		errCode = cx231xx_set_agc_analog_digital_mux_select(dev, 0);
 			break;
 		default:
 			break;
 		}
 	}
 
-	if (errCode < 0) {
-		dev_err(dev->dev, "Failed to set devmode to %s: error: %i",
-			dev->mode == CX231XX_DIGITAL_MODE ? "digital" : "analog",
-			errCode);
-		return errCode;
-	}
-
-	return 0;
+	return errCode ? -EINVAL : 0;
 }
 EXPORT_SYMBOL_GPL(cx231xx_set_mode);
 
 int cx231xx_ep5_bulkout(struct cx231xx *dev, u8 *firmware, u16 size)
 {
 	int errCode = 0;
-	int actlen = -1;
-	int ret = -ENOMEM;
+	int actlen, ret = -ENOMEM;
 	u32 *buffer;
 
 	buffer = kzalloc(4096, GFP_KERNEL);
-	if (buffer == NULL)
+	if (buffer == NULL) {
+		cx231xx_info("out of mem\n");
 		return -ENOMEM;
+	}
 	memcpy(&buffer[0], firmware, 4096);
 
 	ret = usb_bulk_msg(dev->udev, usb_sndbulkpipe(dev->udev, 5),
 			buffer, 4096, &actlen, 2000);
 
 	if (ret)
-		dev_err(dev->dev,
-			"bulk message failed: %d (%d/%d)", ret,
-			size, actlen);
+		cx231xx_info("bulk message failed: %d (%d/%d)", ret,
+				size, actlen);
 	else {
 		errCode = actlen != size ? -1 : 0;
 	}
@@ -881,7 +971,6 @@ void cx231xx_uninit_isoc(struct cx231xx *dev)
 	struct cx231xx_dmaqueue *dma_q = &dev->video_mode.vidq;
 	struct urb *urb;
 	int i;
-	bool broken_pipe = false;
 
 	cx231xx_isocdbg("cx231xx: called cx231xx_uninit_isoc\n");
 
@@ -901,19 +990,12 @@ void cx231xx_uninit_isoc(struct cx231xx *dev)
 						  transfer_buffer[i],
 						  urb->transfer_dma);
 			}
-			if (urb->status == -EPIPE) {
-				broken_pipe = true;
-			}
 			usb_free_urb(urb);
 			dev->video_mode.isoc_ctl.urb[i] = NULL;
 		}
 		dev->video_mode.isoc_ctl.transfer_buffer[i] = NULL;
 	}
 
-	if (broken_pipe) {
-		cx231xx_isocdbg("Reset endpoint to recover broken pipe.");
-		usb_reset_endpoint(dev->udev, dev->video_mode.end_point_addr);
-	}
 	kfree(dev->video_mode.isoc_ctl.urb);
 	kfree(dev->video_mode.isoc_ctl.transfer_buffer);
 	kfree(dma_q->p_left_data);
@@ -968,11 +1050,11 @@ void cx231xx_uninit_bulk(struct cx231xx *dev)
 		}
 		dev->video_mode.bulk_ctl.transfer_buffer[i] = NULL;
 	}
-
 	if (broken_pipe) {
-		cx231xx_isocdbg("Reset endpoint to recover broken pipe.");
+		cx231xx_err("Reset endpoint to recover broken pipe.");
 		usb_reset_endpoint(dev->udev, dev->video_mode.end_point_addr);
 	}
+
 	kfree(dev->video_mode.bulk_ctl.urb);
 	kfree(dev->video_mode.bulk_ctl.transfer_buffer);
 	kfree(dma_q->p_left_data);
@@ -1009,8 +1091,12 @@ int cx231xx_init_isoc(struct cx231xx *dev, int max_packets,
 	cx231xx_uninit_isoc(dev);
 
 	dma_q->p_left_data = kzalloc(4096, GFP_KERNEL);
-	if (dma_q->p_left_data == NULL)
+	if (dma_q->p_left_data == NULL) {
+		cx231xx_info("out of mem\n");
 		return -ENOMEM;
+	}
+
+
 
 	dev->video_mode.isoc_ctl.isoc_copy = isoc_copy;
 	dev->video_mode.isoc_ctl.num_bufs = num_bufs;
@@ -1036,16 +1122,14 @@ int cx231xx_init_isoc(struct cx231xx *dev, int max_packets,
 	dev->video_mode.isoc_ctl.urb =
 	    kzalloc(sizeof(void *) * num_bufs, GFP_KERNEL);
 	if (!dev->video_mode.isoc_ctl.urb) {
-		dev_err(dev->dev,
-			"cannot alloc memory for usb buffers\n");
+		cx231xx_errdev("cannot alloc memory for usb buffers\n");
 		return -ENOMEM;
 	}
 
 	dev->video_mode.isoc_ctl.transfer_buffer =
 	    kzalloc(sizeof(void *) * num_bufs, GFP_KERNEL);
 	if (!dev->video_mode.isoc_ctl.transfer_buffer) {
-		dev_err(dev->dev,
-			"cannot allocate memory for usbtransfer\n");
+		cx231xx_errdev("cannot allocate memory for usbtransfer\n");
 		kfree(dev->video_mode.isoc_ctl.urb);
 		return -ENOMEM;
 	}
@@ -1065,6 +1149,7 @@ int cx231xx_init_isoc(struct cx231xx *dev, int max_packets,
 	for (i = 0; i < dev->video_mode.isoc_ctl.num_bufs; i++) {
 		urb = usb_alloc_urb(max_packets, GFP_KERNEL);
 		if (!urb) {
+			cx231xx_err("cannot alloc isoc_ctl.urb %i\n", i);
 			cx231xx_uninit_isoc(dev);
 			return -ENOMEM;
 		}
@@ -1074,10 +1159,10 @@ int cx231xx_init_isoc(struct cx231xx *dev, int max_packets,
 		    usb_alloc_coherent(dev->udev, sb_size, GFP_KERNEL,
 				       &urb->transfer_dma);
 		if (!dev->video_mode.isoc_ctl.transfer_buffer[i]) {
-			dev_err(dev->dev,
-				"unable to allocate %i bytes for transfer buffer %i%s\n",
-				sb_size, i,
-				in_interrupt() ? " while in int" : "");
+			cx231xx_err("unable to allocate %i bytes for transfer"
+				    " buffer %i%s\n",
+				    sb_size, i,
+				    in_interrupt() ? " while in int" : "");
 			cx231xx_uninit_isoc(dev);
 			return -ENOMEM;
 		}
@@ -1109,9 +1194,8 @@ int cx231xx_init_isoc(struct cx231xx *dev, int max_packets,
 		rc = usb_submit_urb(dev->video_mode.isoc_ctl.urb[i],
 				    GFP_ATOMIC);
 		if (rc) {
-			dev_err(dev->dev,
-				"submit of urb %i failed (error=%i)\n", i,
-				rc);
+			cx231xx_err("submit of urb %i failed (error=%i)\n", i,
+				    rc);
 			cx231xx_uninit_isoc(dev);
 			return rc;
 		}
@@ -1171,16 +1255,14 @@ int cx231xx_init_bulk(struct cx231xx *dev, int max_packets,
 	dev->video_mode.bulk_ctl.urb =
 	    kzalloc(sizeof(void *) * num_bufs, GFP_KERNEL);
 	if (!dev->video_mode.bulk_ctl.urb) {
-		dev_err(dev->dev,
-			"cannot alloc memory for usb buffers\n");
+		cx231xx_errdev("cannot alloc memory for usb buffers\n");
 		return -ENOMEM;
 	}
 
 	dev->video_mode.bulk_ctl.transfer_buffer =
 	    kzalloc(sizeof(void *) * num_bufs, GFP_KERNEL);
 	if (!dev->video_mode.bulk_ctl.transfer_buffer) {
-		dev_err(dev->dev,
-			"cannot allocate memory for usbtransfer\n");
+		cx231xx_errdev("cannot allocate memory for usbtransfer\n");
 		kfree(dev->video_mode.bulk_ctl.urb);
 		return -ENOMEM;
 	}
@@ -1200,6 +1282,7 @@ int cx231xx_init_bulk(struct cx231xx *dev, int max_packets,
 	for (i = 0; i < dev->video_mode.bulk_ctl.num_bufs; i++) {
 		urb = usb_alloc_urb(0, GFP_KERNEL);
 		if (!urb) {
+			cx231xx_err("cannot alloc bulk_ctl.urb %i\n", i);
 			cx231xx_uninit_bulk(dev);
 			return -ENOMEM;
 		}
@@ -1210,10 +1293,10 @@ int cx231xx_init_bulk(struct cx231xx *dev, int max_packets,
 		    usb_alloc_coherent(dev->udev, sb_size, GFP_KERNEL,
 				     &urb->transfer_dma);
 		if (!dev->video_mode.bulk_ctl.transfer_buffer[i]) {
-			dev_err(dev->dev,
-				"unable to allocate %i bytes for transfer buffer %i%s\n",
-				sb_size, i,
-				in_interrupt() ? " while in int" : "");
+			cx231xx_err("unable to allocate %i bytes for transfer"
+				    " buffer %i%s\n",
+				    sb_size, i,
+				    in_interrupt() ? " while in int" : "");
 			cx231xx_uninit_bulk(dev);
 			return -ENOMEM;
 		}
@@ -1229,9 +1312,8 @@ int cx231xx_init_bulk(struct cx231xx *dev, int max_packets,
 	/* clear halt */
 	rc = usb_clear_halt(dev->udev, dev->video_mode.bulk_ctl.urb[0]->pipe);
 	if (rc < 0) {
-		dev_err(dev->dev,
-			"failed to clear USB bulk endpoint stall/halt condition (error=%i)\n",
-			rc);
+		cx231xx_err("failed to clear USB bulk endpoint stall/halt condition (error=%i)\n",
+					rc);
 		cx231xx_uninit_bulk(dev);
 		return rc;
 	}
@@ -1243,8 +1325,8 @@ int cx231xx_init_bulk(struct cx231xx *dev, int max_packets,
 		rc = usb_submit_urb(dev->video_mode.bulk_ctl.urb[i],
 				    GFP_ATOMIC);
 		if (rc) {
-			dev_err(dev->dev,
-				"submit of urb %i failed (error=%i)\n", i, rc);
+			cx231xx_err("submit of urb %i failed (error=%i)\n", i,
+				    rc);
 			cx231xx_uninit_bulk(dev);
 			return rc;
 		}
@@ -1299,6 +1381,47 @@ void cx231xx_start_TS1(struct cx231xx *dev)
 /*****************************************************************
 *             Device Init/UnInit functions                       *
 ******************************************************************/
+static void cx231xx_check_model(struct cx231xx *dev)
+{
+	if (is_model_avermedia_h837_series(dev->model)) {
+		struct i2c_msg msg[2];
+		unsigned char offset = 255, value = 0;
+
+		dev->i2c_bus[0].i2c_period =
+		dev->i2c_bus[1].i2c_period =
+		dev->i2c_bus[2].i2c_period = I2C_SPEED_400K;
+		/* first a write message to write EE offset*/
+		msg[0].addr = 0x50;
+		msg[0].flags = 0;
+		msg[0].len = 1;
+		msg[0].buf = &offset;
+
+		/* then a read message to read EE content, maximum read length is 4 bytes*/
+		msg[1].addr = 0x50;
+		msg[1].flags = I2C_M_RD;
+		msg[1].len = 1;
+		msg[1].buf = &value;
+
+		if (i2c_transfer(&dev->i2c_bus[1].i2c_adap, msg, 2) < 0) {
+			cx231xx_warn("Failed to check EEPROM");
+			return;
+		}
+
+		if (0x01 == value) {
+			if (CX231XX_BOARD_AVERMEDIA_H837B == dev->model)
+				return;
+			dev->model = CX231XX_BOARD_AVERMEDIA_H837B;
+		} else {
+			if (CX231XX_BOARD_AVERMEDIA_H837A == dev->model ||
+				CX231XX_BOARD_AVERMEDIA_H837M == dev->model)
+				return;
+			dev->model = CX231XX_BOARD_AVERMEDIA_H837A;
+		}
+		dev->board = cx231xx_boards[dev->model];
+		cx231xx_info("Correct device model as %s\n", dev->board.name);
+	}
+}
+
 int cx231xx_dev_init(struct cx231xx *dev)
 {
 	int errCode = 0;
@@ -1327,35 +1450,12 @@ int cx231xx_dev_init(struct cx231xx *dev)
 	dev->i2c_bus[2].i2c_reserve = 0;
 
 	/* register I2C buses */
-	errCode = cx231xx_i2c_register(&dev->i2c_bus[0]);
-	if (errCode < 0)
-		return errCode;
-	errCode = cx231xx_i2c_register(&dev->i2c_bus[1]);
-	if (errCode < 0)
-		return errCode;
-	errCode = cx231xx_i2c_register(&dev->i2c_bus[2]);
-	if (errCode < 0)
-		return errCode;
+	cx231xx_i2c_register(&dev->i2c_bus[0]);
+	cx231xx_i2c_register(&dev->i2c_bus[1]);
+	cx231xx_i2c_register(&dev->i2c_bus[2]);
 
-	errCode = cx231xx_i2c_mux_create(dev);
-	if (errCode < 0) {
-		dev_err(dev->dev,
-			"%s: Failed to create I2C mux\n", __func__);
-		return errCode;
-	}
-	errCode = cx231xx_i2c_mux_register(dev, 0);
-	if (errCode < 0)
-		return errCode;
-
-	errCode = cx231xx_i2c_mux_register(dev, 1);
-	if (errCode < 0)
-		return errCode;
-
-	/* scan the real bus segments in the order of physical port numbers */
-	cx231xx_do_i2c_scan(dev, I2C_0);
-	cx231xx_do_i2c_scan(dev, I2C_1_MUX_1);
-	cx231xx_do_i2c_scan(dev, I2C_2);
-	cx231xx_do_i2c_scan(dev, I2C_1_MUX_3);
+	/* model check */
+	cx231xx_check_model(dev);
 
 	/* init hardware */
 	/* Note : with out calling set power mode function,
@@ -1364,18 +1464,18 @@ int cx231xx_dev_init(struct cx231xx *dev)
 		errCode = cx231xx_set_power_mode(dev,
 				 POLARIS_AVMODE_ENXTERNAL_AV);
 		if (errCode < 0) {
-			dev_err(dev->dev,
-				"%s: Failed to set Power - errCode [%d]!\n",
-				__func__, errCode);
+			cx231xx_errdev
+			("%s: Failed to set Power - errCode [%d]!\n",
+			__func__, errCode);
 			return errCode;
 		}
 	} else {
 		errCode = cx231xx_set_power_mode(dev,
 				 POLARIS_AVMODE_ANALOGT_TV);
 		if (errCode < 0) {
-			dev_err(dev->dev,
-				"%s: Failed to set Power - errCode [%d]!\n",
-				__func__, errCode);
+			cx231xx_errdev
+			("%s: Failed to set Power - errCode [%d]!\n",
+			__func__, errCode);
 			return errCode;
 		}
 	}
@@ -1388,43 +1488,42 @@ int cx231xx_dev_init(struct cx231xx *dev)
 	/* initialize Colibri block */
 	errCode = cx231xx_afe_init_super_block(dev, 0x23c);
 	if (errCode < 0) {
-		dev_err(dev->dev,
-			"%s: cx231xx_afe init super block - errCode [%d]!\n",
-			__func__, errCode);
+		cx231xx_errdev
+		    ("%s: cx231xx_afe init super block - errCode [%d]!\n",
+		     __func__, errCode);
 		return errCode;
 	}
 	errCode = cx231xx_afe_init_channels(dev);
 	if (errCode < 0) {
-		dev_err(dev->dev,
-			"%s: cx231xx_afe init channels - errCode [%d]!\n",
-			__func__, errCode);
+		cx231xx_errdev
+		    ("%s: cx231xx_afe init channels - errCode [%d]!\n",
+		     __func__, errCode);
 		return errCode;
 	}
 
 	/* Set DIF in By pass mode */
 	errCode = cx231xx_dif_set_standard(dev, DIF_USE_BASEBAND);
 	if (errCode < 0) {
-		dev_err(dev->dev,
-			"%s: cx231xx_dif set to By pass mode - errCode [%d]!\n",
-			__func__, errCode);
+		cx231xx_errdev
+		    ("%s: cx231xx_dif set to By pass mode - errCode [%d]!\n",
+		     __func__, errCode);
 		return errCode;
 	}
 
 	/* I2S block related functions */
 	errCode = cx231xx_i2s_blk_initialize(dev);
 	if (errCode < 0) {
-		dev_err(dev->dev,
-			"%s: cx231xx_i2s block initialize - errCode [%d]!\n",
-			__func__, errCode);
+		cx231xx_errdev
+		    ("%s: cx231xx_i2s block initialize - errCode [%d]!\n",
+		     __func__, errCode);
 		return errCode;
 	}
 
 	/* init control pins */
 	errCode = cx231xx_init_ctrl_pin_status(dev);
 	if (errCode < 0) {
-		dev_err(dev->dev,
-			"%s: cx231xx_init ctrl pins - errCode [%d]!\n",
-			__func__, errCode);
+		cx231xx_errdev("%s: cx231xx_init ctrl pins - errCode [%d]!\n",
+			       __func__, errCode);
 		return errCode;
 	}
 
@@ -1439,7 +1538,6 @@ int cx231xx_dev_init(struct cx231xx *dev)
 	case CX231XX_BOARD_CNXT_RDE_253S:
 	case CX231XX_BOARD_CNXT_RDU_253S:
 	case CX231XX_BOARD_HAUPPAUGE_EXETER:
-	case CX231XX_BOARD_HAUPPAUGE_930C_HD_1113xx:
 	case CX231XX_BOARD_PV_PLAYTV_USB_HYBRID:
 	case CX231XX_BOARD_HAUPPAUGE_USB2_FM_PAL:
 	case CX231XX_BOARD_HAUPPAUGE_USB2_FM_NTSC:
@@ -1449,9 +1547,9 @@ int cx231xx_dev_init(struct cx231xx *dev)
 		break;
 	}
 	if (errCode < 0) {
-		dev_err(dev->dev,
-			"%s: cx231xx_AGC mode to Analog - errCode [%d]!\n",
-			__func__, errCode);
+		cx231xx_errdev
+		    ("%s: cx231xx_AGC mode to Analog - errCode [%d]!\n",
+		     __func__, errCode);
 		return errCode;
 	}
 
@@ -1462,7 +1560,9 @@ int cx231xx_dev_init(struct cx231xx *dev)
 	if (dev->board.has_dvb)
 		cx231xx_set_alt_setting(dev, INDEX_TS1, 0);
 
-	errCode = 0;
+	/* set the I2C master port to 3 on channel 1 */
+	errCode = cx231xx_enable_i2c_port_3(dev, true);
+
 	return errCode;
 }
 EXPORT_SYMBOL_GPL(cx231xx_dev_init);
@@ -1470,7 +1570,6 @@ EXPORT_SYMBOL_GPL(cx231xx_dev_init);
 void cx231xx_dev_uninit(struct cx231xx *dev)
 {
 	/* Un Initialize I2C bus */
-	cx231xx_i2c_mux_unregister(dev);
 	cx231xx_i2c_unregister(&dev->i2c_bus[2]);
 	cx231xx_i2c_unregister(&dev->i2c_bus[1]);
 	cx231xx_i2c_unregister(&dev->i2c_bus[0]);
@@ -1492,14 +1591,14 @@ int cx231xx_send_gpio_cmd(struct cx231xx *dev, u32 gpio_bit, u8 *gpio_val,
 	/* set request */
 	if (!request) {
 		if (direction)
-			ven_req.bRequest = VRT_GET_GPIO;	/* 0x9 gpio */
+			ven_req.bRequest = VRT_GET_GPIO;	/* 0x8 gpio */
 		else
-			ven_req.bRequest = VRT_SET_GPIO;	/* 0x8 gpio */
+			ven_req.bRequest = VRT_SET_GPIO;	/* 0x9 gpio */
 	} else {
 		if (direction)
-			ven_req.bRequest = VRT_GET_GPIE;	/* 0xb gpie */
+			ven_req.bRequest = VRT_GET_GPIE;	/* 0xa gpie */
 		else
-			ven_req.bRequest = VRT_SET_GPIE;	/* 0xa gpie */
+			ven_req.bRequest = VRT_SET_GPIE;	/* 0xb gpie */
 	}
 
 	/* set index value */
@@ -1525,8 +1624,9 @@ int cx231xx_send_gpio_cmd(struct cx231xx *dev, u32 gpio_bit, u8 *gpio_val,
 	/* call common vendor command request */
 	status = cx231xx_send_vendor_cmd(dev, &ven_req);
 	if (status < 0) {
-		dev_err(dev->dev, "%s: failed with status -%d\n",
-			__func__, status);
+		cx231xx_info
+		    ("UsbInterface::sendCommand, failed with status -%d\n",
+		     status);
 	}
 
 	return status;
@@ -1547,7 +1647,7 @@ int cx231xx_mode_register(struct cx231xx *dev, u16 address, u32 mode)
 	if (status < 0)
 		return status;
 
-	tmp = le32_to_cpu(*((__le32 *) value));
+	tmp = le32_to_cpu(*((u32 *) value));
 	tmp |= mode;
 
 	value[0] = (u8) tmp;

@@ -18,22 +18,87 @@ config SUSPEND_FREEZER
 
 	  Turning OFF this setting is NOT recommended! If in doubt, say Y.
 
-config SUSPEND_SKIP_SYNC
-	bool "Skip kernel's sys_sync() on suspend to RAM/standby"
-	depends on SUSPEND
-	depends on EXPERT
+config HAS_WAKELOCK
+	boolean
+
+config HAS_EARLYSUSPEND
+	boolean
+
+config WAKELOCK
+	boolean "Wake lock"
+	depends on PM && RTC_CLASS
+	default n
+	select HAS_WAKELOCK
+	---help---
+	  Enable wakelocks. When user space request a sleep state the
+	  sleep request will be delayed until no wake locks are held.
+
+config WAKELOCK_STAT
+	boolean "Wake lock stats"
+	depends on WAKELOCK
+	default y
+	---help---
+		Report wake lock stats in /proc/wakelocks
+
+config USER_WAKELOCK
+	boolean "Userspace wake locks"
+	depends on WAKELOCK
+	default y
+	---help---
+	  User-space wake lock api. Write "lockname" or "lockname timeout"
+	  to /sys/power/wake_lock lock and if needed create a wake lock.
+	  Write "lockname" to /sys/power/wake_unlock to unlock a user wake
+	  lock.
+
+config EARLYSUSPEND
+	bool "Early suspend"
+	depends on WAKELOCK
+	default y
+	select HAS_EARLYSUSPEND
+	---help---
+		Call early suspend handlers when the user requested sleep state
+		changes.
+
+config FORCE_POWER_ON_STATE_AFTER_RESUME
+	bool "Force to request the Power ON state after a resume"
+	depends on WAKELOCK && EARLYSUSPEND
+	default n
 	help
-	  Skip the kernel sys_sync() before freezing user processes.
-	  Some systems prefer not to pay this cost on every invocation
-	  of suspend, or they are content with invoking sync() from
-	  user-space before invoking suspend.  Say Y if that's your case.
+	  Force to request the Power ON state after a resume, causing to execute the late resume
+	  and prevent transition back into the suspended state.
+
+choice
+	prompt "User-space screen access"
+	default FB_EARLYSUSPEND if !FRAMEBUFFER_CONSOLE
+	default CONSOLE_EARLYSUSPEND
+	depends on HAS_EARLYSUSPEND
+
+	config NO_USER_SPACE_SCREEN_ACCESS_CONTROL
+		boolean "None"
+
+	config CONSOLE_EARLYSUSPEND
+		boolean "Console switch on early-suspend"
+		depends on HAS_EARLYSUSPEND && VT
+		---help---
+		  Register early suspend handler to perform a console switch to
+		  when user-space should stop drawing to the screen and a switch
+		  back when it should resume.
+
+	config FB_EARLYSUSPEND
+		boolean "Sysfs interface"
+		depends on HAS_EARLYSUSPEND
+		---help---
+		  Register early suspend handler that notifies and waits for
+		  user-space through sysfs when user-space should stop drawing
+		  to the screen and notifies user-space when it should resume.
+endchoice
 
 config HIBERNATE_CALLBACKS
 	bool
 
 config HIBERNATION
 	bool "Hibernation (aka 'suspend to disk')"
-	depends on SWAP && ARCH_HIBERNATION_POSSIBLE
+	depends on ARCH_HIBERNATION_POSSIBLE
 	select HIBERNATE_CALLBACKS
 	select LZO_COMPRESS
 	select LZO_DECOMPRESS
@@ -85,26 +150,25 @@ config PM_STD_PARTITION
 	default ""
 	---help---
 	  The default resume partition is the partition that the suspend-
-	  to-disk implementation will look for a suspended disk image. 
+	  to-disk implementation will look for a suspended disk image.
 
-	  The partition specified here will be different for almost every user. 
+	  The partition specified here will be different for almost every user.
 	  It should be a valid swap partition (at least for now) that is turned
-	  on before suspending. 
+	  on before suspending.
 
 	  The partition specified can be overridden by specifying:
 
-		resume=/dev/<other device> 
+		resume=/dev/<other device>
 
-	  which will set the resume partition to the device specified. 
+	  which will set the resume partition to the device specified.
 
 	  Note there is currently not a way to specify which device to save the
-	  suspended image to. It will simply pick the first available swap 
+	  suspended image to. It will simply pick the first available swap
 	  device.
 
 config PM_SLEEP
 	def_bool y
 	depends on SUSPEND || HIBERNATE_CALLBACKS
-	select PM
 
 config PM_SLEEP_SMP
 	def_bool y
@@ -140,18 +204,23 @@ config PM_WAKELOCKS_GC
 	depends on PM_WAKELOCKS
 	default y
 
-config PM
-	bool "Device power management core functionality"
+config PM_RUNTIME
+	bool "Run-time PM core functionality"
+	depends on !IA64_HP_SIM
 	---help---
 	  Enable functionality allowing I/O devices to be put into energy-saving
-	  (low power) states, for example after a specified period of inactivity
-	  (autosuspended), and woken up in response to a hardware-generated
+	  (low power) states at run time (or autosuspended) after a specified
+	  period of inactivity and woken up in response to a hardware-generated
 	  wake-up event or a driver's request.
 
 	  Hardware support is generally required for this functionality to work
 	  and the bus type drivers of the buses the devices are on are
-	  responsible for the actual handling of device suspend requests and
+	  responsible for the actual handling of the autosuspend requests and
 	  wake-up events.
+
+config PM
+	def_bool y
+	depends on PM_SLEEP || PM_RUNTIME
 
 config PM_DEBUG
 	bool "Power Management Debug Support"
@@ -186,7 +255,7 @@ config PM_SLEEP_DEBUG
 
 config DPM_WATCHDOG
 	bool "Device suspend/resume watchdog"
-	depends on PM_DEBUG && PSTORE && EXPERT
+	depends on PM_DEBUG && PSTORE
 	---help---
 	  Sets up a watchdog timer to capture drivers that are
 	  locked up attempting to suspend/resume a device.
@@ -197,7 +266,7 @@ config DPM_WATCHDOG
 config DPM_WATCHDOG_TIMEOUT
 	int "Watchdog timeout in seconds"
 	range 1 120
-	default 120
+	default 12
 	depends on DPM_WATCHDOG
 
 config PM_TRACE
@@ -235,7 +304,7 @@ config PM_TRACE_RTC
 
 config APM_EMULATION
 	tristate "Advanced Power Management Emulation"
-	depends on SYS_SUPPORTS_APM_EMULATION
+	depends on PM && SYS_SUPPORTS_APM_EMULATION
 	help
 	  APM is a BIOS specification for saving power using several different
 	  techniques. This is mostly useful for battery powered laptops with
@@ -259,9 +328,12 @@ config APM_EMULATION
 	  anything, try disabling/enabling this option (or disabling/enabling
 	  APM in your BIOS).
 
-config PM_OPP
+config ARCH_HAS_OPP
 	bool
-	select SRCU
+
+config PM_OPP
+	bool "Operating Performance Point (OPP) Layer library"
+	depends on ARCH_HAS_OPP
 	---help---
 	  SOCs have a standard set of tuples consisting of frequency and
 	  voltage pairs that the device will support per voltage domain. This
@@ -305,9 +377,26 @@ config PM_GENERIC_DOMAINS_SLEEP
 	def_bool y
 	depends on PM_SLEEP && PM_GENERIC_DOMAINS
 
+config PM_GENERIC_DOMAINS_RUNTIME
+	def_bool y
+	depends on PM_RUNTIME && PM_GENERIC_DOMAINS
+
 config PM_GENERIC_DOMAINS_OF
 	def_bool y
-	depends on PM_GENERIC_DOMAINS && OF
+	depends on PM_GENERIC_DOMAINS && OF && !ARCH_EXYNOS
 
 config CPU_PM
 	bool
+	depends on SUSPEND || CPU_IDLE
+
+config SUSPEND_TIME
+	bool "Log time spent in suspend"
+	---help---
+	  Prints the time spent in suspend in the kernel log, and
+	  keeps statistics on the time spent in suspend in
+	  /sys/kernel/debug/suspend_time
+
+config MK_SNAPSHOT_ONLY
+	bool "make the snapshot image only"
+	depends on HIBERNATION
+	default n

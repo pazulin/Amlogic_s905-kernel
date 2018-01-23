@@ -79,7 +79,7 @@
 # define sdc_readb(p)		gsc_readb(p)
 # define sdc_writeb(v,p)	gsc_writeb((v),(p))
 #elif defined(__mc68000__)
-#include <linux/uaccess.h>
+# include <asm/uaccess.h>
 # define sdc_readb(p)		in_8(p)
 # define sdc_writeb(v,p)	out_8((p),(v))
 #else
@@ -984,7 +984,7 @@ static void hp_sdc_exit(void)
 	free_irq(hp_sdc.irq, &hp_sdc);
 	write_unlock_irq(&hp_sdc.lock);
 
-	del_timer_sync(&hp_sdc.kicker);
+	del_timer(&hp_sdc.kicker);
 
 	tasklet_kill(&hp_sdc.task);
 

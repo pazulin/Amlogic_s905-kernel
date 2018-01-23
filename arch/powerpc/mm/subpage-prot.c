@@ -15,7 +15,7 @@
 #include <linux/hugetlb.h>
 
 #include <asm/pgtable.h>
-#include <linux/uaccess.h>
+#include <asm/uaccess.h>
 #include <asm/tlbflush.h>
 
 /*
@@ -134,8 +134,8 @@ static void subpage_prot_clear(unsigned long addr, unsigned long len)
 static int subpage_walk_pmd_entry(pmd_t *pmd, unsigned long addr,
 				  unsigned long end, struct mm_walk *walk)
 {
-	struct vm_area_struct *vma = walk->vma;
-	split_huge_pmd(vma, pmd, addr);
+	struct vm_area_struct *vma = walk->private;
+	split_huge_page_pmd(vma, addr, pmd);
 	return 0;
 }
 
@@ -163,7 +163,9 @@ static void subpage_mark_vma_nohuge(struct mm_struct *mm, unsigned long addr,
 		if (vma->vm_start >= (addr + len))
 			break;
 		vma->vm_flags |= VM_NOHUGEPAGE;
-		walk_page_vma(vma, &subpage_proto_walk);
+		subpage_proto_walk.private = vma;
+		walk_page_range(vma->vm_start, vma->vm_end,
+				&subpage_proto_walk);
 		vma = vma->vm_next;
 	}
 }
@@ -197,8 +199,7 @@ long sys_subpage_prot(unsigned long addr, unsigned long len, u32 __user *map)
 
 	/* Check parameters */
 	if ((addr & ~PAGE_MASK) || (len & ~PAGE_MASK) ||
-	    addr >= mm->task_size || len >= mm->task_size ||
-	    addr + len > mm->task_size)
+	    addr >= TASK_SIZE || len >= TASK_SIZE || addr + len > TASK_SIZE)
 		return -EINVAL;
 
 	if (is_hugepage_only_range(mm, addr, len))
@@ -249,8 +250,9 @@ long sys_subpage_prot(unsigned long addr, unsigned long len, u32 __user *map)
 			nw = (next - addr) >> PAGE_SHIFT;
 
 		up_write(&mm->mmap_sem);
+		err = -EFAULT;
 		if (__copy_from_user(spp, map, nw * sizeof(u32)))
-			return -EFAULT;
+			goto out2;
 		map += nw;
 		down_write(&mm->mmap_sem);
 
@@ -262,5 +264,6 @@ long sys_subpage_prot(unsigned long addr, unsigned long len, u32 __user *map)
 	err = 0;
  out:
 	up_write(&mm->mmap_sem);
+ out2:
 	return err;
 }

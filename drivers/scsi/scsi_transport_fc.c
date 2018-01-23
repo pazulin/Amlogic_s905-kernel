@@ -30,7 +30,6 @@
 #include <linux/slab.h>
 #include <linux/delay.h>
 #include <linux/kernel.h>
-#include <linux/bsg-lib.h>
 #include <scsi/scsi_device.h>
 #include <scsi/scsi_host.h>
 #include <scsi/scsi_transport.h>
@@ -40,6 +39,7 @@
 #include <scsi/scsi_netlink_fc.h>
 #include <scsi/scsi_bsg_fc.h>
 #include "scsi_priv.h"
+#include "scsi_transport_fc_internal.h"
 
 static int fc_queue_work(struct Scsi_Host *, struct work_struct *);
 static void fc_vport_sched_delete(struct work_struct *work);
@@ -261,12 +261,6 @@ static const struct {
 	{ FC_PORTSPEED_10GBIT,		"10 Gbit" },
 	{ FC_PORTSPEED_8GBIT,		"8 Gbit" },
 	{ FC_PORTSPEED_16GBIT,		"16 Gbit" },
-	{ FC_PORTSPEED_32GBIT,		"32 Gbit" },
-	{ FC_PORTSPEED_20GBIT,		"20 Gbit" },
-	{ FC_PORTSPEED_40GBIT,		"40 Gbit" },
-	{ FC_PORTSPEED_50GBIT,		"50 Gbit" },
-	{ FC_PORTSPEED_100GBIT,		"100 Gbit" },
-	{ FC_PORTSPEED_25GBIT,		"25 Gbit" },
 	{ FC_PORTSPEED_NOT_NEGOTIATED,	"Not Negotiated" },
 };
 fc_bitfield_name_search(port_speed, fc_port_speed_names)
@@ -289,10 +283,9 @@ static const struct {
 	u32 			value;
 	char			*name;
 } fc_port_role_names[] = {
-	{ FC_PORT_ROLE_FCP_TARGET,		"FCP Target" },
-	{ FC_PORT_ROLE_FCP_INITIATOR,		"FCP Initiator" },
-	{ FC_PORT_ROLE_IP_PORT,			"IP Port" },
-	{ FC_PORT_ROLE_FCP_DUMMY_INITIATOR,	"FCP Dummy Initiator" },
+	{ FC_PORT_ROLE_FCP_TARGET,	"FCP Target" },
+	{ FC_PORT_ROLE_FCP_INITIATOR,	"FCP Initiator" },
+	{ FC_PORT_ROLE_IP_PORT,		"IP Port" },
 };
 fc_bitfield_name_search(port_roles, fc_port_role_names)
 
@@ -851,7 +844,7 @@ static int fc_str_to_dev_loss(const char *buf, unsigned long *val)
 	char *cp;
 
 	*val = simple_strtoul(buf, &cp, 0);
-	if (*cp && (*cp != '\n'))
+	if ((*cp && (*cp != '\n')) || (*val < 0))
 		return -EINVAL;
 	/*
 	 * Check for overflow; dev_loss_tmo is u32
@@ -2029,10 +2022,11 @@ static void fc_vport_dev_release(struct device *dev)
 	kfree(vport);
 }
 
-static int scsi_is_fc_vport(const struct device *dev)
+int scsi_is_fc_vport(const struct device *dev)
 {
 	return dev->release == fc_vport_dev_release;
 }
+EXPORT_SYMBOL(scsi_is_fc_vport);
 
 static int fc_vport_match(struct attribute_container *cont,
 			    struct device *dev)
@@ -2056,7 +2050,7 @@ static int fc_vport_match(struct attribute_container *cont,
 
 
 /**
- * fc_eh_timed_out - FC Transport I/O timeout intercept handler
+ * fc_timed_out - FC Transport I/O timeout intercept handler
  * @scmd:	The SCSI command which timed out
  *
  * This routine protects against error handlers getting invoked while a
@@ -2077,8 +2071,8 @@ static int fc_vport_match(struct attribute_container *cont,
  * Notes:
  *	This routine assumes no locks are held on entry.
  */
-enum blk_eh_timer_return
-fc_eh_timed_out(struct scsi_cmnd *scmd)
+static enum blk_eh_timer_return
+fc_timed_out(struct scsi_cmnd *scmd)
 {
 	struct fc_rport *rport = starget_to_rport(scsi_target(scmd->device));
 
@@ -2087,7 +2081,6 @@ fc_eh_timed_out(struct scsi_cmnd *scmd)
 
 	return BLK_EH_NOT_HANDLED;
 }
-EXPORT_SYMBOL(fc_eh_timed_out);
 
 /*
  * Called by fc_user_scan to locate an rport on the shost that
@@ -2095,7 +2088,7 @@ EXPORT_SYMBOL(fc_eh_timed_out);
  * on the rport.
  */
 static void
-fc_user_scan_tgt(struct Scsi_Host *shost, uint channel, uint id, u64 lun)
+fc_user_scan_tgt(struct Scsi_Host *shost, uint channel, uint id, uint lun)
 {
 	struct fc_rport *rport;
 	unsigned long flags;
@@ -2112,8 +2105,7 @@ fc_user_scan_tgt(struct Scsi_Host *shost, uint channel, uint id, u64 lun)
 		if ((channel == rport->channel) &&
 		    (id == rport->scsi_target_id)) {
 			spin_unlock_irqrestore(shost->host_lock, flags);
-			scsi_scan_target(&rport->dev, channel, id, lun,
-					 SCSI_SCAN_MANUAL);
+			scsi_scan_target(&rport->dev, channel, id, lun, 1);
 			return;
 		}
 	}
@@ -2128,7 +2120,7 @@ fc_user_scan_tgt(struct Scsi_Host *shost, uint channel, uint id, u64 lun)
  * object as the parent.
  */
 static int
-fc_user_scan(struct Scsi_Host *shost, uint channel, uint id, u64 lun)
+fc_user_scan(struct Scsi_Host *shost, uint channel, uint id, uint lun)
 {
 	uint chlo, chhi;
 	uint tgtlo, tgthi;
@@ -2159,6 +2151,19 @@ fc_user_scan(struct Scsi_Host *shost, uint channel, uint id, u64 lun)
 			fc_user_scan_tgt(shost, chlo, tgtlo, lun);
 
 	return 0;
+}
+
+static int fc_tsk_mgmt_response(struct Scsi_Host *shost, u64 nexus, u64 tm_id,
+				int result)
+{
+	struct fc_internal *i = to_fc_internal(shost->transportt);
+	return i->f->tsk_mgmt_response(shost, nexus, tm_id, result);
+}
+
+static int fc_it_nexus_response(struct Scsi_Host *shost, u64 nexus, int result)
+{
+	struct fc_internal *i = to_fc_internal(shost->transportt);
+	return i->f->it_nexus_response(shost, nexus, result);
 }
 
 struct scsi_transport_template *
@@ -2200,7 +2205,13 @@ fc_attach_transport(struct fc_function_template *ft)
 	/* Transport uses the shost workq for scsi scanning */
 	i->t.create_work_queue = 1;
 
+	i->t.eh_timed_out = fc_timed_out;
+
 	i->t.user_scan = fc_user_scan;
+
+	/* target-mode drivers' functions */
+	i->t.tsk_mgmt_response = fc_tsk_mgmt_response;
+	i->t.it_nexus_response = fc_it_nexus_response;
 
 	/*
 	 * Setup SCSI Target Attributes.
@@ -2537,7 +2548,6 @@ fc_rport_final_delete(struct work_struct *work)
 			fc_flush_devloss(shost);
 		if (!cancel_delayed_work(&rport->dev_loss_work))
 			fc_flush_devloss(shost);
-		cancel_work_sync(&rport->scan_work);
 		spin_lock_irqsave(shost->host_lock, flags);
 		rport->flags &= ~FC_RPORT_DEVLOSS_PENDING;
 	}
@@ -2570,13 +2580,13 @@ fc_rport_final_delete(struct work_struct *work)
 	transport_remove_device(dev);
 	device_del(dev);
 	transport_destroy_device(dev);
-	scsi_host_put(shost);			/* for fc_host->rport list */
+	put_device(&shost->shost_gendev);	/* for fc_host->rport list */
 	put_device(dev);			/* for self-reference */
 }
 
 
 /**
- * fc_remote_port_create - allocates and creates a remote FC port.
+ * fc_rport_create - allocates and creates a remote FC port.
  * @shost:	scsi host the remote port is connected to.
  * @channel:	Channel on shost port connected to.
  * @ids:	The world wide names, fc address, and FC4 port
@@ -2589,8 +2599,8 @@ fc_rport_final_delete(struct work_struct *work)
  *	This routine assumes no locks are held on entry.
  */
 static struct fc_rport *
-fc_remote_port_create(struct Scsi_Host *shost, int channel,
-		      struct fc_rport_identifiers  *ids)
+fc_rport_create(struct Scsi_Host *shost, int channel,
+	struct fc_rport_identifiers  *ids)
 {
 	struct fc_host_attrs *fc_host = shost_to_fc_host(shost);
 	struct fc_internal *fci = to_fc_internal(shost->transportt);
@@ -2629,13 +2639,12 @@ fc_remote_port_create(struct Scsi_Host *shost, int channel,
 	spin_lock_irqsave(shost->host_lock, flags);
 
 	rport->number = fc_host->next_rport_number++;
-	if ((rport->roles & FC_PORT_ROLE_FCP_TARGET) ||
-	    (rport->roles & FC_PORT_ROLE_FCP_DUMMY_INITIATOR))
+	if (rport->roles & FC_PORT_ROLE_FCP_TARGET)
 		rport->scsi_target_id = fc_host->next_target_id++;
 	else
 		rport->scsi_target_id = -1;
 	list_add_tail(&rport->peers, &fc_host->rports);
-	scsi_host_get(shost);			/* for fc_host->rport list */
+	get_device(&shost->shost_gendev);	/* for fc_host->rport list */
 
 	spin_unlock_irqrestore(shost->host_lock, flags);
 
@@ -2670,7 +2679,7 @@ delete_rport:
 	transport_destroy_device(dev);
 	spin_lock_irqsave(shost->host_lock, flags);
 	list_del(&rport->peers);
-	scsi_host_put(shost);			/* for fc_host->rport list */
+	put_device(&shost->shost_gendev);	/* for fc_host->rport list */
 	spin_unlock_irqrestore(shost->host_lock, flags);
 	put_device(dev->parent);
 	kfree(rport);
@@ -2899,7 +2908,7 @@ fc_remote_port_add(struct Scsi_Host *shost, int channel,
 	spin_unlock_irqrestore(shost->host_lock, flags);
 
 	/* No consistent binding found - create new remote port entry */
-	rport = fc_remote_port_create(shost, channel, ids);
+	rport = fc_rport_create(shost, channel, ids);
 
 	return rport;
 }
@@ -2997,6 +3006,10 @@ fc_remote_port_delete(struct fc_rport  *rport)
 
 	spin_unlock_irqrestore(shost->host_lock, flags);
 
+	if (rport->roles & FC_PORT_ROLE_FCP_INITIATOR &&
+	    shost->active_mode & MODE_TARGET)
+		fc_tgt_it_nexus_destroy(shost, (unsigned long)rport);
+
 	scsi_target_block(&rport->dev);
 
 	/* see if we need to kill io faster than waiting for device loss */
@@ -3037,6 +3050,7 @@ fc_remote_port_rolechg(struct fc_rport  *rport, u32 roles)
 	struct fc_host_attrs *fc_host = shost_to_fc_host(shost);
 	unsigned long flags;
 	int create = 0;
+	int ret;
 
 	spin_lock_irqsave(shost->host_lock, flags);
 	if (roles & FC_PORT_ROLE_FCP_TARGET) {
@@ -3045,6 +3059,12 @@ fc_remote_port_rolechg(struct fc_rport  *rport, u32 roles)
 			create = 1;
 		} else if (!(rport->roles & FC_PORT_ROLE_FCP_TARGET))
 			create = 1;
+	} else if (shost->active_mode & MODE_TARGET) {
+		ret = fc_tgt_it_nexus_create(shost, (unsigned long)rport,
+					     (char *)&rport->node_name);
+		if (ret)
+			printk(KERN_ERR "FC Remore Port tgt nexus failed %d\n",
+			       ret);
 	}
 
 	rport->roles = roles;
@@ -3262,8 +3282,7 @@ fc_scsi_scan_rport(struct work_struct *work)
 	    (rport->roles & FC_PORT_ROLE_FCP_TARGET) &&
 	    !(i->f->disable_target_scan)) {
 		scsi_scan_target(&rport->dev, rport->channel,
-				 rport->scsi_target_id, SCAN_WILD_CARD,
-				 SCSI_SCAN_RESCAN);
+			rport->scsi_target_id, SCAN_WILD_CARD, 1);
 	}
 
 	spin_lock_irqsave(shost->host_lock, flags);
@@ -3369,7 +3388,7 @@ fc_vport_setup(struct Scsi_Host *shost, int channel, struct device *pdev,
 	fc_host->npiv_vports_inuse++;
 	vport->number = fc_host->next_vport_number++;
 	list_add_tail(&vport->peers, &fc_host->vports);
-	scsi_host_get(shost);			/* for fc_host->vport list */
+	get_device(&shost->shost_gendev);	/* for fc_host->vport list */
 
 	spin_unlock_irqrestore(shost->host_lock, flags);
 
@@ -3427,7 +3446,7 @@ delete_vport:
 	transport_destroy_device(dev);
 	spin_lock_irqsave(shost->host_lock, flags);
 	list_del(&vport->peers);
-	scsi_host_put(shost);			/* for fc_host->vport list */
+	put_device(&shost->shost_gendev);	/* for fc_host->vport list */
 	fc_host->npiv_vports_inuse--;
 	spin_unlock_irqrestore(shost->host_lock, flags);
 	put_device(dev->parent);
@@ -3490,7 +3509,7 @@ fc_vport_terminate(struct fc_vport *vport)
 		vport->flags |= FC_VPORT_DELETED;
 		list_del(&vport->peers);
 		fc_host->npiv_vports_inuse--;
-		scsi_host_put(shost);		/* for fc_host->vport list */
+		put_device(&shost->shost_gendev);  /* for fc_host->vport list */
 	}
 	spin_unlock_irqrestore(shost->host_lock, flags);
 
@@ -3539,6 +3558,81 @@ fc_vport_sched_delete(struct work_struct *work)
  * BSG support
  */
 
+
+/**
+ * fc_destroy_bsgjob - routine to teardown/delete a fc bsg job
+ * @job:	fc_bsg_job that is to be torn down
+ */
+static void
+fc_destroy_bsgjob(struct fc_bsg_job *job)
+{
+	unsigned long flags;
+
+	spin_lock_irqsave(&job->job_lock, flags);
+	if (job->ref_cnt) {
+		spin_unlock_irqrestore(&job->job_lock, flags);
+		return;
+	}
+	spin_unlock_irqrestore(&job->job_lock, flags);
+
+	put_device(job->dev);	/* release reference for the request */
+
+	kfree(job->request_payload.sg_list);
+	kfree(job->reply_payload.sg_list);
+	kfree(job);
+}
+
+/**
+ * fc_bsg_jobdone - completion routine for bsg requests that the LLD has
+ *                  completed
+ * @job:	fc_bsg_job that is complete
+ */
+static void
+fc_bsg_jobdone(struct fc_bsg_job *job)
+{
+	struct request *req = job->req;
+	struct request *rsp = req->next_rq;
+	int err;
+
+	err = job->req->errors = job->reply->result;
+
+	if (err < 0)
+		/* we're only returning the result field in the reply */
+		job->req->sense_len = sizeof(uint32_t);
+	else
+		job->req->sense_len = job->reply_len;
+
+	/* we assume all request payload was transferred, residual == 0 */
+	req->resid_len = 0;
+
+	if (rsp) {
+		WARN_ON(job->reply->reply_payload_rcv_len > rsp->resid_len);
+
+		/* set reply (bidi) residual */
+		rsp->resid_len -= min(job->reply->reply_payload_rcv_len,
+				      rsp->resid_len);
+	}
+	blk_complete_request(req);
+}
+
+/**
+ * fc_bsg_softirq_done - softirq done routine for destroying the bsg requests
+ * @rq:        BSG request that holds the job to be destroyed
+ */
+static void fc_bsg_softirq_done(struct request *rq)
+{
+	struct fc_bsg_job *job = rq->special;
+	unsigned long flags;
+
+	spin_lock_irqsave(&job->job_lock, flags);
+	job->state_flags |= FC_RQST_STATE_DONE;
+	job->ref_cnt--;
+	spin_unlock_irqrestore(&job->job_lock, flags);
+
+	blk_end_request_all(rq, rq->errors);
+	fc_destroy_bsgjob(job);
+}
+
 /**
  * fc_bsg_job_timeout - handler for when a bsg request timesout
  * @req:	request that timed out
@@ -3546,22 +3640,27 @@ fc_vport_sched_delete(struct work_struct *work)
 static enum blk_eh_timer_return
 fc_bsg_job_timeout(struct request *req)
 {
-	struct bsg_job *job = (void *) req->special;
-	struct Scsi_Host *shost = fc_bsg_to_shost(job);
-	struct fc_rport *rport = fc_bsg_to_rport(job);
+	struct fc_bsg_job *job = (void *) req->special;
+	struct Scsi_Host *shost = job->shost;
 	struct fc_internal *i = to_fc_internal(shost->transportt);
-	int err = 0, inflight = 0;
+	unsigned long flags;
+	int err = 0, done = 0;
 
-	if (rport && rport->port_state == FC_PORTSTATE_BLOCKED)
+	if (job->rport && job->rport->port_state == FC_PORTSTATE_BLOCKED)
 		return BLK_EH_RESET_TIMER;
 
-	inflight = bsg_job_get(job);
+	spin_lock_irqsave(&job->job_lock, flags);
+	if (job->state_flags & FC_RQST_STATE_DONE)
+		done = 1;
+	else
+		job->ref_cnt++;
+	spin_unlock_irqrestore(&job->job_lock, flags);
 
-	if (inflight && i->f->bsg_timeout) {
+	if (!done && i->f->bsg_timeout) {
 		/* call LLDD to abort the i/o as it has timed out */
 		err = i->f->bsg_timeout(job);
 		if (err == -EAGAIN) {
-			bsg_job_put(job);
+			job->ref_cnt--;
 			return BLK_EH_RESET_TIMER;
 		} else if (err)
 			printk(KERN_ERR "ERROR: FC BSG request timeout - LLD "
@@ -3569,33 +3668,126 @@ fc_bsg_job_timeout(struct request *req)
 	}
 
 	/* the blk_end_sync_io() doesn't check the error */
-	if (!inflight)
+	if (done)
 		return BLK_EH_NOT_HANDLED;
 	else
 		return BLK_EH_HANDLED;
 }
 
+static int
+fc_bsg_map_buffer(struct fc_bsg_buffer *buf, struct request *req)
+{
+	size_t sz = (sizeof(struct scatterlist) * req->nr_phys_segments);
+
+	BUG_ON(!req->nr_phys_segments);
+
+	buf->sg_list = kzalloc(sz, GFP_KERNEL);
+	if (!buf->sg_list)
+		return -ENOMEM;
+	sg_init_table(buf->sg_list, req->nr_phys_segments);
+	buf->sg_cnt = blk_rq_map_sg(req->q, req, buf->sg_list);
+	buf->payload_len = blk_rq_bytes(req);
+	return 0;
+}
+
+
+/**
+ * fc_req_to_bsgjob - Allocate/create the fc_bsg_job structure for the
+ *                   bsg request
+ * @shost:	SCSI Host corresponding to the bsg object
+ * @rport:	(optional) FC Remote Port corresponding to the bsg object
+ * @req:	BSG request that needs a job structure
+ */
+static int
+fc_req_to_bsgjob(struct Scsi_Host *shost, struct fc_rport *rport,
+	struct request *req)
+{
+	struct fc_internal *i = to_fc_internal(shost->transportt);
+	struct request *rsp = req->next_rq;
+	struct fc_bsg_job *job;
+	int ret;
+
+	BUG_ON(req->special);
+
+	job = kzalloc(sizeof(struct fc_bsg_job) + i->f->dd_bsg_size,
+			GFP_KERNEL);
+	if (!job)
+		return -ENOMEM;
+
+	/*
+	 * Note: this is a bit silly.
+	 * The request gets formatted as a SGIO v4 ioctl request, which
+	 * then gets reformatted as a blk request, which then gets
+	 * reformatted as a fc bsg request. And on completion, we have
+	 * to wrap return results such that SGIO v4 thinks it was a scsi
+	 * status.  I hope this was all worth it.
+	 */
+
+	req->special = job;
+	job->shost = shost;
+	job->rport = rport;
+	job->req = req;
+	if (i->f->dd_bsg_size)
+		job->dd_data = (void *)&job[1];
+	spin_lock_init(&job->job_lock);
+	job->request = (struct fc_bsg_request *)req->cmd;
+	job->request_len = req->cmd_len;
+	job->reply = req->sense;
+	job->reply_len = SCSI_SENSE_BUFFERSIZE;	/* Size of sense buffer
+						 * allocated */
+	if (req->bio) {
+		ret = fc_bsg_map_buffer(&job->request_payload, req);
+		if (ret)
+			goto failjob_rls_job;
+	}
+	if (rsp && rsp->bio) {
+		ret = fc_bsg_map_buffer(&job->reply_payload, rsp);
+		if (ret)
+			goto failjob_rls_rqst_payload;
+	}
+	job->job_done = fc_bsg_jobdone;
+	if (rport)
+		job->dev = &rport->dev;
+	else
+		job->dev = &shost->shost_gendev;
+	get_device(job->dev);		/* take a reference for the request */
+
+	job->ref_cnt = 1;
+
+	return 0;
+
+
+failjob_rls_rqst_payload:
+	kfree(job->request_payload.sg_list);
+failjob_rls_job:
+	kfree(job);
+	return -ENOMEM;
+}
+
+
+enum fc_dispatch_result {
+	FC_DISPATCH_BREAK,	/* on return, q is locked, break from q loop */
+	FC_DISPATCH_LOCKED,	/* on return, q is locked, continue on */
+	FC_DISPATCH_UNLOCKED,	/* on return, q is unlocked, continue on */
+};
+
+
 /**
  * fc_bsg_host_dispatch - process fc host bsg requests and dispatch to LLDD
+ * @q:		fc host request queue
  * @shost:	scsi host rport attached to
  * @job:	bsg job to be processed
  */
-static int fc_bsg_host_dispatch(struct Scsi_Host *shost, struct bsg_job *job)
+static enum fc_dispatch_result
+fc_bsg_host_dispatch(struct request_queue *q, struct Scsi_Host *shost,
+			 struct fc_bsg_job *job)
 {
 	struct fc_internal *i = to_fc_internal(shost->transportt);
-	struct fc_bsg_request *bsg_request = job->request;
-	struct fc_bsg_reply *bsg_reply = job->reply;
 	int cmdlen = sizeof(uint32_t);	/* start with length of msgcode */
 	int ret;
 
-	/* check if we really have all the request data needed */
-	if (job->request_len < cmdlen) {
-		ret = -ENOMSG;
-		goto fail_host_msg;
-	}
-
 	/* Validate the host command */
-	switch (bsg_request->msgcode) {
+	switch (job->request->msgcode) {
 	case FC_BSG_HST_ADD_RPORT:
 		cmdlen += sizeof(struct fc_bsg_host_add_rport);
 		break;
@@ -3627,7 +3819,7 @@ static int fc_bsg_host_dispatch(struct Scsi_Host *shost, struct bsg_job *job)
 	case FC_BSG_HST_VENDOR:
 		cmdlen += sizeof(struct fc_bsg_host_vendor);
 		if ((shost->hostt->vendor_id == 0L) ||
-		    (bsg_request->rqst_data.h_vendor.vendor_id !=
+		    (job->request->rqst_data.h_vendor.vendor_id !=
 			shost->hostt->vendor_id)) {
 			ret = -ESRCH;
 			goto fail_host_msg;
@@ -3639,19 +3831,24 @@ static int fc_bsg_host_dispatch(struct Scsi_Host *shost, struct bsg_job *job)
 		goto fail_host_msg;
 	}
 
+	/* check if we really have all the request data needed */
+	if (job->request_len < cmdlen) {
+		ret = -ENOMSG;
+		goto fail_host_msg;
+	}
+
 	ret = i->f->bsg_request(job);
 	if (!ret)
-		return 0;
+		return FC_DISPATCH_UNLOCKED;
 
 fail_host_msg:
 	/* return the errno failure code as the only status */
 	BUG_ON(job->reply_len < sizeof(uint32_t));
-	bsg_reply->reply_payload_rcv_len = 0;
-	bsg_reply->result = ret;
+	job->reply->reply_payload_rcv_len = 0;
+	job->reply->result = ret;
 	job->reply_len = sizeof(uint32_t);
-	bsg_job_done(job, bsg_reply->result,
-		       bsg_reply->reply_payload_rcv_len);
-	return 0;
+	fc_bsg_jobdone(job);
+	return FC_DISPATCH_UNLOCKED;
 }
 
 
@@ -3662,38 +3859,34 @@ fail_host_msg:
 static void
 fc_bsg_goose_queue(struct fc_rport *rport)
 {
-	struct request_queue *q = rport->rqst_q;
-	unsigned long flags;
-
-	if (!q)
+	if (!rport->rqst_q)
 		return;
 
-	spin_lock_irqsave(q->queue_lock, flags);
-	blk_run_queue_async(q);
-	spin_unlock_irqrestore(q->queue_lock, flags);
+	/*
+	 * This get/put dance makes no sense
+	 */
+	get_device(&rport->dev);
+	blk_run_queue_async(rport->rqst_q);
+	put_device(&rport->dev);
 }
 
 /**
  * fc_bsg_rport_dispatch - process rport bsg requests and dispatch to LLDD
+ * @q:		rport request queue
  * @shost:	scsi host rport attached to
+ * @rport:	rport request destined to
  * @job:	bsg job to be processed
  */
-static int fc_bsg_rport_dispatch(struct Scsi_Host *shost, struct bsg_job *job)
+static enum fc_dispatch_result
+fc_bsg_rport_dispatch(struct request_queue *q, struct Scsi_Host *shost,
+			 struct fc_rport *rport, struct fc_bsg_job *job)
 {
 	struct fc_internal *i = to_fc_internal(shost->transportt);
-	struct fc_bsg_request *bsg_request = job->request;
-	struct fc_bsg_reply *bsg_reply = job->reply;
 	int cmdlen = sizeof(uint32_t);	/* start with length of msgcode */
 	int ret;
 
-	/* check if we really have all the request data needed */
-	if (job->request_len < cmdlen) {
-		ret = -ENOMSG;
-		goto fail_rport_msg;
-	}
-
 	/* Validate the rport command */
-	switch (bsg_request->msgcode) {
+	switch (job->request->msgcode) {
 	case FC_BSG_RPT_ELS:
 		cmdlen += sizeof(struct fc_bsg_rport_els);
 		goto check_bidi;
@@ -3713,30 +3906,132 @@ check_bidi:
 		goto fail_rport_msg;
 	}
 
+	/* check if we really have all the request data needed */
+	if (job->request_len < cmdlen) {
+		ret = -ENOMSG;
+		goto fail_rport_msg;
+	}
+
 	ret = i->f->bsg_request(job);
 	if (!ret)
-		return 0;
+		return FC_DISPATCH_UNLOCKED;
 
 fail_rport_msg:
 	/* return the errno failure code as the only status */
 	BUG_ON(job->reply_len < sizeof(uint32_t));
-	bsg_reply->reply_payload_rcv_len = 0;
-	bsg_reply->result = ret;
+	job->reply->reply_payload_rcv_len = 0;
+	job->reply->result = ret;
 	job->reply_len = sizeof(uint32_t);
-	bsg_job_done(job, bsg_reply->result,
-		       bsg_reply->reply_payload_rcv_len);
-	return 0;
+	fc_bsg_jobdone(job);
+	return FC_DISPATCH_UNLOCKED;
 }
 
-static int fc_bsg_dispatch(struct bsg_job *job)
+
+/**
+ * fc_bsg_request_handler - generic handler for bsg requests
+ * @q:		request queue to manage
+ * @shost:	Scsi_Host related to the bsg object
+ * @rport:	FC remote port related to the bsg object (optional)
+ * @dev:	device structure for bsg object
+ */
+static void
+fc_bsg_request_handler(struct request_queue *q, struct Scsi_Host *shost,
+		       struct fc_rport *rport, struct device *dev)
 {
-	struct Scsi_Host *shost = fc_bsg_to_shost(job);
+	struct request *req;
+	struct fc_bsg_job *job;
+	enum fc_dispatch_result ret;
 
-	if (scsi_is_fc_rport(job->dev))
-		return fc_bsg_rport_dispatch(shost, job);
-	else
-		return fc_bsg_host_dispatch(shost, job);
+	if (!get_device(dev))
+		return;
+
+	while (1) {
+		if (rport && (rport->port_state == FC_PORTSTATE_BLOCKED) &&
+		    !(rport->flags & FC_RPORT_FAST_FAIL_TIMEDOUT))
+			break;
+
+		req = blk_fetch_request(q);
+		if (!req)
+			break;
+
+		if (rport && (rport->port_state != FC_PORTSTATE_ONLINE)) {
+			req->errors = -ENXIO;
+			spin_unlock_irq(q->queue_lock);
+			blk_end_request_all(req, -ENXIO);
+			spin_lock_irq(q->queue_lock);
+			continue;
+		}
+
+		spin_unlock_irq(q->queue_lock);
+
+		ret = fc_req_to_bsgjob(shost, rport, req);
+		if (ret) {
+			req->errors = ret;
+			blk_end_request_all(req, ret);
+			spin_lock_irq(q->queue_lock);
+			continue;
+		}
+
+		job = req->special;
+
+		/* check if we have the msgcode value at least */
+		if (job->request_len < sizeof(uint32_t)) {
+			BUG_ON(job->reply_len < sizeof(uint32_t));
+			job->reply->reply_payload_rcv_len = 0;
+			job->reply->result = -ENOMSG;
+			job->reply_len = sizeof(uint32_t);
+			fc_bsg_jobdone(job);
+			spin_lock_irq(q->queue_lock);
+			continue;
+		}
+
+		/* the dispatch routines will unlock the queue_lock */
+		if (rport)
+			ret = fc_bsg_rport_dispatch(q, shost, rport, job);
+		else
+			ret = fc_bsg_host_dispatch(q, shost, job);
+
+		/* did dispatcher hit state that can't process any more */
+		if (ret == FC_DISPATCH_BREAK)
+			break;
+
+		/* did dispatcher had released the lock */
+		if (ret == FC_DISPATCH_UNLOCKED)
+			spin_lock_irq(q->queue_lock);
+	}
+
+	spin_unlock_irq(q->queue_lock);
+	put_device(dev);
+	spin_lock_irq(q->queue_lock);
 }
+
+
+/**
+ * fc_bsg_host_handler - handler for bsg requests for a fc host
+ * @q:		fc host request queue
+ */
+static void
+fc_bsg_host_handler(struct request_queue *q)
+{
+	struct Scsi_Host *shost = q->queuedata;
+
+	fc_bsg_request_handler(q, shost, NULL, &shost->shost_gendev);
+}
+
+
+/**
+ * fc_bsg_rport_handler - handler for bsg requests for a fc rport
+ * @q:		rport request queue
+ */
+static void
+fc_bsg_rport_handler(struct request_queue *q)
+{
+	struct fc_rport *rport = q->queuedata;
+	struct Scsi_Host *shost = rport_to_shost(rport);
+
+	fc_bsg_request_handler(q, shost, rport, &rport->dev);
+}
+
 
 /**
  * fc_bsg_hostadd - Create and add the bsg hooks so we can receive requests
@@ -3749,6 +4044,7 @@ fc_bsg_hostadd(struct Scsi_Host *shost, struct fc_host_attrs *fc_host)
 	struct device *dev = &shost->shost_gendev;
 	struct fc_internal *i = to_fc_internal(shost->transportt);
 	struct request_queue *q;
+	int err;
 	char bsg_name[20];
 
 	fc_host->rqst_q = NULL;
@@ -3759,33 +4055,33 @@ fc_bsg_hostadd(struct Scsi_Host *shost, struct fc_host_attrs *fc_host)
 	snprintf(bsg_name, sizeof(bsg_name),
 		 "fc_host%d", shost->host_no);
 
-	q = bsg_setup_queue(dev, bsg_name, fc_bsg_dispatch, i->f->dd_bsg_size);
-	if (IS_ERR(q)) {
-		dev_err(dev,
-			"fc_host%d: bsg interface failed to initialize - setup queue\n",
-			shost->host_no);
-		return PTR_ERR(q);
+	q = __scsi_alloc_queue(shost, fc_bsg_host_handler);
+	if (!q) {
+		printk(KERN_ERR "fc_host%d: bsg interface failed to "
+				"initialize - no request queue\n",
+				 shost->host_no);
+		return -ENOMEM;
 	}
-	__scsi_init_queue(shost, q);
+
+	q->queuedata = shost;
+	queue_flag_set_unlocked(QUEUE_FLAG_BIDI, q);
+	blk_queue_softirq_done(q, fc_bsg_softirq_done);
 	blk_queue_rq_timed_out(q, fc_bsg_job_timeout);
 	blk_queue_rq_timeout(q, FC_DEFAULT_BSG_TIMEOUT);
+
+	err = bsg_register_queue(q, dev, bsg_name, NULL);
+	if (err) {
+		printk(KERN_ERR "fc_host%d: bsg interface failed to "
+				"initialize - register queue\n",
+				shost->host_no);
+		blk_cleanup_queue(q);
+		return err;
+	}
+
 	fc_host->rqst_q = q;
 	return 0;
 }
 
-static int fc_bsg_rport_prep(struct request_queue *q, struct request *req)
-{
-	struct fc_rport *rport = dev_to_rport(q->queuedata);
-
-	if (rport->port_state == FC_PORTSTATE_BLOCKED &&
-	    !(rport->flags & FC_RPORT_FAST_FAIL_TIMEDOUT))
-		return BLKPREP_DEFER;
-
-	if (rport->port_state != FC_PORTSTATE_ONLINE)
-		return BLKPREP_KILL;
-
-	return BLKPREP_OK;
-}
 
 /**
  * fc_bsg_rportadd - Create and add the bsg hooks so we can receive requests
@@ -3798,21 +4094,36 @@ fc_bsg_rportadd(struct Scsi_Host *shost, struct fc_rport *rport)
 	struct device *dev = &rport->dev;
 	struct fc_internal *i = to_fc_internal(shost->transportt);
 	struct request_queue *q;
+	int err;
 
 	rport->rqst_q = NULL;
 
 	if (!i->f->bsg_request)
 		return -ENOTSUPP;
 
-	q = bsg_setup_queue(dev, NULL, fc_bsg_dispatch, i->f->dd_bsg_size);
-	if (IS_ERR(q)) {
-		dev_err(dev, "failed to setup bsg queue\n");
-		return PTR_ERR(q);
+	q = __scsi_alloc_queue(shost, fc_bsg_rport_handler);
+	if (!q) {
+		printk(KERN_ERR "%s: bsg interface failed to "
+				"initialize - no request queue\n",
+				 dev->kobj.name);
+		return -ENOMEM;
 	}
-	__scsi_init_queue(shost, q);
-	blk_queue_prep_rq(q, fc_bsg_rport_prep);
+
+	q->queuedata = rport;
+	queue_flag_set_unlocked(QUEUE_FLAG_BIDI, q);
+	blk_queue_softirq_done(q, fc_bsg_softirq_done);
 	blk_queue_rq_timed_out(q, fc_bsg_job_timeout);
 	blk_queue_rq_timeout(q, BLK_DEFAULT_SG_TIMEOUT);
+
+	err = bsg_register_queue(q, dev, NULL, NULL);
+	if (err) {
+		printk(KERN_ERR "%s: bsg interface failed to "
+				"initialize - register queue\n",
+				 dev->kobj.name);
+		blk_cleanup_queue(q);
+		return err;
+	}
+
 	rport->rqst_q = q;
 	return 0;
 }

@@ -60,19 +60,23 @@ static void symbol_int_callback(struct urb *urb)
 
 	usb_serial_debug_data(&port->dev, __func__, urb->actual_length, data);
 
-	/*
-	 * Data from the device comes with a 1 byte header:
-	 *
-	 * <size of data> <data>...
-	 */
 	if (urb->actual_length > 1) {
-		data_length = data[0];
-		if (data_length > (urb->actual_length - 1))
-			data_length = urb->actual_length - 1;
+		data_length = urb->actual_length - 1;
+
+		/*
+		 * Data from the device comes with a 1 byte header:
+		 *
+		 * <size of data>data...
+		 * 	This is real data to be sent to the tty layer
+		 * we pretty much just ignore the size and send everything
+		 * else to the tty layer.
+		 */
 		tty_insert_flip_string(&port->port, &data[1], data_length);
 		tty_flip_buffer_push(&port->port);
 	} else {
-		dev_dbg(&port->dev, "%s - short packet\n", __func__);
+		dev_dbg(&port->dev,
+			"Improper amount of data received from the device, "
+			"%d bytes", urb->actual_length);
 	}
 
 exit:
@@ -92,7 +96,7 @@ exit:
 
 static int symbol_open(struct tty_struct *tty, struct usb_serial_port *port)
 {
-	struct symbol_private *priv = usb_get_serial_port_data(port);
+	struct symbol_private *priv = usb_get_serial_data(port->serial);
 	unsigned long flags;
 	int result = 0;
 
@@ -118,7 +122,7 @@ static void symbol_close(struct usb_serial_port *port)
 static void symbol_throttle(struct tty_struct *tty)
 {
 	struct usb_serial_port *port = tty->driver_data;
-	struct symbol_private *priv = usb_get_serial_port_data(port);
+	struct symbol_private *priv = usb_get_serial_data(port->serial);
 
 	spin_lock_irq(&priv->lock);
 	priv->throttled = true;
@@ -128,7 +132,7 @@ static void symbol_throttle(struct tty_struct *tty)
 static void symbol_unthrottle(struct tty_struct *tty)
 {
 	struct usb_serial_port *port = tty->driver_data;
-	struct symbol_private *priv = usb_get_serial_port_data(port);
+	struct symbol_private *priv = usb_get_serial_data(port->serial);
 	int result;
 	bool was_throttled;
 
@@ -145,6 +149,16 @@ static void symbol_unthrottle(struct tty_struct *tty)
 				"%s - failed submitting read urb, error %d\n",
 							__func__, result);
 	}
+}
+
+static int symbol_startup(struct usb_serial *serial)
+{
+	if (!serial->num_interrupt_in) {
+		dev_err(&serial->dev->dev, "no interrupt-in endpoint\n");
+		return -ENODEV;
+	}
+
+	return 0;
 }
 
 static int symbol_port_probe(struct usb_serial_port *port)
@@ -178,7 +192,7 @@ static struct usb_serial_driver symbol_device = {
 	},
 	.id_table =		id_table,
 	.num_ports =		1,
-	.num_interrupt_in =	1,
+	.attach =		symbol_startup,
 	.port_probe =		symbol_port_probe,
 	.port_remove =		symbol_port_remove,
 	.open =			symbol_open,

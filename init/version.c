@@ -23,7 +23,9 @@ int version_string(LINUX_VERSION_CODE);
 #endif
 
 struct uts_namespace init_uts_ns = {
-	.kref = KREF_INIT(2),
+	.kref = {
+		.refcount	= ATOMIC_INIT(2),
+	},
 	.name = {
 		.sysname	= UTS_SYSNAME,
 		.nodename	= UTS_NODENAME,
@@ -33,16 +35,13 @@ struct uts_namespace init_uts_ns = {
 		.domainname	= UTS_DOMAINNAME,
 	},
 	.user_ns = &init_user_ns,
-	.ns.inum = PROC_UTS_INIT_INO,
-#ifdef CONFIG_UTS_NS
-	.ns.ops = &utsns_operations,
-#endif
+	.proc_inum = PROC_UTS_INIT_INO,
 };
 EXPORT_SYMBOL_GPL(init_uts_ns);
 
 /* FIXED STRINGS! Don't touch! */
 const char linux_banner[] =
-	"Linux version " UTS_RELEASE " (" LINUX_COMPILE_BY "@"
+	"Linux version " UTS_RELEASE_FULL " (" LINUX_COMPILE_BY "@"
 	LINUX_COMPILE_HOST ") (" LINUX_COMPILER ") " UTS_VERSION "\n";
 
 const char linux_proc_banner[] =

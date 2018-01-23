@@ -64,14 +64,12 @@ static void __init display_system_type(unsigned char machtype)
 	for (i = 0; i < NUM_SUN_MACHINES; i++) {
 		if(Sun_Machines[i].id_machtype == machtype) {
 			if (machtype != (SM_SUN4M_OBP | 0x00))
-				pr_info("TYPE: %s\n", Sun_Machines[i].name);
+				printk("TYPE: %s\n", Sun_Machines[i].name);
 			else {
 #if 0
-				char sysname[128];
-
 				prom_getproperty(prom_root_node, "banner-name",
 						 sysname, sizeof(sysname));
-				pr_info("TYPE: %s\n", sysname);
+				printk("TYPE: %s\n", sysname);
 #endif
 			}
 			return;
@@ -127,5 +125,8 @@ void __init idprom_init(void)
 
 	display_system_type(idprom->id_machtype);
 
-	pr_info("Ethernet address: %pM\n", idprom->id_ethaddr);
+	printk("Ethernet address: %x:%x:%x:%x:%x:%x\n",
+		    idprom->id_ethaddr[0], idprom->id_ethaddr[1],
+		    idprom->id_ethaddr[2], idprom->id_ethaddr[3],
+		    idprom->id_ethaddr[4], idprom->id_ethaddr[5]);
 }

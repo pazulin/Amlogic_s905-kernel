@@ -11,6 +11,10 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
+ *
  * common vpss system module platform driver for all video drivers.
  */
 #include <linux/module.h>
@@ -257,8 +261,8 @@ static int dm355_enable_clock(enum vpss_clock_sel clock_sel, int en)
 		shift = 6;
 		break;
 	default:
-		printk(KERN_ERR "dm355_enable_clock: Invalid selector: %d\n",
-		       clock_sel);
+		printk(KERN_ERR "dm355_enable_clock:"
+				" Invalid selector: %d\n", clock_sel);
 		return -EINVAL;
 	}
 
@@ -417,7 +421,8 @@ static int vpss_probe(struct platform_device *pdev)
 	else if (!strcmp(platform_name, "dm644x_vpss"))
 		oper_cfg.platform = DM644X;
 	else {
-		dev_err(&pdev->dev, "vpss driver not supported on this platform\n");
+		dev_err(&pdev->dev, "vpss driver not supported on"
+			" this platform\n");
 		return -ENODEV;
 	}
 
@@ -499,6 +504,7 @@ static const struct dev_pm_ops vpss_pm_ops = {
 static struct platform_driver vpss_driver = {
 	.driver = {
 		.name	= "vpss",
+		.owner = THIS_MODULE,
 		.pm = &vpss_pm_ops,
 	},
 	.remove = vpss_remove,

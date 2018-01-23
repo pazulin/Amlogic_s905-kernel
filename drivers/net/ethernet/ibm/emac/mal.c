@@ -421,20 +421,20 @@ static int mal_poll(struct napi_struct *napi, int budget)
 		int n;
 		if (unlikely(test_bit(MAL_COMMAC_POLL_DISABLED, &mc->flags)))
 			continue;
-		n = mc->ops->poll_rx(mc->dev, budget - received);
+		n = mc->ops->poll_rx(mc->dev, budget);
 		if (n) {
 			received += n;
-			if (received >= budget)
-				return budget;
+			budget -= n;
+			if (budget <= 0)
+				goto more_work; // XXX What if this is the last one ?
 		}
 	}
 
-	if (napi_complete_done(napi, received)) {
-		/* We need to disable IRQs to protect from RXDE IRQ here */
-		spin_lock_irqsave(&mal->lock, flags);
-		mal_enable_eob_irq(mal);
-		spin_unlock_irqrestore(&mal->lock, flags);
-	}
+	/* We need to disable IRQs to protect from RXDE IRQ here */
+	spin_lock_irqsave(&mal->lock, flags);
+	__napi_complete(napi);
+	mal_enable_eob_irq(mal);
+	spin_unlock_irqrestore(&mal->lock, flags);
 
 	/* Check for "rotting" packet(s) */
 	list_for_each(l, &mal->poll_list) {
@@ -597,8 +597,9 @@ static int mal_probe(struct platform_device *ofdev)
 		mal->rxde_irq = irq_of_parse_and_map(ofdev->dev.of_node, 4);
 	}
 
-	if (!mal->txeob_irq || !mal->rxeob_irq || !mal->serr_irq ||
-	    !mal->txde_irq  || !mal->rxde_irq) {
+	if (mal->txeob_irq == NO_IRQ || mal->rxeob_irq == NO_IRQ ||
+	    mal->serr_irq == NO_IRQ || mal->txde_irq == NO_IRQ ||
+	    mal->rxde_irq == NO_IRQ) {
 		printk(KERN_ERR
 		       "mal%d: failed to map interrupts !\n", index);
 		err = -ENODEV;
@@ -681,7 +682,10 @@ static int mal_probe(struct platform_device *ofdev)
 		goto fail6;
 
 	/* Enable all MAL SERR interrupt sources */
-	set_mal_dcrn(mal, MAL_IER, MAL_IER_EVENTS);
+	if (mal->version == 2)
+		set_mal_dcrn(mal, MAL_IER, MAL2_IER_EVENTS);
+	else
+		set_mal_dcrn(mal, MAL_IER, MAL1_IER_EVENTS);
 
 	/* Enable EOB interrupt */
 	mal_enable_eob_irq(mal);
@@ -694,6 +698,8 @@ static int mal_probe(struct platform_device *ofdev)
 	/* Advertise this instance to the rest of the world */
 	wmb();
 	platform_set_drvdata(ofdev, mal);
+
+	mal_dbg_register(mal);
 
 	return 0;
 
@@ -738,6 +744,8 @@ static int mal_remove(struct platform_device *ofdev)
 
 	mal_reset(mal);
 
+	mal_dbg_unregister(mal);
+
 	dma_free_coherent(&ofdev->dev,
 			  sizeof(struct mal_descriptor) *
 			  (NUM_TX_BUFF * mal->num_tx_chans +
@@ -748,7 +756,7 @@ static int mal_remove(struct platform_device *ofdev)
 	return 0;
 }
 
-static const struct of_device_id mal_platform_match[] =
+static struct of_device_id mal_platform_match[] =
 {
 	{
 		.compatible	= "ibm,mcmal",
@@ -771,6 +779,7 @@ static const struct of_device_id mal_platform_match[] =
 static struct platform_driver mal_of_driver = {
 	.driver = {
 		.name = "mcmal",
+		.owner = THIS_MODULE,
 		.of_match_table = mal_platform_match,
 	},
 	.probe = mal_probe,

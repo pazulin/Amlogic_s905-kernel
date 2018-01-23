@@ -6,8 +6,6 @@
 #include <asm/exec.h>
 #include <uapi/linux/binfmts.h>
 
-struct filename;
-
 #define CORENAME_MAX_SIZE 128
 
 /*
@@ -46,6 +44,7 @@ struct linux_binprm {
 	unsigned interp_flags;
 	unsigned interp_data;
 	unsigned long loader, exec;
+	char tcomm[TASK_COMM_LEN];
 };
 
 #define BINPRM_FLAGS_ENFORCE_NONDUMP_BIT 0
@@ -55,10 +54,6 @@ struct linux_binprm {
 #define BINPRM_FLAGS_EXECFD_BIT 1
 #define BINPRM_FLAGS_EXECFD (1 << BINPRM_FLAGS_EXECFD_BIT)
 
-/* filename of the binary will be inaccessible after exec */
-#define BINPRM_FLAGS_PATH_INACCESSIBLE_BIT 2
-#define BINPRM_FLAGS_PATH_INACCESSIBLE (1 << BINPRM_FLAGS_PATH_INACCESSIBLE_BIT)
-
 /* Function parameter for binfmt->coredump */
 struct coredump_params {
 	const siginfo_t *siginfo;
@@ -67,7 +62,6 @@ struct coredump_params {
 	unsigned long limit;
 	unsigned long mm_flags;
 	loff_t written;
-	loff_t pos;
 };
 
 /*
@@ -115,8 +109,6 @@ extern int suid_dumpable;
 extern int setup_arg_pages(struct linux_binprm * bprm,
 			   unsigned long stack_top,
 			   int executable_stack);
-extern int transfer_args_to_stack(struct linux_binprm *bprm,
-				  unsigned long *sp_location);
 extern int bprm_change_interp(char *interp, struct linux_binprm *bprm);
 extern int copy_strings_kernel(int argc, const char *const *argv,
 			       struct linux_binprm *bprm);
@@ -124,13 +116,5 @@ extern int prepare_bprm_creds(struct linux_binprm *bprm);
 extern void install_exec_creds(struct linux_binprm *bprm);
 extern void set_binfmt(struct linux_binfmt *new);
 extern ssize_t read_code(struct file *, unsigned long, loff_t, size_t);
-
-extern int do_execve(struct filename *,
-		     const char __user * const __user *,
-		     const char __user * const __user *);
-extern int do_execveat(int, struct filename *,
-		       const char __user * const __user *,
-		       const char __user * const __user *,
-		       int);
 
 #endif /* _LINUX_BINFMTS_H */

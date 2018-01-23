@@ -45,9 +45,8 @@
 static char *policycap_names[] = {
 	"network_peer_controls",
 	"open_perms",
-	"extended_socket_class",
-	"always_check_network",
-	"cgroup_seclabel"
+	"redhat1",
+	"always_check_network"
 };
 
 unsigned int selinux_checkreqprot = CONFIG_SECURITY_SELINUX_CHECKREQPROT_VALUE;
@@ -55,7 +54,7 @@ unsigned int selinux_checkreqprot = CONFIG_SECURITY_SELINUX_CHECKREQPROT_VALUE;
 static int __init checkreqprot_setup(char *str)
 {
 	unsigned long checkreqprot;
-	if (!kstrtoul(str, 0, &checkreqprot))
+	if (!strict_strtoul(str, 0, &checkreqprot))
 		selinux_checkreqprot = checkreqprot ? 1 : 0;
 	return 1;
 }
@@ -78,6 +77,25 @@ static char policy_opened;
 /* global data for policy capabilities */
 static struct dentry *policycap_dir;
 
+/* Check whether a task is allowed to use a security operation. */
+static int task_has_security(struct task_struct *tsk,
+			     u32 perms)
+{
+	const struct task_security_struct *tsec;
+	u32 sid = 0;
+
+	rcu_read_lock();
+	tsec = __task_cred(tsk)->security;
+	if (tsec)
+		sid = tsec->sid;
+	rcu_read_unlock();
+	if (!tsec)
+		return -EACCES;
+
+	return avc_has_perm(sid, SECINITSID_SECURITY,
+			    SECCLASS_SECURITY, perms, NULL);
+}
+
 enum sel_inos {
 	SEL_ROOT_INO = 2,
 	SEL_LOAD,	/* load policy */
@@ -98,7 +116,6 @@ enum sel_inos {
 	SEL_DENY_UNKNOWN, /* export unknown deny handling to userspace */
 	SEL_STATUS,	/* export current status using mmap() */
 	SEL_POLICY,	/* allow userspace to read the in kernel policy */
-	SEL_VALIDATE_TRANS, /* compute validatetrans decision */
 	SEL_INO_NEXT,	/* The next inode number to use */
 };
 
@@ -130,27 +147,30 @@ static ssize_t sel_write_enforce(struct file *file, const char __user *buf,
 	ssize_t length;
 	int new_value;
 
+	length = -ENOMEM;
 	if (count >= PAGE_SIZE)
-		return -ENOMEM;
+		goto out;
 
 	/* No partial writes. */
+	length = EINVAL;
 	if (*ppos != 0)
-		return -EINVAL;
+		goto out;
 
-	page = memdup_user_nul(buf, count);
-	if (IS_ERR(page))
-		return PTR_ERR(page);
+	length = -ENOMEM;
+	page = (char *)get_zeroed_page(GFP_KERNEL);
+	if (!page)
+		goto out;
+
+	length = -EFAULT;
+	if (copy_from_user(page, buf, count))
+		goto out;
 
 	length = -EINVAL;
 	if (sscanf(page, "%d", &new_value) != 1)
 		goto out;
 
-	new_value = !!new_value;
-
 	if (new_value != selinux_enforcing) {
-		length = avc_has_perm(current_sid(), SECINITSID_SECURITY,
-				      SECCLASS_SECURITY, SECURITY__SETENFORCE,
-				      NULL);
+		length = task_has_security(current, SECURITY__SETENFORCE);
 		if (length)
 			goto out;
 		audit_log(current->audit_context, GFP_KERNEL, AUDIT_MAC_STATUS,
@@ -166,7 +186,7 @@ static ssize_t sel_write_enforce(struct file *file, const char __user *buf,
 	}
 	length = count;
 out:
-	kfree(page);
+	free_page((unsigned long) page);
 	return length;
 }
 #else
@@ -255,20 +275,27 @@ static ssize_t sel_write_disable(struct file *file, const char __user *buf,
 				 size_t count, loff_t *ppos)
 
 {
-	char *page;
+	char *page = NULL;
 	ssize_t length;
 	int new_value;
 
+	length = -ENOMEM;
 	if (count >= PAGE_SIZE)
-		return -ENOMEM;
+		goto out;
 
 	/* No partial writes. */
+	length = -EINVAL;
 	if (*ppos != 0)
-		return -EINVAL;
+		goto out;
 
-	page = memdup_user_nul(buf, count);
-	if (IS_ERR(page))
-		return PTR_ERR(page);
+	length = -ENOMEM;
+	page = (char *)get_zeroed_page(GFP_KERNEL);
+	if (!page)
+		goto out;
+
+	length = -EFAULT;
+	if (copy_from_user(page, buf, count))
+		goto out;
 
 	length = -EINVAL;
 	if (sscanf(page, "%d", &new_value) != 1)
@@ -286,7 +313,7 @@ static ssize_t sel_write_disable(struct file *file, const char __user *buf,
 
 	length = count;
 out:
-	kfree(page);
+	free_page((unsigned long) page);
 	return length;
 }
 #else
@@ -352,8 +379,7 @@ static int sel_open_policy(struct inode *inode, struct file *filp)
 
 	mutex_lock(&sel_mutex);
 
-	rc = avc_has_perm(current_sid(), SECINITSID_SECURITY,
-			  SECCLASS_SECURITY, SECURITY__READ_POLICY, NULL);
+	rc = task_has_security(current, SECURITY__READ_POLICY);
 	if (rc)
 		goto err;
 
@@ -367,9 +393,9 @@ static int sel_open_policy(struct inode *inode, struct file *filp)
 		goto err;
 
 	if (i_size_read(inode) != security_policydb_len()) {
-		inode_lock(inode);
+		mutex_lock(&inode->i_mutex);
 		i_size_write(inode, security_policydb_len());
-		inode_unlock(inode);
+		mutex_unlock(&inode->i_mutex);
 	}
 
 	rc = security_read_policy(&plm->data, &plm->len);
@@ -414,8 +440,7 @@ static ssize_t sel_read_policy(struct file *filp, char __user *buf,
 
 	mutex_lock(&sel_mutex);
 
-	ret = avc_has_perm(current_sid(), SECINITSID_SECURITY,
-			  SECCLASS_SECURITY, SECURITY__READ_POLICY, NULL);
+	ret = task_has_security(current, SECURITY__READ_POLICY);
 	if (ret)
 		goto out;
 
@@ -425,9 +450,10 @@ out:
 	return ret;
 }
 
-static int sel_mmap_policy_fault(struct vm_fault *vmf)
+static int sel_mmap_policy_fault(struct vm_area_struct *vma,
+				 struct vm_fault *vmf)
 {
-	struct policy_load_memory *plm = vmf->vma->vm_file->private_data;
+	struct policy_load_memory *plm = vma->vm_file->private_data;
 	unsigned long offset;
 	struct page *page;
 
@@ -446,7 +472,7 @@ static int sel_mmap_policy_fault(struct vm_fault *vmf)
 	return 0;
 }
 
-static const struct vm_operations_struct sel_mmap_policy_ops = {
+static struct vm_operations_struct sel_mmap_policy_ops = {
 	.fault = sel_mmap_policy_fault,
 	.page_mkwrite = sel_mmap_policy_fault,
 };
@@ -484,8 +510,7 @@ static ssize_t sel_write_load(struct file *file, const char __user *buf,
 
 	mutex_lock(&sel_mutex);
 
-	length = avc_has_perm(current_sid(), SECINITSID_SECURITY,
-			      SECCLASS_SECURITY, SECURITY__LOAD_POLICY, NULL);
+	length = task_has_security(current, SECURITY__LOAD_POLICY);
 	if (length)
 		goto out;
 
@@ -508,28 +533,20 @@ static ssize_t sel_write_load(struct file *file, const char __user *buf,
 		goto out;
 
 	length = security_load_policy(data, count);
-	if (length) {
-		pr_warn_ratelimited("SELinux: failed to load policy\n");
+	if (length)
 		goto out;
-	}
 
 	length = sel_make_bools();
-	if (length) {
-		pr_err("SELinux: failed to load policy booleans\n");
+	if (length)
 		goto out1;
-	}
 
 	length = sel_make_classes();
-	if (length) {
-		pr_err("SELinux: failed to load policy classes\n");
+	if (length)
 		goto out1;
-	}
 
 	length = sel_make_policycap();
-	if (length) {
-		pr_err("SELinux: failed to load policy capabilities\n");
+	if (length)
 		goto out1;
-	}
 
 	length = count;
 
@@ -555,8 +572,7 @@ static ssize_t sel_write_context(struct file *file, char *buf, size_t size)
 	u32 sid, len;
 	ssize_t length;
 
-	length = avc_has_perm(current_sid(), SECINITSID_SECURITY,
-			      SECCLASS_SECURITY, SECURITY__CHECK_CONTEXT, NULL);
+	length = task_has_security(current, SECURITY__CHECK_CONTEXT);
 	if (length)
 		goto out;
 
@@ -595,26 +611,31 @@ static ssize_t sel_read_checkreqprot(struct file *filp, char __user *buf,
 static ssize_t sel_write_checkreqprot(struct file *file, const char __user *buf,
 				      size_t count, loff_t *ppos)
 {
-	char *page;
+	char *page = NULL;
 	ssize_t length;
 	unsigned int new_value;
 
-	length = avc_has_perm(current_sid(), SECINITSID_SECURITY,
-			      SECCLASS_SECURITY, SECURITY__SETCHECKREQPROT,
-			      NULL);
+	length = task_has_security(current, SECURITY__SETCHECKREQPROT);
 	if (length)
-		return length;
+		goto out;
 
+	length = -ENOMEM;
 	if (count >= PAGE_SIZE)
-		return -ENOMEM;
+		goto out;
 
 	/* No partial writes. */
+	length = -EINVAL;
 	if (*ppos != 0)
-		return -EINVAL;
+		goto out;
 
-	page = memdup_user_nul(buf, count);
-	if (IS_ERR(page))
-		return PTR_ERR(page);
+	length = -ENOMEM;
+	page = (char *)get_zeroed_page(GFP_KERNEL);
+	if (!page)
+		goto out;
+
+	length = -EFAULT;
+	if (copy_from_user(page, buf, count))
+		goto out;
 
 	length = -EINVAL;
 	if (sscanf(page, "%u", &new_value) != 1)
@@ -623,90 +644,12 @@ static ssize_t sel_write_checkreqprot(struct file *file, const char __user *buf,
 	selinux_checkreqprot = new_value ? 1 : 0;
 	length = count;
 out:
-	kfree(page);
+	free_page((unsigned long) page);
 	return length;
 }
 static const struct file_operations sel_checkreqprot_ops = {
 	.read		= sel_read_checkreqprot,
 	.write		= sel_write_checkreqprot,
-	.llseek		= generic_file_llseek,
-};
-
-static ssize_t sel_write_validatetrans(struct file *file,
-					const char __user *buf,
-					size_t count, loff_t *ppos)
-{
-	char *oldcon = NULL, *newcon = NULL, *taskcon = NULL;
-	char *req = NULL;
-	u32 osid, nsid, tsid;
-	u16 tclass;
-	int rc;
-
-	rc = avc_has_perm(current_sid(), SECINITSID_SECURITY,
-			  SECCLASS_SECURITY, SECURITY__VALIDATE_TRANS, NULL);
-	if (rc)
-		goto out;
-
-	rc = -ENOMEM;
-	if (count >= PAGE_SIZE)
-		goto out;
-
-	/* No partial writes. */
-	rc = -EINVAL;
-	if (*ppos != 0)
-		goto out;
-
-	rc = -ENOMEM;
-	req = kzalloc(count + 1, GFP_KERNEL);
-	if (!req)
-		goto out;
-
-	rc = -EFAULT;
-	if (copy_from_user(req, buf, count))
-		goto out;
-
-	rc = -ENOMEM;
-	oldcon = kzalloc(count + 1, GFP_KERNEL);
-	if (!oldcon)
-		goto out;
-
-	newcon = kzalloc(count + 1, GFP_KERNEL);
-	if (!newcon)
-		goto out;
-
-	taskcon = kzalloc(count + 1, GFP_KERNEL);
-	if (!taskcon)
-		goto out;
-
-	rc = -EINVAL;
-	if (sscanf(req, "%s %s %hu %s", oldcon, newcon, &tclass, taskcon) != 4)
-		goto out;
-
-	rc = security_context_str_to_sid(oldcon, &osid, GFP_KERNEL);
-	if (rc)
-		goto out;
-
-	rc = security_context_str_to_sid(newcon, &nsid, GFP_KERNEL);
-	if (rc)
-		goto out;
-
-	rc = security_context_str_to_sid(taskcon, &tsid, GFP_KERNEL);
-	if (rc)
-		goto out;
-
-	rc = security_validate_transition_user(osid, nsid, tsid, tclass);
-	if (!rc)
-		rc = count;
-out:
-	kfree(req);
-	kfree(oldcon);
-	kfree(newcon);
-	kfree(taskcon);
-	return rc;
-}
-
-static const struct file_operations sel_transition_ops = {
-	.write		= sel_write_validatetrans,
 	.llseek		= generic_file_llseek,
 };
 
@@ -770,8 +713,7 @@ static ssize_t sel_write_access(struct file *file, char *buf, size_t size)
 	struct av_decision avd;
 	ssize_t length;
 
-	length = avc_has_perm(current_sid(), SECINITSID_SECURITY,
-			      SECCLASS_SECURITY, SECURITY__COMPUTE_AV, NULL);
+	length = task_has_security(current, SECURITY__COMPUTE_AV);
 	if (length)
 		goto out;
 
@@ -789,11 +731,13 @@ static ssize_t sel_write_access(struct file *file, char *buf, size_t size)
 	if (sscanf(buf, "%s %s %hu", scon, tcon, &tclass) != 3)
 		goto out;
 
-	length = security_context_str_to_sid(scon, &ssid, GFP_KERNEL);
+	length = security_context_to_sid(scon, strlen(scon) + 1, &ssid,
+					 GFP_KERNEL);
 	if (length)
 		goto out;
 
-	length = security_context_str_to_sid(tcon, &tsid, GFP_KERNEL);
+	length = security_context_to_sid(tcon, strlen(tcon) + 1, &tsid,
+					 GFP_KERNEL);
 	if (length)
 		goto out;
 
@@ -821,9 +765,7 @@ static ssize_t sel_write_create(struct file *file, char *buf, size_t size)
 	u32 len;
 	int nargs;
 
-	length = avc_has_perm(current_sid(), SECINITSID_SECURITY,
-			      SECCLASS_SECURITY, SECURITY__COMPUTE_CREATE,
-			      NULL);
+	length = task_has_security(current, SECURITY__COMPUTE_CREATE);
 	if (length)
 		goto out;
 
@@ -877,11 +819,13 @@ static ssize_t sel_write_create(struct file *file, char *buf, size_t size)
 		objname = namebuf;
 	}
 
-	length = security_context_str_to_sid(scon, &ssid, GFP_KERNEL);
+	length = security_context_to_sid(scon, strlen(scon) + 1, &ssid,
+					 GFP_KERNEL);
 	if (length)
 		goto out;
 
-	length = security_context_str_to_sid(tcon, &tsid, GFP_KERNEL);
+	length = security_context_to_sid(tcon, strlen(tcon) + 1, &tsid,
+					 GFP_KERNEL);
 	if (length)
 		goto out;
 
@@ -920,9 +864,7 @@ static ssize_t sel_write_relabel(struct file *file, char *buf, size_t size)
 	char *newcon = NULL;
 	u32 len;
 
-	length = avc_has_perm(current_sid(), SECINITSID_SECURITY,
-			      SECCLASS_SECURITY, SECURITY__COMPUTE_RELABEL,
-			      NULL);
+	length = task_has_security(current, SECURITY__COMPUTE_RELABEL);
 	if (length)
 		goto out;
 
@@ -940,11 +882,13 @@ static ssize_t sel_write_relabel(struct file *file, char *buf, size_t size)
 	if (sscanf(buf, "%s %s %hu", scon, tcon, &tclass) != 3)
 		goto out;
 
-	length = security_context_str_to_sid(scon, &ssid, GFP_KERNEL);
+	length = security_context_to_sid(scon, strlen(scon) + 1, &ssid,
+					 GFP_KERNEL);
 	if (length)
 		goto out;
 
-	length = security_context_str_to_sid(tcon, &tsid, GFP_KERNEL);
+	length = security_context_to_sid(tcon, strlen(tcon) + 1, &tsid,
+					 GFP_KERNEL);
 	if (length)
 		goto out;
 
@@ -978,9 +922,7 @@ static ssize_t sel_write_user(struct file *file, char *buf, size_t size)
 	int i, rc;
 	u32 len, nsids;
 
-	length = avc_has_perm(current_sid(), SECINITSID_SECURITY,
-			      SECCLASS_SECURITY, SECURITY__COMPUTE_USER,
-			      NULL);
+	length = task_has_security(current, SECURITY__COMPUTE_USER);
 	if (length)
 		goto out;
 
@@ -998,7 +940,7 @@ static ssize_t sel_write_user(struct file *file, char *buf, size_t size)
 	if (sscanf(buf, "%s %s", con, user) != 2)
 		goto out;
 
-	length = security_context_str_to_sid(con, &sid, GFP_KERNEL);
+	length = security_context_to_sid(con, strlen(con) + 1, &sid, GFP_KERNEL);
 	if (length)
 		goto out;
 
@@ -1040,9 +982,7 @@ static ssize_t sel_write_member(struct file *file, char *buf, size_t size)
 	char *newcon = NULL;
 	u32 len;
 
-	length = avc_has_perm(current_sid(), SECINITSID_SECURITY,
-			      SECCLASS_SECURITY, SECURITY__COMPUTE_MEMBER,
-			      NULL);
+	length = task_has_security(current, SECURITY__COMPUTE_MEMBER);
 	if (length)
 		goto out;
 
@@ -1060,11 +1000,13 @@ static ssize_t sel_write_member(struct file *file, char *buf, size_t size)
 	if (sscanf(buf, "%s %s %hu", scon, tcon, &tclass) != 3)
 		goto out;
 
-	length = security_context_str_to_sid(scon, &ssid, GFP_KERNEL);
+	length = security_context_to_sid(scon, strlen(scon) + 1, &ssid,
+					 GFP_KERNEL);
 	if (length)
 		goto out;
 
-	length = security_context_str_to_sid(tcon, &tsid, GFP_KERNEL);
+	length = security_context_to_sid(tcon, strlen(tcon) + 1, &tsid,
+					 GFP_KERNEL);
 	if (length)
 		goto out;
 
@@ -1098,7 +1040,7 @@ static struct inode *sel_make_inode(struct super_block *sb, int mode)
 
 	if (ret) {
 		ret->i_mode = mode;
-		ret->i_atime = ret->i_mtime = ret->i_ctime = current_time(ret);
+		ret->i_atime = ret->i_mtime = ret->i_ctime = CURRENT_TIME;
 	}
 	return ret;
 }
@@ -1149,9 +1091,7 @@ static ssize_t sel_write_bool(struct file *filep, const char __user *buf,
 
 	mutex_lock(&sel_mutex);
 
-	length = avc_has_perm(current_sid(), SECINITSID_SECURITY,
-			      SECCLASS_SECURITY, SECURITY__SETBOOL,
-			      NULL);
+	length = task_has_security(current, SECURITY__SETBOOL);
 	if (length)
 		goto out;
 
@@ -1168,12 +1108,14 @@ static ssize_t sel_write_bool(struct file *filep, const char __user *buf,
 	if (*ppos != 0)
 		goto out;
 
-	page = memdup_user_nul(buf, count);
-	if (IS_ERR(page)) {
-		length = PTR_ERR(page);
-		page = NULL;
+	length = -ENOMEM;
+	page = (char *)get_zeroed_page(GFP_KERNEL);
+	if (!page)
 		goto out;
-	}
+
+	length = -EFAULT;
+	if (copy_from_user(page, buf, count))
+		goto out;
 
 	length = -EINVAL;
 	if (sscanf(page, "%d", &new_value) != 1)
@@ -1187,7 +1129,7 @@ static ssize_t sel_write_bool(struct file *filep, const char __user *buf,
 
 out:
 	mutex_unlock(&sel_mutex);
-	kfree(page);
+	free_page((unsigned long) page);
 	return length;
 }
 
@@ -1207,9 +1149,7 @@ static ssize_t sel_commit_bools_write(struct file *filep,
 
 	mutex_lock(&sel_mutex);
 
-	length = avc_has_perm(current_sid(), SECINITSID_SECURITY,
-			      SECCLASS_SECURITY, SECURITY__SETBOOL,
-			      NULL);
+	length = task_has_security(current, SECURITY__SETBOOL);
 	if (length)
 		goto out;
 
@@ -1222,12 +1162,14 @@ static ssize_t sel_commit_bools_write(struct file *filep,
 	if (*ppos != 0)
 		goto out;
 
-	page = memdup_user_nul(buf, count);
-	if (IS_ERR(page)) {
-		length = PTR_ERR(page);
-		page = NULL;
+	length = -ENOMEM;
+	page = (char *)get_zeroed_page(GFP_KERNEL);
+	if (!page)
 		goto out;
-	}
+
+	length = -EFAULT;
+	if (copy_from_user(page, buf, count))
+		goto out;
 
 	length = -EINVAL;
 	if (sscanf(page, "%d", &new_value) != 1)
@@ -1242,7 +1184,7 @@ static ssize_t sel_commit_bools_write(struct file *filep,
 
 out:
 	mutex_unlock(&sel_mutex);
-	kfree(page);
+	free_page((unsigned long) page);
 	return length;
 }
 
@@ -1253,8 +1195,30 @@ static const struct file_operations sel_commit_bools_ops = {
 
 static void sel_remove_entries(struct dentry *de)
 {
-	d_genocide(de);
-	shrink_dcache_parent(de);
+	struct list_head *node;
+
+	spin_lock(&de->d_lock);
+	node = de->d_subdirs.next;
+	while (node != &de->d_subdirs) {
+		struct dentry *d = list_entry(node, struct dentry, d_u.d_child);
+
+		spin_lock_nested(&d->d_lock, DENTRY_D_LOCK_NESTED);
+		list_del_init(node);
+
+		if (d->d_inode) {
+			dget_dlock(d);
+			spin_unlock(&de->d_lock);
+			spin_unlock(&d->d_lock);
+			d_delete(d);
+			simple_unlink(de->d_inode, d);
+			dput(d);
+			spin_lock(&de->d_lock);
+		} else
+			spin_unlock(&d->d_lock);
+		node = de->d_subdirs.next;
+	}
+
+	spin_unlock(&de->d_lock);
 }
 
 #define BOOL_DIR_NAME "booleans"
@@ -1310,14 +1274,11 @@ static int sel_make_bools(void)
 
 		isec = (struct inode_security_struct *)inode->i_security;
 		ret = security_genfs_sid("selinuxfs", page, SECCLASS_FILE, &sid);
-		if (ret) {
-			pr_warn_ratelimited("SELinux: no sid found, defaulting to security isid for %s\n",
-					   page);
-			sid = SECINITSID_SECURITY;
-		}
+		if (ret)
+			goto out;
 
 		isec->sid = sid;
-		isec->initialized = LABEL_INITIALIZED;
+		isec->initialized = 1;
 		inode->i_fop = &sel_bool_ops;
 		inode->i_ino = i|SEL_BOOL_INO_OFFSET;
 		d_add(dentry, inode);
@@ -1361,26 +1322,31 @@ static ssize_t sel_write_avc_cache_threshold(struct file *file,
 					     size_t count, loff_t *ppos)
 
 {
-	char *page;
+	char *page = NULL;
 	ssize_t ret;
-	unsigned int new_value;
+	int new_value;
 
-	ret = avc_has_perm(current_sid(), SECINITSID_SECURITY,
-			   SECCLASS_SECURITY, SECURITY__SETSECPARAM,
-			   NULL);
+	ret = task_has_security(current, SECURITY__SETSECPARAM);
 	if (ret)
-		return ret;
+		goto out;
 
+	ret = -ENOMEM;
 	if (count >= PAGE_SIZE)
-		return -ENOMEM;
+		goto out;
 
 	/* No partial writes. */
+	ret = -EINVAL;
 	if (*ppos != 0)
-		return -EINVAL;
+		goto out;
 
-	page = memdup_user_nul(buf, count);
-	if (IS_ERR(page))
-		return PTR_ERR(page);
+	ret = -ENOMEM;
+	page = (char *)get_zeroed_page(GFP_KERNEL);
+	if (!page)
+		goto out;
+
+	ret = -EFAULT;
+	if (copy_from_user(page, buf, count))
+		goto out;
 
 	ret = -EINVAL;
 	if (sscanf(page, "%u", &new_value) != 1)
@@ -1390,7 +1356,7 @@ static ssize_t sel_write_avc_cache_threshold(struct file *file,
 
 	ret = count;
 out:
-	kfree(page);
+	free_page((unsigned long)page);
 	return ret;
 }
 
@@ -1456,10 +1422,10 @@ static int sel_avc_stats_seq_show(struct seq_file *seq, void *v)
 {
 	struct avc_cache_stats *st = v;
 
-	if (v == SEQ_START_TOKEN) {
-		seq_puts(seq,
-			 "lookups hits misses allocations reclaims frees\n");
-	} else {
+	if (v == SEQ_START_TOKEN)
+		seq_printf(seq, "lookups hits misses allocations reclaims "
+			   "frees\n");
+	else {
 		unsigned int lookups = st->lookups;
 		unsigned int misses = st->misses;
 		unsigned int hits = lookups - misses;
@@ -1496,7 +1462,7 @@ static const struct file_operations sel_avc_cache_stats_ops = {
 static int sel_make_avc_files(struct dentry *dir)
 {
 	int i;
-	static const struct tree_descr files[] = {
+	static struct tree_descr files[] = {
 		{ "cache_threshold",
 		  &sel_avc_cache_threshold_ops, S_IRUGO|S_IWUSR },
 		{ "hash_stats", &sel_avc_hash_stats_ops, S_IRUGO },
@@ -1702,13 +1668,37 @@ static int sel_make_class_dir_entries(char *classname, int index,
 	return rc;
 }
 
+static void sel_remove_classes(void)
+{
+	struct list_head *class_node;
+
+	list_for_each(class_node, &class_dir->d_subdirs) {
+		struct dentry *class_subdir = list_entry(class_node,
+					struct dentry, d_u.d_child);
+		struct list_head *class_subdir_node;
+
+		list_for_each(class_subdir_node, &class_subdir->d_subdirs) {
+			struct dentry *d = list_entry(class_subdir_node,
+						struct dentry, d_u.d_child);
+
+			if (d->d_inode)
+				if (d->d_inode->i_mode & S_IFDIR)
+					sel_remove_entries(d);
+		}
+
+		sel_remove_entries(class_subdir);
+	}
+
+	sel_remove_entries(class_dir);
+}
+
 static int sel_make_classes(void)
 {
 	int rc, nclasses, i;
 	char **classes;
 
 	/* delete any existing entries */
-	sel_remove_entries(class_dir);
+	sel_remove_classes();
 
 	rc = security_get_classes(&classes, &nclasses);
 	if (rc)
@@ -1793,7 +1783,7 @@ static struct dentry *sel_make_dir(struct dentry *dir, const char *name,
 	inc_nlink(inode);
 	d_add(dentry, inode);
 	/* bump link count on parent directory, too */
-	inc_nlink(d_inode(dir));
+	inc_nlink(dir->d_inode);
 
 	return dentry;
 }
@@ -1805,7 +1795,7 @@ static int sel_fill_super(struct super_block *sb, void *data, int silent)
 	struct inode *inode;
 	struct inode_security_struct *isec;
 
-	static const struct tree_descr selinux_files[] = {
+	static struct tree_descr selinux_files[] = {
 		[SEL_LOAD] = {"load", &sel_load_ops, S_IRUSR|S_IWUSR},
 		[SEL_ENFORCE] = {"enforce", &sel_enforce_ops, S_IRUGO|S_IWUSR},
 		[SEL_CONTEXT] = {"context", &transaction_ops, S_IRUGO|S_IWUGO},
@@ -1823,8 +1813,6 @@ static int sel_fill_super(struct super_block *sb, void *data, int silent)
 		[SEL_DENY_UNKNOWN] = {"deny_unknown", &sel_handle_unknown_ops, S_IRUGO},
 		[SEL_STATUS] = {"status", &sel_handle_status_ops, S_IRUGO},
 		[SEL_POLICY] = {"policy", &sel_policy_ops, S_IRUGO},
-		[SEL_VALIDATE_TRANS] = {"validatetrans", &sel_transition_ops,
-					S_IWUGO},
 		/* last one */ {""}
 	};
 	ret = simple_fill_super(sb, SELINUX_MAGIC, selinux_files);
@@ -1852,7 +1840,7 @@ static int sel_fill_super(struct super_block *sb, void *data, int silent)
 	isec = (struct inode_security_struct *)inode->i_security;
 	isec->sid = SECINITSID_DEVNULL;
 	isec->sclass = SECCLASS_CHR_FILE;
-	isec->initialized = LABEL_INITIALIZED;
+	isec->initialized = 1;
 
 	init_special_inode(inode, S_IFCHR | S_IRUGO | S_IWUGO, MKDEV(MEM_MAJOR, 3));
 	d_add(dentry, inode);
@@ -1911,6 +1899,7 @@ static struct file_system_type sel_fs_type = {
 };
 
 struct vfsmount *selinuxfs_mount;
+static struct kobject *selinuxfs_kobj;
 
 static int __init init_sel_fs(void)
 {
@@ -1919,13 +1908,13 @@ static int __init init_sel_fs(void)
 	if (!selinux_enabled)
 		return 0;
 
-	err = sysfs_create_mount_point(fs_kobj, "selinux");
-	if (err)
-		return err;
+	selinuxfs_kobj = kobject_create_and_add("selinux", fs_kobj);
+	if (!selinuxfs_kobj)
+		return -ENOMEM;
 
 	err = register_filesystem(&sel_fs_type);
 	if (err) {
-		sysfs_remove_mount_point(fs_kobj, "selinux");
+		kobject_put(selinuxfs_kobj);
 		return err;
 	}
 
@@ -1944,7 +1933,7 @@ __initcall(init_sel_fs);
 #ifdef CONFIG_SECURITY_SELINUX_DISABLE
 void exit_sel_fs(void)
 {
-	sysfs_remove_mount_point(fs_kobj, "selinux");
+	kobject_put(selinuxfs_kobj);
 	kern_unmount(selinuxfs_mount);
 	unregister_filesystem(&sel_fs_type);
 }

@@ -98,11 +98,13 @@ void
 FsmInitTimer(struct FsmInst *fi, struct FsmTimer *ft)
 {
 	ft->fi = fi;
+	ft->tl.function = (void *) FsmExpireTimer;
+	ft->tl.data = (long) ft;
 #if FSM_TIMER_DEBUG
 	if (ft->fi->debug)
 		ft->fi->printdebug(ft->fi, "FsmInitTimer %lx", (long) ft);
 #endif
-	setup_timer(&ft->tl, (void *)FsmExpireTimer, (long)ft);
+	init_timer(&ft->tl);
 }
 
 void

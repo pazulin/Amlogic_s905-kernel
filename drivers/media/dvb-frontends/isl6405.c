@@ -15,11 +15,14 @@
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
  *
- * To obtain the license, point your browser to
- * http://www.gnu.org/copyleft/gpl.html
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA 02111-1307, USA.
+ * Or, point your browser to http://www.gnu.org/copyleft/gpl.html
  *
  *
- * the project's page is at https://linuxtv.org
+ * the project's page is at http://www.linuxtv.org
  */
 #include <linux/delay.h>
 #include <linux/errno.h>
@@ -40,8 +43,7 @@ struct isl6405 {
 	u8			i2c_addr;
 };
 
-static int isl6405_set_voltage(struct dvb_frontend *fe,
-			       enum fe_sec_voltage voltage)
+static int isl6405_set_voltage(struct dvb_frontend *fe, fe_sec_voltage_t voltage)
 {
 	struct isl6405 *isl6405 = (struct isl6405 *) fe->sec_priv;
 	struct i2c_msg msg = {	.addr = isl6405->i2c_addr, .flags = 0,

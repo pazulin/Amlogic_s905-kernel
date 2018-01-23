@@ -99,6 +99,7 @@ int __cfg80211_join_mesh(struct cfg80211_registered_device *rdev,
 			 const struct mesh_config *conf)
 {
 	struct wireless_dev *wdev = dev->ieee80211_ptr;
+	u8 radar_detect_width = 0;
 	int err;
 
 	BUILD_BUG_ON(IEEE80211_MAX_SSID_LEN != IEEE80211_MAX_MESH_ID_LEN);
@@ -128,9 +129,9 @@ int __cfg80211_join_mesh(struct cfg80211_registered_device *rdev,
 
 	if (!setup->chandef.chan) {
 		/* if we don't have that either, use the first usable channel */
-		enum nl80211_band band;
+		enum ieee80211_band band;
 
-		for (band = 0; band < NUM_NL80211_BANDS; band++) {
+		for (band = 0; band < IEEE80211_NUM_BANDS; band++) {
 			struct ieee80211_supported_band *sband;
 			struct ieee80211_channel *chan;
 			int i;
@@ -174,16 +175,27 @@ int __cfg80211_join_mesh(struct cfg80211_registered_device *rdev,
 							       scan_width);
 	}
 
-	if (!cfg80211_reg_can_beacon(&rdev->wiphy, &setup->chandef,
-				     NL80211_IFTYPE_MESH_POINT))
+	if (!cfg80211_reg_can_beacon(&rdev->wiphy, &setup->chandef))
 		return -EINVAL;
+
+	err = cfg80211_chandef_dfs_required(wdev->wiphy, &setup->chandef);
+	if (err < 0)
+		return err;
+	if (err)
+		radar_detect_width = BIT(setup->chandef.width);
+
+	err = cfg80211_can_use_iftype_chan(rdev, wdev, wdev->iftype,
+					   setup->chandef.chan,
+					   CHAN_MODE_SHARED,
+					   radar_detect_width);
+	if (err)
+		return err;
 
 	err = rdev_join_mesh(rdev, dev, conf, setup);
 	if (!err) {
 		memcpy(wdev->ssid, setup->mesh_id, setup->mesh_id_len);
 		wdev->mesh_id_len = setup->mesh_id_len;
-		wdev->chandef = setup->chandef;
-		wdev->beacon_interval = setup->beacon_interval;
+		wdev->channel = setup->chandef.chan;
 	}
 
 	return err;
@@ -224,10 +236,15 @@ int cfg80211_set_mesh_channel(struct cfg80211_registered_device *rdev,
 		if (!netif_running(wdev->netdev))
 			return -ENETDOWN;
 
+		err = cfg80211_can_use_chan(rdev, wdev, chandef->chan,
+					    CHAN_MODE_SHARED);
+		if (err)
+			return err;
+
 		err = rdev_libertas_set_mesh_channel(rdev, wdev->netdev,
 						     chandef->chan);
 		if (!err)
-			wdev->chandef = *chandef;
+			wdev->channel = chandef->chan;
 
 		return err;
 	}
@@ -239,8 +256,8 @@ int cfg80211_set_mesh_channel(struct cfg80211_registered_device *rdev,
 	return 0;
 }
 
-int __cfg80211_leave_mesh(struct cfg80211_registered_device *rdev,
-			  struct net_device *dev)
+static int __cfg80211_leave_mesh(struct cfg80211_registered_device *rdev,
+				 struct net_device *dev)
 {
 	struct wireless_dev *wdev = dev->ieee80211_ptr;
 	int err;
@@ -259,10 +276,8 @@ int __cfg80211_leave_mesh(struct cfg80211_registered_device *rdev,
 	err = rdev_leave_mesh(rdev, dev);
 	if (!err) {
 		wdev->mesh_id_len = 0;
-		wdev->beacon_interval = 0;
-		memset(&wdev->chandef, 0, sizeof(wdev->chandef));
+		wdev->channel = NULL;
 		rdev_set_qos_map(rdev, dev, NULL);
-		cfg80211_sched_dfs_chan_update(rdev);
 	}
 
 	return err;

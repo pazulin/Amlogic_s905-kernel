@@ -6,88 +6,22 @@
  * Licensed under the GPL-2 or later.
  */
 
-#include <linux/delay.h>
-#include <linux/device.h>
 #include <linux/interrupt.h>
 #include <linux/irq.h>
-#include <linux/kernel.h>
-#include <linux/list.h>
-#include <linux/module.h>
+#include <linux/delay.h>
 #include <linux/mutex.h>
+#include <linux/device.h>
+#include <linux/kernel.h>
+#include <linux/spi/spi.h>
 #include <linux/slab.h>
 #include <linux/sysfs.h>
+#include <linux/list.h>
+#include <linux/module.h>
+
 #include <linux/iio/iio.h>
 #include <linux/iio/sysfs.h>
-#include <linux/spi/spi.h>
 #include "meter.h"
-
-#define ADE7753_WAVEFORM   0x01
-#define ADE7753_AENERGY    0x02
-#define ADE7753_RAENERGY   0x03
-#define ADE7753_LAENERGY   0x04
-#define ADE7753_VAENERGY   0x05
-#define ADE7753_RVAENERGY  0x06
-#define ADE7753_LVAENERGY  0x07
-#define ADE7753_LVARENERGY 0x08
-#define ADE7753_MODE       0x09
-#define ADE7753_IRQEN      0x0A
-#define ADE7753_STATUS     0x0B
-#define ADE7753_RSTSTATUS  0x0C
-#define ADE7753_CH1OS      0x0D
-#define ADE7753_CH2OS      0x0E
-#define ADE7753_GAIN       0x0F
-#define ADE7753_PHCAL      0x10
-#define ADE7753_APOS       0x11
-#define ADE7753_WGAIN      0x12
-#define ADE7753_WDIV       0x13
-#define ADE7753_CFNUM      0x14
-#define ADE7753_CFDEN      0x15
-#define ADE7753_IRMS       0x16
-#define ADE7753_VRMS       0x17
-#define ADE7753_IRMSOS     0x18
-#define ADE7753_VRMSOS     0x19
-#define ADE7753_VAGAIN     0x1A
-#define ADE7753_VADIV      0x1B
-#define ADE7753_LINECYC    0x1C
-#define ADE7753_ZXTOUT     0x1D
-#define ADE7753_SAGCYC     0x1E
-#define ADE7753_SAGLVL     0x1F
-#define ADE7753_IPKLVL     0x20
-#define ADE7753_VPKLVL     0x21
-#define ADE7753_IPEAK      0x22
-#define ADE7753_RSTIPEAK   0x23
-#define ADE7753_VPEAK      0x24
-#define ADE7753_RSTVPEAK   0x25
-#define ADE7753_TEMP       0x26
-#define ADE7753_PERIOD     0x27
-#define ADE7753_TMODE      0x3D
-#define ADE7753_CHKSUM     0x3E
-#define ADE7753_DIEREV     0x3F
-
-#define ADE7753_READ_REG(a)    a
-#define ADE7753_WRITE_REG(a) ((a) | 0x80)
-
-#define ADE7753_MAX_TX    4
-#define ADE7753_MAX_RX    4
-#define ADE7753_STARTUP_DELAY 1000
-
-#define ADE7753_SPI_SLOW    (u32)(300 * 1000)
-#define ADE7753_SPI_BURST   (u32)(1000 * 1000)
-#define ADE7753_SPI_FAST    (u32)(2000 * 1000)
-
-/**
- * struct ade7753_state - device instance specific data
- * @us:         actual spi_device
- * @tx:         transmit buffer
- * @rx:         receive buffer
- * @buf_lock:       mutex to protect tx and rx
- **/
-struct ade7753_state {
-	struct spi_device   *us;
-	struct mutex        buf_lock;
-	u8          tx[ADE7753_MAX_TX] ____cacheline_aligned;
-	u8          rx[ADE7753_MAX_RX];
-};
+#include "ade7753.h"
 
 static int ade7753_spi_write_reg_8(struct device *dev,
 				   u8 reg_address,
@@ -283,13 +217,9 @@ error_ret:
 static int ade7753_reset(struct device *dev)
 {
 	u16 val;
-	int ret;
 
-	ret = ade7753_spi_read_reg_16(dev, ADE7753_MODE, &val);
-	if (ret)
-		return ret;
-
-	val |= BIT(6); /* Software Chip Reset */
+	ade7753_spi_read_reg_16(dev, ADE7753_MODE, &val);
+	val |= 1 << 6; /* Software Chip Reset */
 
 	return ade7753_spi_write_reg_16(dev, ADE7753_MODE, val);
 }
@@ -392,17 +322,15 @@ static int ade7753_set_irq(struct device *dev, bool enable)
 {
 	int ret;
 	u8 irqen;
-
 	ret = ade7753_spi_read_reg_8(dev, ADE7753_IRQEN, &irqen);
 	if (ret)
 		goto error_ret;
 
 	if (enable)
-		irqen |= BIT(3); /* Enables an interrupt when a data is
-				  * present in the waveform register
-				  */
+		irqen |= 1 << 3; /* Enables an interrupt when a data is
+				    present in the waveform register */
 	else
-		irqen &= ~BIT(3);
+		irqen &= ~(1 << 3);
 
 	ret = ade7753_spi_write_reg_8(dev, ADE7753_IRQEN, irqen);
 
@@ -414,13 +342,9 @@ error_ret:
 static int ade7753_stop_device(struct device *dev)
 {
 	u16 val;
-	int ret;
 
-	ret = ade7753_spi_read_reg_16(dev, ADE7753_MODE, &val);
-	if (ret)
-		return ret;
-
-	val |= BIT(4);  /* AD converters can be turned off */
+	ade7753_spi_read_reg_16(dev, ADE7753_MODE, &val);
+	val |= 1 << 4;  /* AD converters can be turned off */
 
 	return ade7753_spi_write_reg_16(dev, ADE7753_MODE, val);
 }
@@ -443,7 +367,7 @@ static int ade7753_initial_setup(struct iio_dev *indio_dev)
 	}
 
 	ade7753_reset(dev);
-	usleep_range(ADE7753_STARTUP_DELAY, ADE7753_STARTUP_DELAY + 100);
+	msleep(ADE7753_STARTUP_DELAY);
 
 err_ret:
 	return ret;
@@ -453,10 +377,9 @@ static ssize_t ade7753_read_frequency(struct device *dev,
 		struct device_attribute *attr,
 		char *buf)
 {
-	int ret;
+	int ret, len = 0;
 	u16 t;
 	int sps;
-
 	ret = ade7753_spi_read_reg_16(dev, ADE7753_MODE, &t);
 	if (ret)
 		return ret;
@@ -464,7 +387,8 @@ static ssize_t ade7753_read_frequency(struct device *dev,
 	t = (t >> 11) & 0x3;
 	sps = 27900 / (1 + t);
 
-	return sprintf(buf, "%d\n", sps);
+	len = sprintf(buf, "%d\n", sps);
+	return len;
 }
 
 static ssize_t ade7753_write_frequency(struct device *dev,
@@ -481,12 +405,12 @@ static ssize_t ade7753_write_frequency(struct device *dev,
 	ret = kstrtou16(buf, 10, &val);
 	if (ret)
 		return ret;
-	if (!val)
+	if (val == 0)
 		return -EINVAL;
 
 	mutex_lock(&indio_dev->mlock);
 
-	t = 27900 / val;
+	t = (27900 / val);
 	if (t > 0)
 		t--;
 
@@ -592,9 +516,14 @@ static int ade7753_probe(struct spi_device *spi)
 	if (ret)
 		return ret;
 
-	return iio_device_register(indio_dev);
+	ret = iio_device_register(indio_dev);
+	if (ret)
+		return ret;
+
+	return 0;
 }
 
+/* fixme, confirm ordering in this function */
 static int ade7753_remove(struct spi_device *spi)
 {
 	struct iio_dev *indio_dev = spi_get_drvdata(spi);
@@ -608,6 +537,7 @@ static int ade7753_remove(struct spi_device *spi)
 static struct spi_driver ade7753_driver = {
 	.driver = {
 		.name = "ade7753",
+		.owner = THIS_MODULE,
 	},
 	.probe = ade7753_probe,
 	.remove = ade7753_remove,

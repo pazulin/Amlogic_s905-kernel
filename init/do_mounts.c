@@ -99,16 +99,29 @@ no_match:
 	return 0;
 }
 
+static int match_dev_by_name(struct device *dev, const void *data)
+{
+	const char *name = data;
+
+	/* delete string "block/" */
+	if (strcmp(&name[6], dev_name(dev)))
+		goto no_match;
+
+	return 1;
+no_match:
+	return 0;
+}
+
 
 /**
  * devt_from_partuuid - looks up the dev_t of a partition by its UUID
- * @uuid_str:	char array containing ascii UUID
+ * @uuid:	char array containing ascii UUID
  *
  * The function will return the first partition which contains a matching
  * UUID value in its partition_meta_info struct.  This does not search
  * by filesystem UUIDs.
  *
- * If @uuid_str is followed by a "/PARTNROFF=%d", then the number will be
+ * If @uuid is followed by a "/PARTNROFF=%d", then the number will be
  * extracted and used as an offset from the partition identified by the UUID.
  *
  * Returns the matching dev_t on success or 0 on failure.
@@ -182,8 +195,7 @@ done:
 /*
  *	Convert a name into device number.  We accept the following variants:
  *
- *	1) <hex_major><hex_minor> device number in hexadecimal represents itself
- *         no leading 0x, for example b302.
+ *	1) device number in hexadecimal	represents itself
  *	2) /dev/nfs represents Root_NFS (0xff)
  *	3) /dev/<disk_name> represents the device number of disk
  *	4) /dev/<disk_name><decimal> represents the device number
@@ -207,11 +219,12 @@ done:
  *	bangs.
  */
 
-dev_t name_to_dev_t(const char *name)
+dev_t name_to_dev_t(char *name)
 {
 	char s[32];
 	char *p;
 	dev_t res = 0;
+	struct device *dev = NULL;
 	int part;
 
 #ifdef CONFIG_BLOCK
@@ -225,11 +238,9 @@ dev_t name_to_dev_t(const char *name)
 #endif
 
 	if (strncmp(name, "/dev/", 5) != 0) {
-		unsigned maj, min, offset;
-		char dummy;
+		unsigned maj, min;
 
-		if ((sscanf(name, "%u:%u%c", &maj, &min, &dummy) == 2) ||
-		    (sscanf(name, "%u:%u:%u:%c", &maj, &min, &offset, &dummy) == 3)) {
+		if (sscanf(name, "%u:%u", &maj, &min) == 2) {
 			res = MKDEV(maj, min);
 			if (maj != MAJOR(res) || min != MINOR(res))
 				goto fail;
@@ -259,6 +270,13 @@ dev_t name_to_dev_t(const char *name)
 	if (res)
 		goto done;
 
+	dev = class_find_device(&block_class, NULL, name,
+				&match_dev_by_name);
+
+	if (dev) {
+		res = dev->devt;
+		goto done;
+	}
 	/*
 	 * try non-existent, but valid partition, which may only exist
 	 * after revalidating the disk, like partitioned md devices
@@ -288,7 +306,6 @@ fail:
 done:
 	return res;
 }
-EXPORT_SYMBOL_GPL(name_to_dev_t);
 
 static int __init root_dev_setup(char *line)
 {
@@ -398,6 +415,8 @@ retry:
 			case 0:
 				goto out;
 			case -EACCES:
+				flags |= MS_RDONLY;
+				goto retry;
 			case -EINVAL:
 				continue;
 		}
@@ -419,10 +438,6 @@ retry:
 		       "explicit textual name for \"root=\" boot option.\n");
 #endif
 		panic("VFS: Unable to mount root fs on %s", b);
-	}
-	if (!(flags & MS_RDONLY)) {
-		flags |= MS_RDONLY;
-		goto retry;
 	}
 
 	printk("List of all partitions:\n");
@@ -533,13 +548,8 @@ void __init mount_root(void)
 	}
 #endif
 #ifdef CONFIG_BLOCK
-	{
-		int err = create_dev("/dev/root", ROOT_DEV);
-
-		if (err < 0)
-			pr_emerg("Failed to create /dev/root: %d\n", err);
-		mount_block_root("/dev/root", root_mountflags);
-	}
+	create_dev("/dev/root", ROOT_DEV);
+	mount_block_root("/dev/root", root_mountflags);
 #endif
 }
 
@@ -566,6 +576,7 @@ void __init prepare_namespace(void)
 	wait_for_device_probe();
 
 	md_run_setup();
+	dm_run_setup();
 
 	if (saved_root_name[0]) {
 		root_device_name = saved_root_name;
@@ -588,7 +599,7 @@ void __init prepare_namespace(void)
 			saved_root_name);
 		while (driver_probe_done() != 0 ||
 			(ROOT_DEV = name_to_dev_t(saved_root_name)) == 0)
-			msleep(5);
+			msleep(100);
 		async_synchronize_full();
 	}
 

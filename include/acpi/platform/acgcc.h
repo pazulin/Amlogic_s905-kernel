@@ -5,7 +5,7 @@
  *****************************************************************************/
 
 /*
- * Copyright (C) 2000 - 2017, Intel Corp.
+ * Copyright (C) 2000 - 2013, Intel Corp.
  * All rights reserved.
  *
  * Redistribution and use in source and binary forms, with or without
@@ -44,12 +44,6 @@
 #ifndef __ACGCC_H__
 #define __ACGCC_H__
 
-/*
- * Use compiler specific <stdarg.h> is a good practice for even when
- * -nostdinc is specified (i.e., ACPI_USE_STANDARD_HEADERS undefined.
- */
-#include <stdarg.h>
-
 #define ACPI_INLINE             __inline__
 
 /* Function name is used for debug output. Non-ANSI, compiler-dependent */
@@ -69,9 +63,5 @@
  * is unused.
  */
 #define ACPI_UNUSED_VAR __attribute__ ((unused))
-
-/* GCC supports __VA_ARGS__ in macros */
-
-#define COMPILER_VA_MACRO               1
 
 #endif				/* __ACGCC_H__ */
