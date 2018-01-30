@@ -1784,20 +1784,6 @@ void hdmi_print(int dbg_lvl, const char *fmt, ...)
 	}
 }
 
-static ssize_t store_output_rgb(struct device *dev,
-	struct device_attribute *attr, const char *buf, size_t count)
-{
-	if (strncmp(buf, "1", 1) == 0)
-		hdmitx_output_rgb();
-
-	hdmitx_set_display(&hdmitx_device, hdmitx_device.cur_VIC);
-
-	return count;
-}
-
-static DEVICE_ATTR(output_rgb, S_IWUSR | S_IWGRP,
-	NULL, store_output_rgb);
-
 static DEVICE_ATTR(disp_mode, S_IWUSR | S_IRUGO | S_IWGRP,
 	show_disp_mode, store_disp_mode);
 static DEVICE_ATTR(aud_mode, S_IWUSR | S_IRUGO, show_aud_mode,
@@ -2676,7 +2662,6 @@ static int amhdmitx_probe(struct platform_device *pdev)
 	ret = device_create_file(dev, &dev_attr_ready);
 	ret = device_create_file(dev, &dev_attr_support_3d);
 	ret = device_create_file(dev, &dev_attr_dc_cap);
-	ret = device_create_file(dev, &dev_attr_output_rgb);
 #ifdef CONFIG_AML_VOUT_FRAMERATE_AUTOMATION
 	register_hdmi_edid_supported_func(hdmitx_is_vmode_supported);
 #endif
@@ -2816,9 +2801,6 @@ static int amhdmitx_probe(struct platform_device *pdev)
 	HDMITX_Meson_Init(&hdmitx_device);
 	hdmitx_device.task = kthread_run(hdmi_task_handle,
 		&hdmitx_device, "kthread_hdmi");
-#ifdef CONFIG_AML_AO_CEC
-	init_waitqueue_head(&hdmitx_device.hdmi_info.vsdb_phy_addr.waitq);
-#endif
 
 	if (r < 0) {
 		hdmi_print(INF, SYS "register switch dev failed\n");
@@ -2869,7 +2851,6 @@ static int amhdmitx_remove(struct platform_device *pdev)
 	device_remove_file(dev, &dev_attr_vic);
 	device_remove_file(dev, &dev_attr_hdcp_pwr);
 	device_remove_file(dev, &dev_attr_aud_output_chs);
-	device_remove_file(dev, &dev_attr_output_rgb);
 	device_remove_file(dev, &dev_attr_div40);
 
 	cdev_del(&hdmitx_device.cdev);
@@ -3159,8 +3140,6 @@ static  int __init hdmitx_boot_para_setup(char *s)
 	char *token;
 	unsigned token_len, token_offset, offset = 0;
 	int size = strlen(s);
-	unsigned long list;
-	int ret = 0;
 
 	do {
 		token = next_token_ex(separator, s, size, offset,
@@ -3169,12 +3148,6 @@ static  int __init hdmitx_boot_para_setup(char *s)
 		if ((token_len == 3)
 			&& (strncmp(token, "off", token_len) == 0)) {
 			init_flag |= INIT_FLAG_NOT_LOAD;
-		} else if (strncmp(token, "cec", 3) == 0) {
-			ret = kstrtoul(token+3, 16, &list);
-			if ((list >= 0) && (list <= 0xff))
-				hdmitx_device.cec_func_config = list;
-			hdmi_print(IMP, CEC "HDMI hdmi_cec_func_config:0x%x\n",
-				   hdmitx_device.cec_func_config);
 		}
 	}
 		offset = token_offset;

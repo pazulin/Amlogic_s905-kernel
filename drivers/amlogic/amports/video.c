@@ -131,7 +131,6 @@ bool platform_type = 1;
 int bit_depth_flag = 8;
 
 bool omx_secret_mode = false;
-EXPORT_SYMBOL(omx_secret_mode);
 #define DEBUG_FLAG_FFPLAY	(1<<0)
 #define DEBUG_FLAG_CALC_PTS_INC	(1<<1)
 
@@ -3638,8 +3637,6 @@ static irqreturn_t vsync_isr(int irq, void *dev_id)
 	}
 	if (omx_secret_mode == true) {
 		u32 system_time = timestamp_pcrscr_get();
-		video_notify_flag |= VIDEO_NOTIFY_TRICK_WAIT;
-		atomic_set(&trickmode_framedone, 1);
 		int diff = system_time - omx_pts;
 		if ((diff - omx_pts_interval_upper) > 0
 			|| (diff - omx_pts_interval_lower) < 0) {

@@ -497,12 +497,6 @@ int thermal_zone_get_temp(struct thermal_zone_device *tz, unsigned long *temp)
 	mutex_lock(&tz->lock);
 
 	ret = tz->ops->get_temp(tz, temp);
-/* 20170205 fix bug -1000 */
-	if ((ret == -EINVAL) || (tz->temperature == -1000)) {
-		tz->temperature = tz->last_temperature;
-	}
-/* 20170205 */
-
 #ifdef CONFIG_THERMAL_EMULATION
 	if (!tz->emul_temperature)
 		goto skip_emul;

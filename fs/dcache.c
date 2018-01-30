@@ -1060,7 +1060,7 @@ enum d_walk_ret {
  *
  * The @enter() and @finish() callbacks are called with d_lock held.
  */
-static void d_walk(struct dentry *parent, void *data,
+void d_walk(struct dentry *parent, void *data,
 		   enum d_walk_ret (*enter)(void *, struct dentry *),
 		   void (*finish)(void *))
 {
@@ -1164,6 +1164,7 @@ rename_retry:
 	seq = 1;
 	goto again;
 }
+EXPORT_SYMBOL(d_walk);
 
 /*
  * Search for at least 1 mount point in the dentry's subdirs.
@@ -2481,14 +2482,12 @@ static void switch_names(struct dentry *dentry, struct dentry *target)
 			dentry->d_name.name = dentry->d_iname;
 		} else {
 			/*
-			 * Both are internal.
+			 * Both are internal.  Just copy target to dentry
 			 */
-			unsigned int i;
-			BUILD_BUG_ON(!IS_ALIGNED(DNAME_INLINE_LEN, sizeof(long)));
-			for (i = 0; i < DNAME_INLINE_LEN / sizeof(long); i++) {
-				swap(((long *) &dentry->d_iname)[i],
-				     ((long *) &target->d_iname)[i]);
-			}
+			memcpy(dentry->d_iname, target->d_name.name,
+					target->d_name.len + 1);
+			dentry->d_name.len = target->d_name.len;
+			return;
 		}
 	}
 	swap(dentry->d_name.len, target->d_name.len);
@@ -2545,15 +2544,13 @@ static void dentry_unlock_parents_for_move(struct dentry *dentry,
  * __d_move - move a dentry
  * @dentry: entry to move
  * @target: new dentry
- * @exchange: exchange the two dentries
  *
  * Update the dcache to reflect the move of a file name. Negative
  * dcache entries should not be moved in this way. Caller must hold
  * rename_lock, the i_mutex of the source and target directories,
  * and the sb->s_vfs_rename_mutex if they differ. See lock_rename().
  */
-static void __d_move(struct dentry *dentry, struct dentry *target,
-		     bool exchange)
+static void __d_move(struct dentry * dentry, struct dentry * target)
 {
 	if (!dentry->d_inode)
 		printk(KERN_WARNING "VFS: moving negative dcache entry\n");
@@ -2575,15 +2572,8 @@ static void __d_move(struct dentry *dentry, struct dentry *target,
 	__d_drop(dentry);
 	__d_rehash(dentry, d_hash(target->d_parent, target->d_name.hash));
 
-	/*
-	 * Unhash the target (d_delete() is not usable here).  If exchanging
-	 * the two dentries, then rehash onto the other's hash queue.
-	 */
+	/* Unhash the target: dput() will then get rid of it */
 	__d_drop(target);
-	if (exchange) {
-		__d_rehash(target,
-			   d_hash(dentry->d_parent, dentry->d_name.hash));
-	}
 
 	list_del(&dentry->d_u.d_child);
 	list_del(&target->d_u.d_child);
@@ -2610,8 +2600,6 @@ static void __d_move(struct dentry *dentry, struct dentry *target,
 	write_seqcount_end(&dentry->d_seq);
 
 	dentry_unlock_parents_for_move(dentry, target);
-	if (exchange)
-		fsnotify_d_move(target);
 	spin_unlock(&target->d_lock);
 	fsnotify_d_move(dentry);
 	spin_unlock(&dentry->d_lock);
@@ -2629,29 +2617,10 @@ static void __d_move(struct dentry *dentry, struct dentry *target,
 void d_move(struct dentry *dentry, struct dentry *target)
 {
 	write_seqlock(&rename_lock);
-	__d_move(dentry, target, false);
+	__d_move(dentry, target);
 	write_sequnlock(&rename_lock);
 }
 EXPORT_SYMBOL(d_move);
-
-/*
- * d_exchange - exchange two dentries
- * @dentry1: first dentry
- * @dentry2: second dentry
- */
-void d_exchange(struct dentry *dentry1, struct dentry *dentry2)
-{
-	write_seqlock(&rename_lock);
-
-	WARN_ON(!dentry1->d_inode);
-	WARN_ON(!dentry2->d_inode);
-	WARN_ON(IS_ROOT(dentry1));
-	WARN_ON(IS_ROOT(dentry2));
-
-	__d_move(dentry1, dentry2, true);
-
-	write_sequnlock(&rename_lock);
-}
 
 /**
  * d_ancestor - search for an ancestor
@@ -2700,7 +2669,7 @@ static struct dentry *__d_unalias(struct inode *inode,
 	m2 = &alias->d_parent->d_inode->i_mutex;
 out_unalias:
 	if (likely(!d_mountpoint(alias))) {
-		__d_move(alias, dentry, false);
+		__d_move(alias, dentry);
 		ret = alias;
 	}
 out_err:

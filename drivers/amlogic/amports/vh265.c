@@ -215,7 +215,7 @@ static u32 dynamic_buf_num_margin;
 #else
 static u32 buf_alloc_width;
 static u32 buf_alloc_height;
-static u32 dynamic_buf_num_margin = 16;
+static u32 dynamic_buf_num_margin = 7;
 #endif
 static u32 buf_alloc_size;
 static u32 re_config_pic_flag;
@@ -4753,9 +4753,6 @@ static int prepare_display_buf(struct hevc_state_s *hevc, struct PIC_s *pic)
 		}
 		vf->compWidth = pic->width;
 		vf->compHeight = pic->height;
-
-		if (vf->compHeight == 1088)
-			vf->compHeight = 1080;
 
 		switch (hevc->bit_depth_luma) {
 		case 9:

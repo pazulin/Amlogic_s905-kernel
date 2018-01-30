@@ -76,11 +76,11 @@ struct ecryptfs_getdents_callback {
 
 /* Inspired by generic filldir in fs/readdir.c */
 static int
-ecryptfs_filldir(struct dir_context *ctx, const char *lower_name,
-		 int lower_namelen, loff_t offset, u64 ino, unsigned int d_type)
+ecryptfs_filldir(void *dirent, const char *lower_name, int lower_namelen,
+		 loff_t offset, u64 ino, unsigned int d_type)
 {
 	struct ecryptfs_getdents_callback *buf =
-		container_of(ctx, struct ecryptfs_getdents_callback, ctx);
+	    (struct ecryptfs_getdents_callback *)dirent;
 	size_t name_size;
 	char *name;
 	int rc;

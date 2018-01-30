@@ -14,7 +14,7 @@ config BITREVERSE
 	tristate
 
 config RATIONAL
-	def_bool y
+	boolean
 
 config GENERIC_STRNCPY_FROM_USER
 	bool

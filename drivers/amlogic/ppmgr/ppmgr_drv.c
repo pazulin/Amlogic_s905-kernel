@@ -1118,7 +1118,7 @@ __ATTR(orientation,
 		receiver_write),
 #ifdef CONFIG_POST_PROCESS_MANAGER_3D_PROCESS
 	__ATTR(ppmgr_3d_mode,
-		S_IRUGO | S_IWUSR | S_IWGRP,
+		S_IRUGO | S_IWUSR,
 		_3dmode_read,
 		_3dmode_write),
 	__ATTR(viewmode,
@@ -1226,7 +1226,6 @@ void get_ppmgr_buf_info(unsigned int *start, unsigned int *size)
 	*start = ppmgr_device.buffer_start;
 	*size = ppmgr_device.buffer_size;
 }
-EXPORT_SYMBOL(get_ppmgr_buf_info);
 
 static int ppmgr_open(struct inode *inode, struct file *file)
 {

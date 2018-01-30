@@ -1625,8 +1625,7 @@ static int init_dma_desc_rings(struct net_device *dev)
 		else
 			p = priv->dma_tx + i;
 		p->des2 = 0;
-		priv->tx_skbuff_dma[i].buf = 0;
-		priv->tx_skbuff_dma[i].map_as_page = false;
+		priv->tx_skbuff_dma[i] = 0;
 		priv->tx_skbuff[i] = NULL;
 	}
 
@@ -1665,24 +1664,17 @@ static void dma_free_tx_skbufs(struct stmmac_priv *priv)
 		else
 			p = priv->dma_tx + i;
 
-		if (priv->tx_skbuff_dma[i].buf) {
-			if (priv->tx_skbuff_dma[i].map_as_page)
-				dma_unmap_page(priv->device,
-					       priv->tx_skbuff_dma[i].buf,
-					       priv->hw->desc->get_tx_len(p),
-					       DMA_TO_DEVICE);
-			else
-				dma_unmap_single(priv->device,
-						 priv->tx_skbuff_dma[i].buf,
-						 priv->hw->desc->get_tx_len(p),
-						 DMA_TO_DEVICE);
+		if (priv->tx_skbuff_dma[i]) {
+			dma_unmap_single(priv->device,
+					 priv->tx_skbuff_dma[i],
+					 priv->hw->desc->get_tx_len(p),
+					 DMA_TO_DEVICE);
+			priv->tx_skbuff_dma[i] = 0;
 		}
 
 		if (priv->tx_skbuff[i] != NULL) {
 			dev_kfree_skb_any(priv->tx_skbuff[i]);
 			priv->tx_skbuff[i] = NULL;
-			priv->tx_skbuff_dma[i].buf = 0;
-			priv->tx_skbuff_dma[i].map_as_page = false;
 		}
 	}
 }
@@ -1703,8 +1695,7 @@ static int alloc_dma_desc_resources(struct stmmac_priv *priv)
 	if (!priv->rx_skbuff)
 		goto err_rx_skbuff;
 
-	priv->tx_skbuff_dma = kmalloc_array(txsize,
-					    sizeof(*priv->tx_skbuff_dma),
+	priv->tx_skbuff_dma = kmalloc_array(txsize, sizeof(dma_addr_t),
 					    GFP_KERNEL);
 	if (!priv->tx_skbuff_dma)
 		goto err_tx_skbuff_dma;
@@ -1868,19 +1859,12 @@ static void stmmac_tx_clean(struct stmmac_priv *priv)
 			pr_debug("%s: curr %d, dirty %d\n", __func__,
 				 priv->cur_tx, priv->dirty_tx);
 
-		if (likely(priv->tx_skbuff_dma[entry].buf)) {
-			if (priv->tx_skbuff_dma[entry].map_as_page)
-				dma_unmap_page(priv->device,
-					       priv->tx_skbuff_dma[entry].buf,
-					       priv->hw->desc->get_tx_len(p),
-					       DMA_TO_DEVICE);
-			else
-				dma_unmap_single(priv->device,
-						 priv->tx_skbuff_dma[entry].buf,
-						 priv->hw->desc->get_tx_len(p),
-						 DMA_TO_DEVICE);
-			priv->tx_skbuff_dma[entry].buf = 0;
-			priv->tx_skbuff_dma[entry].map_as_page = false;
+		if (likely(priv->tx_skbuff_dma[entry])) {
+			dma_unmap_single(priv->device,
+					 priv->tx_skbuff_dma[entry],
+					 priv->hw->desc->get_tx_len(p),
+					 DMA_TO_DEVICE);
+			priv->tx_skbuff_dma[entry] = 0;
 		}
 		priv->hw->mode->clean_desc3(priv, p);
 
@@ -2081,9 +2065,7 @@ static int stmmac_get_hw_features(struct stmmac_priv *priv)
 		priv->dma_cap.atime_stamp =
 		    (hw_cap & DMA_HW_FEAT_TSVER2SEL) >> 13;
 		/* 802.3az - Energy-Efficient Ethernet (EEE) */
-		/* Disable EEE because it's causing network outage on WP2*/
-		//priv->dma_cap.eee = (hw_cap & DMA_HW_FEAT_EEESEL) >> 14;
-		priv->dma_cap.eee = 0;
+		priv->dma_cap.eee = (hw_cap & DMA_HW_FEAT_EEESEL) >> 14;
 		priv->dma_cap.av = (hw_cap & DMA_HW_FEAT_AVSEL) >> 15;
 		/* TX and RX csum */
 		priv->dma_cap.tx_coe = (hw_cap & DMA_HW_FEAT_TXCOESEL) >> 16;
@@ -2474,16 +2456,12 @@ static netdev_tx_t stmmac_xmit(struct sk_buff *skb, struct net_device *dev)
 	if (likely(!is_jumbo)) {
 		desc->des2 = dma_map_single(priv->device, skb->data,
 					    nopaged_len, DMA_TO_DEVICE);
-		if (dma_mapping_error(priv->device, desc->des2))
-			goto dma_map_err;
-		priv->tx_skbuff_dma[entry].buf = desc->des2;
+		priv->tx_skbuff_dma[entry] = desc->des2;
 		priv->hw->desc->prepare_tx_desc(desc, 1, nopaged_len,
 						csum_insertion, priv->mode);
 	} else {
 		desc = first;
 		entry = priv->hw->mode->jumbo_frm(priv, skb, csum_insertion);
-		if (unlikely(entry < 0))
-			goto dma_map_err;
 	}
 
 	for (i = 0; i < nfrags; i++) {
@@ -2499,11 +2477,7 @@ static netdev_tx_t stmmac_xmit(struct sk_buff *skb, struct net_device *dev)
 
 		desc->des2 = skb_frag_dma_map(priv->device, frag, 0, len,
 					      DMA_TO_DEVICE);
-		if (dma_mapping_error(priv->device, desc->des2))
-			goto dma_map_err; /* should reuse desc w/o issues */
-
-		priv->tx_skbuff_dma[entry].buf = desc->des2;
-		priv->tx_skbuff_dma[entry].map_as_page = true;
+		priv->tx_skbuff_dma[entry] = desc->des2;
 		priv->hw->desc->prepare_tx_desc(desc, 0, len, csum_insertion,
 						priv->mode);
 		wmb();
@@ -2570,12 +2544,7 @@ static netdev_tx_t stmmac_xmit(struct sk_buff *skb, struct net_device *dev)
 	priv->hw->dma->enable_dma_transmission(priv->ioaddr);
 
 	spin_unlock(&priv->tx_lock);
-	return NETDEV_TX_OK;
 
-dma_map_err:
-	dev_err(priv->device, "Tx dma map failed\n");
-	dev_kfree_skb(skb);
-	priv->dev->stats.tx_dropped++;
 	return NETDEV_TX_OK;
 }
 
@@ -2628,12 +2597,7 @@ static inline void stmmac_rx_refill(struct stmmac_priv *priv)
 			priv->rx_skbuff_dma[entry] =
 			    dma_map_single(priv->device, skb->data, bfsize,
 					   DMA_FROM_DEVICE);
-			if (dma_mapping_error(priv->device,
-					      priv->rx_skbuff_dma[entry])) {
-				dev_err(priv->device, "Rx dma map failed\n");
-				dev_kfree_skb(skb);
-				break;
-			}
+
 			p->des2 = priv->rx_skbuff_dma[entry];
 
 			priv->hw->mode->refill_desc3(priv, p);
