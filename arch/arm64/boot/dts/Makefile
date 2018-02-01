@@ -21,12 +21,10 @@ dtb-$(CONFIG_ARM64) += gxbb_p200.dtb \
 		nexbox_a95x_s905.dtb \
 		gxbb_p200_2g_1.dtb \
 		gxbb_p200_2g_100m_realtekwifi.dtb \
-		kvim_libreelec.dtb \
-		kvim_nougat.dtb \
+		kvim_android.dtb \
 		kvim_linux.dtb \
 		kvim_multios.dtb \
-		kvim2_libreelec.dtb \
-		kvim2_nougat.dtb \
+		kvim2_android.dtb \
 		kvim2_linux.dtb \
 		kvim2_multios.dtb
 
