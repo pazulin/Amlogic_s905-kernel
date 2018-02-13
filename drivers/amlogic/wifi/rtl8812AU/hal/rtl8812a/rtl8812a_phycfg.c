@@ -109,6 +109,7 @@ phy_RFSerialRead(
 	BB_REGISTER_DEFINITION_T	*pPhyReg = &pHalData->PHYRegDef[eRFPath];
 	BOOLEAN						bIsPIMode = _FALSE;
 
+
 	_enter_critical_mutex(&(adapter_to_dvobj(Adapter)->rf_read_reg_mutex) , NULL);
 	// 2009/06/17 MH We can not execute IO for power save or other accident mode.
 	//if(RT_CANNOT_IO(Adapter))
@@ -338,7 +339,6 @@ phy_BB8812_Config_ParaFile(
 	IN	PADAPTER	Adapter
 	)
 {
-	EEPROM_EFUSE_PRIV	*pEEPROM = GET_EEPROM_EFUSE_PRIV(Adapter);
 	HAL_DATA_TYPE		*pHalData = GET_HAL_DATA(Adapter);
 	int			rtStatus = _SUCCESS;
 
@@ -496,7 +496,6 @@ PHY_BBConfig8812(
 	int	rtStatus = _SUCCESS;
 	HAL_DATA_TYPE	*pHalData = GET_HAL_DATA(Adapter);
 	u8	TmpU1B=0;
-	u8	CrystalCap;
 
 	phy_InitBBRFRegisterDefinition(Adapter);
 
@@ -524,18 +523,7 @@ PHY_BBConfig8812(
 	//
 	rtStatus = phy_BB8812_Config_ParaFile(Adapter);
 
-	if(IS_HARDWARE_TYPE_8812(Adapter))
-	{
-		// write 0x2C[30:25] = 0x2C[24:19] = CrystalCap
-		CrystalCap = pHalData->CrystalCap & 0x3F;
-		PHY_SetBBReg(Adapter, REG_MAC_PHY_CTRL, 0x7FF80000, (CrystalCap | (CrystalCap << 6)));
-	}
-	else if (IS_HARDWARE_TYPE_8821(Adapter))
-	{
-		// 0x2C[23:18] = 0x2C[17:12] = CrystalCap
-		CrystalCap = pHalData->CrystalCap & 0x3F;
-		PHY_SetBBReg(Adapter, REG_MAC_PHY_CTRL, 0xFFF000, (CrystalCap | (CrystalCap << 6)));	
-	}
+	hal_set_crystal_cap(Adapter, pHalData->CrystalCap);
 
 	if(IS_HARDWARE_TYPE_JAGUAR(Adapter))
 	{
@@ -553,7 +541,7 @@ PHY_RFConfig8812(
 	HAL_DATA_TYPE	*pHalData = GET_HAL_DATA(Adapter);
 	int		rtStatus = _SUCCESS;
 
-	if (Adapter->bSurpriseRemoved)
+	if (RTW_CANNOT_RUN(Adapter))
 		return _FAIL;
 
 	switch(pHalData->rf_chip)
@@ -736,34 +724,60 @@ PHY_GetTxPowerIndex_8812A(
 
 	limit = PHY_GetTxPowerLimit( pAdapter, pAdapter->registrypriv.RegPwrTblSel, (u8)(!bIn24G), pHalData->CurrentChannelBW, RFPath, Rate, pHalData->CurrentChannel);
 
-#ifdef CONFIG_USB_HCI
-	/*
-	  * 2013/01/29 MH For preventing VHT rate of 8812AU to be used in USB 2.0 mode
-	  * and the current will be more than 500mA and card disappear. We need to limit 
-	  * TX power with any power by rate for VHT in U2.
-	  * 2013/01/30 MH According to power current test compare with BCM AC NIC, we
-	  * decide to use host hub = 2.0 mode to enable tx power limit behavior.
-	  */
-	if (adapter_to_dvobj(pAdapter)->usb_speed == RTW_USB_SPEED_2 
-		&& IS_HARDWARE_TYPE_8812AU(pAdapter)) {
-
-		/* VHT rate 0~7, disable TxPowerByRate, but enable TX power limit */
-		if ((Rate >= MGN_VHT1SS_MCS0 && Rate <= MGN_VHT1SS_MCS7) || 
-				(Rate >= MGN_VHT2SS_MCS0 && Rate <= MGN_VHT2SS_MCS7))
-				powerDiffByRate = 0;
-	}
-#endif
-
 	powerDiffByRate = powerDiffByRate > limit ? limit : powerDiffByRate;
-	/* DBG_871X("Rate-0x%x: (TxPower, PowerDiffByRate Path-%c) = (0x%X, %d)\n", Rate, ((RFPath==0)?'A':'B'), txPower, powerDiffByRate); */
+	//DBG_871X("Rate-0x%x: (TxPower, PowerDiffByRate Path-%c) = (0x%X, %d)\n", Rate, ((RFPath==0)?'A':'B'), txPower, powerDiffByRate);
+
+	// We need to reduce power index for VHT MCS 8 & 9.
+	if (Rate == MGN_VHT1SS_MCS8 || Rate == MGN_VHT1SS_MCS9 ||
+		Rate == MGN_VHT2SS_MCS8 || Rate == MGN_VHT2SS_MCS9)
+	{
+		txPower += powerDiffByRate;
+	}
+	else
+	{
+#ifdef CONFIG_USB_HCI
+		//
+		// 2013/01/29 MH For preventing VHT rate of 8812AU to be used in USB 2.0 mode
+		// and the current will be more than 500mA and card disappear. We need to limit 
+		// TX power with any power by rate for VHT in U2.
+		// 2013/01/30 MH According to power current test compare with BCM AC NIC, we
+		// decide to use host hub = 2.0 mode to enable tx power limit behavior.
+		//
+		if (adapter_to_dvobj(pAdapter)->usb_speed == RTW_USB_SPEED_2 && IS_HARDWARE_TYPE_8812AU(pAdapter))
+		{
+			powerDiffByRate = 0;
+		}
+#endif
+		txPower += powerDiffByRate;
+#if 0
+		//
+		// 2013/02/06 MH Add for ASUS requiremen for adjusting TX power limit.
+		// This is a temporarily dirty fix for asus , neeed to revise later!
+		// 2013/03/07 MH Asus add more request.
+		// 2013/03/14 MH Asus add one more request for the power control.
+		//
+		if (Channel >= 36)
+		{			
+			txPower += pMgntInfo->RegTPCLvl5g;
+
+			if (txPower > pMgntInfo->RegTPCLvl5gD)
+				txPower -= pMgntInfo->RegTPCLvl5gD;
+		}
+		else
+		{		
+			txPower += pMgntInfo->RegTPCLvl;
+
+			if (txPower > pMgntInfo->RegTPCLvlD)
+				txPower -= pMgntInfo->RegTPCLvlD;
+		}
+#endif
+	}	
 	
-	txPower += powerDiffByRate;
 	txPower += PHY_GetTxPowerTrackingOffset( pAdapter, RFPath, Rate );
 	
-	/* 2012/09/26 MH We need to take care high power device limiation to prevent destroy EXT_PA.
-	  * This case had ever happened in CU/SU high power module. THe limitation = 0x20.
-	  * But for 8812, we still not know the value.
-	  */
+	// 2012/09/26 MH We need to take care high power device limiation to prevent destroy EXT_PA.
+	// This case had ever happened in CU/SU high power module. THe limitation = 0x20.
+	// But for 8812, we still not know the value.
 	phy_TxPwrAdjInPercentage(pAdapter, (u8 *)&txPower);
 
 	if(txPower > MAX_POWER_INDEX)
@@ -772,7 +786,7 @@ PHY_GetTxPowerIndex_8812A(
 	if ( txPower % 2 == 1 && !IS_NORMAL_CHIP(pHalData->VersionID))
 		--txPower;
 
-	/* DBG_871X("Final Tx Power(RF-%c, Channel: %d) = %d(0x%X)\n", ((RFPath==0)?'A':'B'), Channel,txPower, txPower); */
+	//DBG_871X("Final Tx Power(RF-%c, Channel: %d) = %d(0x%X)\n", ((RFPath==0)?'A':'B'), Channel,txPower, txPower);
 
 	return (u8) txPower;
 }
@@ -988,14 +1002,14 @@ u32 PHY_GetTxBBSwing_8812A(
 	HAL_DATA_TYPE	*pHalData = GET_HAL_DATA(GetDefaultAdapter(Adapter));
 	PDM_ODM_T		pDM_Odm = &pHalData->odmpriv;
 	PODM_RF_CAL_T  	pRFCalibrateInfo = &(pDM_Odm->RFCalibrateInfo);
-	EEPROM_EFUSE_PRIV	*pEEPROM = GET_EEPROM_EFUSE_PRIV(Adapter);
+
 	s8	bbSwing_2G = -1 * GetRegTxBBSwing_2G(Adapter);
 	s8	bbSwing_5G = -1 * GetRegTxBBSwing_5G(Adapter);
 	u32	out = 0x200;
 	const s8	AUTO = -1;
 	
 
-	if (pEEPROM->bautoload_fail_flag) 
+	if (pHalData->bautoload_fail_flag) 
 	{
 		if ( Band == BAND_ON_2_4G ) {
 			pRFCalibrateInfo->BBSwingDiff2G = bbSwing_2G;
@@ -1249,7 +1263,7 @@ void phy_SetBBSwingByBand_8812A(
 			{
 				BBDiffBetweenBand = (pRFCalibrateInfo->BBSwingDiff2G - pRFCalibrateInfo->BBSwingDiff5G);
 				BBDiffBetweenBand = (Band == BAND_ON_2_4G) ? BBDiffBetweenBand : (-1 * BBDiffBetweenBand);
-				pDM_Odm->DefaultOfdmIndex += BBDiffBetweenBand*2;
+				pRFCalibrateInfo->DefaultOfdmIndex += BBDiffBetweenBand*2;
 			}
 
 			ODM_ClearTxPowerTrackingState(pDM_Odm);
@@ -1477,7 +1491,7 @@ phy_GetSecondaryChnl_8812(
 		else if(pHalData->nCur80MhzPrimeSC == HAL_PRIME_CHNL_OFFSET_UPPER)
 			SCSettingOf40 = VHT_DATA_SC_40_UPPER_OF_80MHZ;
 		else
-			DBG_871X("SCMapping: Not Correct Primary80MHz Setting \n");
+			DBG_871X("SCMapping: DONOT CARE Mode Setting\n");
 		
 		if((pHalData->nCur40MhzPrimeSC == HAL_PRIME_CHNL_OFFSET_LOWER) && (pHalData->nCur80MhzPrimeSC == HAL_PRIME_CHNL_OFFSET_LOWER))
 			SCSettingOf20 = VHT_DATA_SC_20_LOWEST_OF_80MHZ;
@@ -1488,7 +1502,7 @@ phy_GetSecondaryChnl_8812(
 		else if((pHalData->nCur40MhzPrimeSC == HAL_PRIME_CHNL_OFFSET_UPPER) && (pHalData->nCur80MhzPrimeSC == HAL_PRIME_CHNL_OFFSET_UPPER))
 			SCSettingOf20 = VHT_DATA_SC_20_UPPERST_OF_80MHZ;
 		else
-			DBG_871X("SCMapping: Not Correct Primary80MHz Setting \n");
+			DBG_871X("SCMapping: DONOT CARE Mode Setting\n");
 	}
 	else if(pHalData->CurrentChannelBW == CHANNEL_WIDTH_40)
 	{
@@ -1499,10 +1513,10 @@ phy_GetSecondaryChnl_8812(
 		else if(pHalData->nCur40MhzPrimeSC == HAL_PRIME_CHNL_OFFSET_LOWER)
 			SCSettingOf20 = VHT_DATA_SC_20_LOWER_OF_80MHZ;
 		else
-			DBG_871X("SCMapping: Not Correct Primary40MHz Setting \n");
+			DBG_871X("SCMapping: DONOT CARE Mode Setting\n");
 	}
 
-	//DBG_871X("SCMapping: SC Value %x \n", ( (SCSettingOf40 << 4) | SCSettingOf20));
+	/*DBG_871X("SCMapping: SC Value %x\n", ((SCSettingOf40 << 4) | SCSettingOf20));*/
 	return  ( (SCSettingOf40 << 4) | SCSettingOf20);
 }
 
@@ -1870,10 +1884,9 @@ phy_SwChnlAndSetBwMode8812(
 			pHalData->CurrentChannelBW);
 	}
 
-	if((Adapter->bDriverStopped) || (Adapter->bSurpriseRemoved))
-	{
+	if (RTW_CANNOT_RUN(Adapter))
 		return;
-	}
+
 
 	if(pHalData->bSwChnl)
 	{
@@ -2013,10 +2026,8 @@ PHY_HandleSwChnlAndSetBW8812(
 	}
 
 	//Switch workitem or set timer to do switch channel or setbandwidth operation
-	if((!pDefAdapter->bDriverStopped) && (!pDefAdapter->bSurpriseRemoved))
-	{
+	if (!RTW_CANNOT_RUN(Adapter))
 		phy_SwChnlAndSetBwMode8812(Adapter);
-	}
 	else
 	{
 		if(pHalData->bSwChnl)

@@ -343,6 +343,9 @@ struct xmit_buf *rtl8812ae_dequeue_xmitbuf(struct rtw_tx_ring *ring);
 void	rtl8812ae_xmitframe_resume(_adapter *padapter);
 s32 rtl8812ae_hal_xmit(PADAPTER padapter, struct xmit_frame *pxmitframe);
 s32 rtl8812ae_mgnt_xmit(PADAPTER padapter, struct xmit_frame *pmgntframe);
+#ifdef CONFIG_XMIT_THREAD_MODE
+s32 rtl8812ae_xmit_buf_handler(_adapter *padapter);
+#endif
 s32	rtl8812ae_hal_xmitframe_enqueue(_adapter *padapter, struct xmit_frame *pxmitframe);
 void rtl8812ae_xmit_tasklet(void *priv);
 #endif

@@ -57,11 +57,7 @@
 
 #elif defined(CONFIG_SDIO_HCI)
 
-#ifdef CONFIG_SDIO_RX_COPY
-#define MAX_RECVBUF_SZ (10240)
-#else // !CONFIG_SDIO_RX_COPY
-#define MAX_RECVBUF_SZ	MAX_RX_DMA_BUFFER_SIZE_8821
-#endif // !CONFIG_SDIO_RX_COPY
+#define MAX_RECVBUF_SZ (RX_DMA_BOUNDARY_8821 + 1)
 
 #endif
 
@@ -147,7 +143,6 @@ void FreeRecvPriv8821AS(PADAPTER padapter);
 #endif // CONFIG_SDIO_HCI
 
 #ifdef CONFIG_USB_HCI
-#define INTERRUPT_MSG_FORMAT_LEN 60
 void rtl8812au_init_recvbuf(_adapter *padapter, struct recv_buf *precvbuf);
 s32 rtl8812au_init_recv_priv(PADAPTER padapter);
 void rtl8812au_free_recv_priv(PADAPTER padapter);

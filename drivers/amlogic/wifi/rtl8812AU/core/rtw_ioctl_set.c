@@ -20,6 +20,7 @@
 #define _RTW_IOCTL_SET_C_
 
 #include <drv_types.h>
+#include <hal_data.h>
 
 
 extern void indicate_wx_scan_complete_event(_adapter *padapter);
@@ -159,9 +160,8 @@ _func_enter_;
 
 				rtw_generate_random_ibss(pibss);
 					
-				if(rtw_createbss_cmd(padapter)!=_SUCCESS)
-				{
-					RT_TRACE(_module_rtl871x_ioctl_set_c_,_drv_err_,("***Error=>do_goin: rtw_createbss_cmd status FAIL*** \n "));						
+				if (rtw_create_ibss_cmd(padapter, 0) != _SUCCESS) {
+					RT_TRACE(_module_rtl871x_ioctl_set_c_, _drv_err_, ("***Error=>do_goin: rtw_create_ibss_cmd status FAIL***\n"));						
 					ret =  _FALSE;
 					goto exit;
 				}
@@ -415,7 +415,7 @@ _func_enter_;
 	DBG_871X_LEVEL(_drv_always_, "set ssid [%s] fw_state=0x%08x\n",
 		       	ssid->Ssid, get_fwstate(pmlmepriv));
 
-	if(padapter->hw_init_completed==_FALSE){
+	if (!rtw_is_hw_init_completed(padapter)) {
 		RT_TRACE(_module_rtl871x_ioctl_set_c_, _drv_err_,
 			 ("set_ssid: hw_init_completed==_FALSE=>exit!!!\n"));
 		status = _FAIL;
@@ -549,7 +549,7 @@ _func_enter_;
 		goto exit;
 	}
 
-	if(padapter->hw_init_completed==_FALSE){
+	if (!rtw_is_hw_init_completed(padapter)) {
 		RT_TRACE(_module_rtl871x_ioctl_set_c_, _drv_err_,
 			 ("set_ssid: hw_init_completed==_FALSE=>exit!!!\n"));
 		status = _FAIL;
@@ -673,7 +673,10 @@ _func_enter_;
 
 			case Ndis802_11AutoUnknown:
 			case Ndis802_11InfrastructureMax:
-				break;                        				
+				break;
+			case Ndis802_11Monitor:
+				set_fwstate(pmlmepriv, WIFI_MONITOR_STATE);
+				break;
 		}
 
 		//SecClearAllKeys(adapter);
@@ -732,7 +735,7 @@ _func_enter_;
 		res=_FALSE;
 		goto exit;
 	}
-	if (padapter->hw_init_completed==_FALSE){
+	if (!rtw_is_hw_init_completed(padapter)) {
 		res = _FALSE;
 		RT_TRACE(_module_rtl871x_ioctl_set_c_,_drv_err_,("\n===rtw_set_802_11_bssid_list_scan:hw_init_completed==_FALSE===\n"));
 		goto exit;
@@ -1434,7 +1437,7 @@ int rtw_set_channel_plan(_adapter *adapter, u8 channel_plan)
 	struct mlme_priv *pmlmepriv = &adapter->mlmepriv;
 
 	//handle by cmd_thread to sync with scan operation
-	return rtw_set_chplan_cmd(adapter, channel_plan, 1, 1);
+	return rtw_set_chplan_cmd(adapter, RTW_CMDF_WAIT_ACK, channel_plan, 1);
 }
 
 /*
@@ -1446,25 +1449,16 @@ int rtw_set_channel_plan(_adapter *adapter, u8 channel_plan)
 */
 int rtw_set_country(_adapter *adapter, const char *country_code)
 {
-	int channel_plan = RT_CHANNEL_DOMAIN_WORLD_WIDE_5G;
+	int channel_plan;
 
-	DBG_871X("%s country_code:%s\n", __func__, country_code);
+	channel_plan = rtw_get_chplan_from_country(country_code);
 
-	//TODO: should have a table to match country code and RT_CHANNEL_DOMAIN
-	//TODO: should consider 2-character and 3-character country code
-	if(0 == strcmp(country_code, "US"))
-		channel_plan = RT_CHANNEL_DOMAIN_FCC;
-	else if(0 == strcmp(country_code, "EU"))
-		channel_plan = RT_CHANNEL_DOMAIN_ETSI;
-	else if(0 == strcmp(country_code, "JP"))
-		channel_plan = RT_CHANNEL_DOMAIN_MKK;
-	else if(0 == strcmp(country_code, "CN"))
-		channel_plan = RT_CHANNEL_DOMAIN_CHINA;
-	else if(0 == strcmp(country_code, "IN"))
-		channel_plan = RT_CHANNEL_DOMAIN_GLOBAL_DOAMIN;
-	else
-		DBG_871X("%s unknown country_code:%s\n", __FUNCTION__, country_code);
-	
+	if (channel_plan == -1) {
+		DBG_871X_LEVEL(_drv_always_, "%s unsupported country_code:%s\n", __func__, country_code);
+		return _FAIL;
+	}
+
+	DBG_871X_LEVEL(_drv_always_, "%s country_code:%s mapping to chplan:0x%02x\n", __func__, country_code, channel_plan);
 	return rtw_set_channel_plan(adapter, channel_plan);
 }
 

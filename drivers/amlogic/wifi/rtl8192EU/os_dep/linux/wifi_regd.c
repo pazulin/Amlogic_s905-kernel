@@ -10,6 +10,12 @@
 
 #include <rtw_wifi_regd.h>
 
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(4, 7, 0))
+#define IEEE80211_BAND_2GHZ    NL80211_BAND_2GHZ
+#define IEEE80211_BAND_5GHZ    NL80211_BAND_5GHZ
+#define IEEE80211_NUM_BANDS    NUM_NL80211_BANDS
+#endif /* Linux kernel >= 4.7.0 */
+
 static struct country_code_to_enum_rd allCountries[] = {
 	{COUNTRY_CODE_USER, "RD"},
 };
@@ -268,6 +274,7 @@ static void _rtw_reg_apply_radar_flags(struct wiphy *wiphy)
 		if (!_rtw_is_radar_freq(ch->center_freq))
 			continue;
 #ifdef CONFIG_DFS
+		#if defined(CONFIG_DFS_MASTER) && (LINUX_VERSION_CODE >= KERNEL_VERSION(3, 14, 0))
 		if (!(ch->flags & IEEE80211_CHAN_DISABLED)) {
 			ch->flags |= IEEE80211_CHAN_RADAR;
 			#if (LINUX_VERSION_CODE < KERNEL_VERSION(3,14,0))
@@ -276,6 +283,7 @@ static void _rtw_reg_apply_radar_flags(struct wiphy *wiphy)
 			ch->flags |= IEEE80211_CHAN_NO_IR;
 			#endif
 		}
+		#endif
 #endif //CONFIG_DFS
 
 #if 0
@@ -295,26 +303,6 @@ static void _rtw_reg_apply_radar_flags(struct wiphy *wiphy)
 			    IEEE80211_CHAN_NO_IBSS |
 			    IEEE80211_CHAN_PASSIVE_SCAN;
 #endif
-	}
-}
-
-static int rtw_ieee80211_channel_to_frequency(int chan, int band)
-{
-	/* see 802.11 17.3.8.3.2 and Annex J
-	 * there are overlapping channel numbers in 5GHz and 2GHz bands */
-
-	if (band == IEEE80211_BAND_5GHZ) {
-		if (chan >= 182 && chan <= 196)
-			return 4000 + chan * 5;
-		else
-			return 5000 + chan * 5;
-	} else {		/* IEEE80211_BAND_2GHZ */
-		if (chan == 14)
-			return 2484;
-		else if (chan < 14)
-			return 2407 + chan * 5;
-		else
-			return 0;	/* not supported */
 	}
 }
 
@@ -350,20 +338,14 @@ static void _rtw_reg_apply_flags(struct wiphy *wiphy)
 	// channels apply by channel plans.
 	for (i = 0; i < max_chan_nums; i++) {
 		channel = channel_set[i].ChannelNum;
-		if (channel <= 14)
-			freq =
-			    rtw_ieee80211_channel_to_frequency(channel,
-							       IEEE80211_BAND_2GHZ);
-		else
-			freq =
-			    rtw_ieee80211_channel_to_frequency(channel,
-							       IEEE80211_BAND_5GHZ);
-
+		freq = rtw_ch2freq(channel);
 
 		ch = ieee80211_get_channel(wiphy, freq);
 		if (ch) {
 			if (channel_set[i].ScanType == SCAN_PASSIVE) {
-				#if (LINUX_VERSION_CODE < KERNEL_VERSION(3,14,0))
+				#if defined(CONFIG_DFS_MASTER) && (LINUX_VERSION_CODE < KERNEL_VERSION(3, 14, 0))
+				ch->flags = 0;
+				#elif (LINUX_VERSION_CODE < KERNEL_VERSION(3, 14, 0))
 				ch->flags = (IEEE80211_CHAN_NO_IBSS|IEEE80211_CHAN_PASSIVE_SCAN);
 				#else
 				ch->flags = IEEE80211_CHAN_NO_IR;
@@ -402,14 +384,7 @@ static void _rtw_reg_apply_flags(struct wiphy *wiphy)
 
 	for (i = 0; i < 37; i++) {
 		channel = channels[i];
-		if (channel <= 14)
-			freq =
-			    rtw_ieee80211_channel_to_frequency(channel,
-							       IEEE80211_BAND_2GHZ);
-		else
-			freq =
-			    rtw_ieee80211_channel_to_frequency(channel,
-							       IEEE80211_BAND_5GHZ);
+		freq = rtw_ch2freq(channel);
 
 		ch = ieee80211_get_channel(wiphy, freq);
 		if (ch) {

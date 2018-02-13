@@ -2051,7 +2051,7 @@ int rtw_is_file_readable(char *path)
 * @param sz how many bytes to read at most
 * @return the byte we've read
 */
-int rtw_retrive_from_file(char *path, u8* buf, u32 sz)
+int rtw_retrieve_from_file(char *path, u8 *buf, u32 sz)
 {
 #ifdef PLATFORM_LINUX
 	int ret =retriveFromFile(path, buf, sz);
@@ -2141,7 +2141,6 @@ void rtw_free_netdev(struct net_device * netdev)
 	if(!pnpi->priv)
 		goto RETURN;
 
-	rtw_vmfree(pnpi->priv, pnpi->sizeof_priv);
 	free_netdev(netdev);
 
 RETURN:

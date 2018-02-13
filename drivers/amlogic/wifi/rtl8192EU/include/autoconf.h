@@ -41,7 +41,7 @@
 	//#define CONFIG_DEBUG_CFG80211 
 	//#define CONFIG_DRV_ISSUE_PROV_REQ // IOT FOR S2
 	#define CONFIG_SET_SCAN_DENY_TIMER
-
+	/*#define SUPPLICANT_RTK_VERSION_LOWER_THAN_JB42*/ /* wpa_supplicant realtek version <= jb42 will be defined this */
 #endif
 
 /*
@@ -89,13 +89,8 @@
 	#define CONFIG_XMIT_THREAD_MODE
 #endif
 
-//befor link
-//#define CONFIG_ANTENNA_DIVERSITY
+/*#define CONFIG_ANTENNA_DIVERSITY*/
 
-//after link
-#ifdef CONFIG_ANTENNA_DIVERSITY	 
-	#define CONFIG_HW_ANTENNA_DIVERSITY		
-#endif
 
 
 //#define CONFIG_CONCURRENT_MODE 
@@ -103,7 +98,7 @@
 	//#define CONFIG_HWPORT_SWAP				//Port0->Sec , Port1 -> Pri
 	#define CONFIG_RUNTIME_PORT_SWITCH
 	//#define DBG_RUNTIME_PORT_SWITCH
-	#define CONFIG_STA_MODE_SCAN_UNDER_AP_MODE
+	#define CONFIG_SCAN_BACKOP
 	//#define CONFIG_ATMEL_RC_PATCH
 	//#define CONFIG_TSF_RESET_OFFLOAD 			// For 2 PORT TSF SYNC.
 #endif
@@ -115,8 +110,8 @@
 		#undef CONFIG_INTERRUPT_BASED_TXBCN
 	#endif
 	#ifdef CONFIG_INTERRUPT_BASED_TXBCN
-		//#define CONFIG_INTERRUPT_BASED_TXBCN_EARLY_INT
-		#define CONFIG_INTERRUPT_BASED_TXBCN_BCN_OK_ERR		
+		#define CONFIG_INTERRUPT_BASED_TXBCN_EARLY_INT
+		/*#define CONFIG_INTERRUPT_BASED_TXBCN_BCN_OK_ERR*/		
 	#endif
 	
 	#define CONFIG_NATIVEAP_MLME
@@ -137,7 +132,6 @@
 	//#define CONFIG_DBG_P2P
 
 	#define CONFIG_P2P_PS
-	//#define CONFIG_P2P_IPS
 	#define CONFIG_P2P_OP_CHK_SOCIAL_CH
 	#define CONFIG_CFG80211_ONECHANNEL_UNDER_CONCURRENT  //replace CONFIG_P2P_CHK_INVITE_CH_LIST flag
 	#define CONFIG_P2P_INVITE_IOT
@@ -151,10 +145,8 @@
 //	#endif
 //	#define CONFIG_TDLS_AUTOSETUP
 	#define CONFIG_TDLS_AUTOCHECKALIVE
-	#define CONFIG_TDLS_CH_SW		/* Enable "CONFIG_TDLS_CH_SW" by default, however limit it to only work in wifi logo test mode but not in normal mode currently */
+	#define CONFIG_TDLS_CH_SW	/* Enable this flag only when we confirm that TDLS CH SW is supported in FW */
 #endif
-
-//#define CONFIG_EFUSE_CONFIG_FILE
 
 #define CONFIG_SKB_COPY	//for amsdu
 
@@ -182,9 +174,8 @@
 #endif
 
 #define RTW_NOTCH_FILTER 0 /* 0:Disable, 1:Enable, */
-#define CONFIG_DEAUTH_BEFORE_CONNECT
 
-#define CONFIG_TX_MCAST2UNI	1	// Support IP multicast->unicast
+#define CONFIG_TX_MCAST2UNI		/*Support IP multicast->unicast*/
 //#define CONFIG_CHECK_AC_LIFETIME 1	// Check packet lifetime of 4 ACs.
 
 
@@ -249,8 +240,6 @@
 #define ENABLE_USB_DROP_INCORRECT_OUT
 
 
-//#define RTL8192CU_ADHOC_WORKAROUND_SETTING	
-
 #define DISABLE_BB_RF	0
 
 //#define RTL8191C_FPGA_NETWORKTYPE_ADHOC 0
@@ -268,61 +257,11 @@
 /*
  * Platform  Related Config
  */
-#ifdef CONFIG_PLATFORM_MN10300
-	#define CONFIG_SPECIAL_SETTING_FOR_FUNAI_TV
-	#define CONFIG_USE_USB_BUFFER_ALLOC_RX 
-	
-	#if	defined (CONFIG_SW_ANTENNA_DIVERSITY)
-		#undef CONFIG_SW_ANTENNA_DIVERSITY
-		#define CONFIG_HW_ANTENNA_DIVERSITY
-	#endif
-
-	#if	defined (CONFIG_POWER_SAVING)
-		#undef CONFIG_POWER_SAVING
-	#endif
-	
-#endif//CONFIG_PLATFORM_MN10300
-
-
-
-/*
- * Outsource  Related Config
- */
-#define 	TESTCHIP_SUPPORT				0
-#define 	RTL8192CE_SUPPORT 				0
-#define 	RTL8192CU_SUPPORT 			0
-#define 	RTL8192C_SUPPORT 				(RTL8192CE_SUPPORT|RTL8192CU_SUPPORT)	
-
-#define 	RTL8192DE_SUPPORT 				0
-#define 	RTL8192DU_SUPPORT 			0
-#define 	RTL8192D_SUPPORT 				(RTL8192DE_SUPPORT|RTL8192DU_SUPPORT)	
-
-#define 	RTL8723AU_SUPPORT				0
-#define 	RTL8723AS_SUPPORT				0
-#define 	RTL8723AE_SUPPORT				0
-#define 	RTL8723A_SUPPORT				(RTL8723AU_SUPPORT|RTL8723AS_SUPPORT|RTL8723AE_SUPPORT)
-#define 	RTL8723_FPGA_VERIFICATION		0
-
-
-#define RTL8188E_SUPPORT				0
-#define RTL8812A_SUPPORT				0
-#define RTL8821A_SUPPORT				0
-#define RTL8723B_SUPPORT				0
-#define RTL8192E_SUPPORT				1
-#define RTL8814A_SUPPORT				0
-#define 	RTL8195A_SUPPORT				0
-
-#define RATE_ADAPTIVE_SUPPORT 			0
-#define POWER_TRAINING_ACTIVE			0
-
 #ifdef CONFIG_BT_COEXIST
 	// for ODM and outsrc BT-Coex
-	#define BT_30_SUPPORT 1
 	#ifndef CONFIG_LPS
 		#define CONFIG_LPS	// download reserved page to FW
 	#endif
-#else // !CONFIG_BT_COEXIST
-	#define BT_30_SUPPORT 0
 #endif // !CONFIG_BT_COEXIST
 
 
@@ -339,10 +278,12 @@
 
 #define CONFIG_80211D
 
+#define CONFIG_RF_POWER_TRIM
+
 /*
  * Debug Related Config
  */
-#define DBG	1
+#define DBG	0
 
 //#define CONFIG_DEBUG /* DBG_871X, etc... */
 //#define CONFIG_DEBUG_RTL871X /* RT_TRACE, RT_PRINT_DATA, _func_enter_, _func_exit_ */
@@ -385,4 +326,5 @@
 //#define CONFIG_SINGLE_XMIT_BUF
 //RX use 1 urb
 //#define CONFIG_SINGLE_RECV_BUF
+#define	DBG_RX_DFRAME_RAW_DATA
 

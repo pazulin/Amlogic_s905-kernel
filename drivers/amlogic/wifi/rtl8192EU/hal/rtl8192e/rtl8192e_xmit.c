@@ -407,7 +407,7 @@ SCMapping_92E(
 			else if(pHalData->nCur80MhzPrimeSC == HAL_PRIME_CHNL_OFFSET_UPPER)
 				SCSettingOfDesc = VHT_DATA_SC_40_UPPER_OF_80MHZ;
 			else
-				DBG_871X("%s- CurrentChannelBW:%d, SCMapping: Not Correct Primary40MHz Setting \n",__FUNCTION__,pHalData->CurrentChannelBW);
+				DBG_871X("%s- CurrentChannelBW:%d, SCMapping: DONOT CARE Mode Setting\n", __func__, pHalData->CurrentChannelBW);
 		}
 		else
 		{
@@ -420,7 +420,7 @@ SCMapping_92E(
 			else if((pHalData->nCur40MhzPrimeSC == HAL_PRIME_CHNL_OFFSET_UPPER) && (pHalData->nCur80MhzPrimeSC == HAL_PRIME_CHNL_OFFSET_UPPER))
 				SCSettingOfDesc = VHT_DATA_SC_20_UPPERST_OF_80MHZ;
 			else
-				DBG_871X("%s- CurrentChannelBW:%d, SCMapping: Not Correct Primary40MHz Setting \n",__FUNCTION__,pHalData->CurrentChannelBW);
+				DBG_871X("%s- CurrentChannelBW:%d, SCMapping: DONOT CARE Mode Setting\n", __func__, pHalData->CurrentChannelBW);
 		}
 	}
 	else if(pHalData->CurrentChannelBW== CHANNEL_WIDTH_40)
@@ -471,12 +471,10 @@ void fill_txdesc_phy(PADAPTER padapter, struct pkt_attrib *pattrib, u8 *ptxdesc)
 
 void rtl8192e_fixed_rate(_adapter *padapter,u8 *ptxdesc)
 {
-	//struct dm_priv	*pdmpriv = &pHalData->dmpriv;
-
 	if(padapter->fix_rate!= 0xFF){
 	
 		SET_TX_DESC_USE_RATE_92E(ptxdesc, 1);
-		//if(pdmpriv->INIDATA_RATE[pattrib->mac_id] & BIT(7))
+		//if(pHalData->INIDATA_RATE[pattrib->mac_id] & BIT(7))
       		{
 			if(padapter->fix_rate & BIT(7))
 				SET_TX_DESC_DATA_SHORT_92E(ptxdesc, 1);

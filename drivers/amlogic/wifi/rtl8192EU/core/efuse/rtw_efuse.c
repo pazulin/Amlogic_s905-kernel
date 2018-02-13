@@ -449,8 +449,7 @@ efuse_OneByteRead(
 	
 	if(	IS_HARDWARE_TYPE_8723B(pAdapter) ||
 		(IS_HARDWARE_TYPE_8192E(pAdapter) && (!IS_A_CUT(pHalData->VersionID))) ||
-		//(IS_HARDWARE_TYPE_8188E(pAdapter) && ((IS_I_CUT(pHalData->VersionID)) || (IS_J_CUT(pHalData->VersionID))))
-		(IS_VENDOR_8188E_I_CUT_SERIES(pAdapter))
+		(IS_VENDOR_8188E_I_CUT_SERIES(pAdapter)) || (IS_CHIP_VENDOR_SMIC(pHalData->VersionID))
 	  )
 	{
 		// <20130121, Kordan> For SMIC EFUSE specificatoin.
@@ -523,14 +522,11 @@ efuse_OneByteWrite(
 	efuseValue &= ~(0x3FFFF);
 	efuseValue |= ((addr<<8 | data) & 0x3FFFF);
 
-
 	// <20130227, Kordan> 8192E MP chip A-cut had better not set 0x34[11] until B-Cut.
 	if (	IS_HARDWARE_TYPE_8723B(pAdapter) ||
 		(IS_HARDWARE_TYPE_8192E(pAdapter) && (!IS_A_CUT(pHalData->VersionID))) ||
-		//(IS_HARDWARE_TYPE_8188E(pAdapter) && ((IS_I_CUT(pHalData->VersionID)) || (IS_J_CUT(pHalData->VersionID))))
-		(IS_VENDOR_8188E_I_CUT_SERIES(pAdapter))
-	  )
-	{
+		(IS_VENDOR_8188E_I_CUT_SERIES(pAdapter)) || (IS_CHIP_VENDOR_SMIC(pHalData->VersionID))
+		) {
 		// <20130121, Kordan> For SMIC EFUSE specificatoin.
 		//0x34[11]: SW force PGMEN input of efuse to high. (for the bank selected by 0x34[9:8])
 		//PHY_SetMacReg(pAdapter, 0x34, BIT11, 1);
@@ -562,10 +558,8 @@ efuse_OneByteWrite(
 	// disable Efuse program enable
 	if (	IS_HARDWARE_TYPE_8723B(pAdapter) ||
 		(IS_HARDWARE_TYPE_8192E(pAdapter) && (!IS_A_CUT(pHalData->VersionID))) ||
-		//(IS_HARDWARE_TYPE_8188E(pAdapter) && ((IS_I_CUT(pHalData->VersionID)) || (IS_J_CUT(pHalData->VersionID))))
-		(IS_VENDOR_8188E_I_CUT_SERIES(pAdapter))
-	  )
-	{
+		(IS_VENDOR_8188E_I_CUT_SERIES(pAdapter)) || (IS_CHIP_VENDOR_SMIC(pHalData->VersionID))
+		) {
 		PHY_SetMacReg(pAdapter, EFUSE_TEST, BIT(11), 0);
 	}
 
@@ -742,6 +736,24 @@ u8 efuse_GetCurrentSize(PADAPTER padapter, u16 *size)
 	return _SUCCESS;
 }
 //------------------------------------------------------------------------------
+u16 efuse_bt_GetMaxSize(PADAPTER padapter)
+{
+	u16	max_size;
+
+	max_size = 0;
+	EFUSE_GetEfuseDefinition(padapter, EFUSE_BT , TYPE_AVAILABLE_EFUSE_BYTES_TOTAL, (PVOID)&max_size, _FALSE);
+	return max_size;
+}
+
+u8 efuse_bt_GetCurrentSize(PADAPTER padapter, u16 *size)
+{
+	Efuse_PowerSwitch(padapter, _FALSE, _TRUE);
+	*size = Efuse_GetCurrentSize(padapter, EFUSE_BT, _FALSE);
+	Efuse_PowerSwitch(padapter, _FALSE, _FALSE);
+
+	return _SUCCESS;
+}
+
 u8 rtw_efuse_map_read(PADAPTER padapter, u16 addr, u16 cnts, u8 *data)
 {
 	u16	mapLen=0;
@@ -815,7 +827,7 @@ u8 rtw_efuse_file_read(PADAPTER padapter,u8 *filepatch,u8 *buf,u32 len)
 
 	_rtw_memset(ptmpbuf,'\0',2048);
 	
-	rtStatus = rtw_retrive_from_file(filepatch, ptmpbuf, 2048);
+	rtStatus = rtw_retrieve_from_file(filepatch, ptmpbuf, 2048);
 
 	if( rtStatus > 100 )
 	{
@@ -854,7 +866,7 @@ efuse_IsMasked(
 {
 	HAL_DATA_TYPE	*pHalData = GET_HAL_DATA(pAdapter);
 	
-	DBG_871X("%s , Offset =%x\n",__func__,Offset);
+
 	//if (bEfuseMaskOFF(pAdapter))
 	if(pAdapter->registrypriv.boffefusemask)
 		return FALSE;
@@ -882,10 +894,18 @@ efuse_IsMasked(
 	if (IS_HARDWARE_TYPE_8723B(pAdapter))  
 		return (IS_MASKED(8723B,_MUSB,Offset)) ? TRUE : FALSE;
 #endif
+#if defined(CONFIG_RTL8703B)
+	if (IS_HARDWARE_TYPE_8703B(pAdapter))
+		return (IS_MASKED(8703B, _MUSB, Offset)) ? TRUE : FALSE;
+#endif
 #if defined(CONFIG_RTL8814A)
 	if (IS_HARDWARE_TYPE_8814A(pAdapter))
 		return (IS_MASKED(8814A, _MUSB, Offset)) ? TRUE : FALSE;
-#endif	
+#endif
+#if defined(CONFIG_RTL8188F)
+	if (IS_HARDWARE_TYPE_8188F(pAdapter))
+		return (IS_MASKED(8188F, _MUSB, Offset)) ? TRUE : FALSE;
+#endif
 #elif DEV_BUS_TYPE == RT_PCI_INTERFACE
 #if defined(CONFIG_RTL8188E)
 	if (IS_HARDWARE_TYPE_8188E(pAdapter))  
@@ -918,7 +938,11 @@ efuse_IsMasked(
 #ifdef CONFIG_RTL8188E_SDIO
 	if (IS_HARDWARE_TYPE_8188E(pAdapter))  
 		return (IS_MASKED(8188E,_MSDIO,Offset)) ? TRUE : FALSE;
-#endif		
+#endif
+#ifdef CONFIG_RTL8188F_SDIO
+	if (IS_HARDWARE_TYPE_8188F(pAdapter))  
+		return (IS_MASKED(8188F, _MSDIO, Offset)) ? TRUE : FALSE;
+#endif
 #endif
 
 	return FALSE;	
@@ -940,7 +964,6 @@ u8 rtw_efuse_map_write(PADAPTER padapter, u16 addr, u16 cnts, u8 *data)
 	s32	i, j, idx;
 	u8	ret = _SUCCESS;
 	u16	mapLen=0;
-	EEPROM_EFUSE_PRIV *pEEPROM = GET_EEPROM_EFUSE_PRIV(padapter);
 	HAL_DATA_TYPE	*pHalData = GET_HAL_DATA(padapter);
 
 	EFUSE_GetEfuseDefinition(padapter, EFUSE_WIFI, TYPE_EFUSE_MAP_LEN, (PVOID)&mapLen, _FALSE);
@@ -967,17 +990,16 @@ u8 rtw_efuse_map_write(PADAPTER padapter, u16 addr, u16 cnts, u8 *data)
 		{ 
 			if(padapter->registrypriv.bFileMaskEfuse==_TRUE)
 			{
-				if ( rtw_file_efuse_IsMasked(padapter, addr+i )) //use file efuse mask. 
-				     data[i] = map[addr+i];
+				if (rtw_file_efuse_IsMasked(padapter, addr+i))	/*use file efuse mask. */
+						data[i] = map[addr+i];
 			}
 			else
 			{
-				//DBG_8192C(" %s , Default Efuse Mask check \n",__func__);
 				if ( efuse_IsMasked(padapter, addr+i ))
-				    	 data[i] = map[addr+i];
-			}    
-			DBG_8192C(" %s , data[%d] = %x ,map[addr+i]= %x \n",__func__,i,data[i],map[addr+i]);     
-		}	     
+						data[i] = map[addr+i];
+			}
+			DBG_8192C("%s , data[%d] = %x, map[addr+i]= %x\n", __func__, i, data[i], map[addr+i]);
+		}
 	}
 	Efuse_PowerSwitch(padapter, _TRUE, _TRUE);
 
@@ -999,10 +1021,10 @@ u8 rtw_efuse_map_write(PADAPTER padapter, u16 addr, u16 cnts, u8 *data)
 				 {	
 					if (IS_C_CUT(pHalData->VersionID) || IS_B_CUT(pHalData->VersionID))
 					{
-						if(pEEPROM->adjuseVoltageVal == 6)
+						if(pHalData->adjuseVoltageVal == 6)
 						{
 								newdata[i] = map[addr + idx];
-							 	DBG_8192C(" %s ,\n adjuseVoltageVal = %d ,newdata[%d] = %x \n",__func__,pEEPROM->adjuseVoltageVal,i,newdata[i]);	 
+							 	DBG_8192C(" %s ,\n adjuseVoltageVal = %d ,newdata[%d] = %x \n",__func__,pHalData->adjuseVoltageVal,i,newdata[i]);	 
 						}
 					}
 				  }
@@ -1034,8 +1056,35 @@ exit:
 	return ret;
 }
 
+u8 rtw_efuse_mask_map_read(PADAPTER padapter, u16 addr, u16 cnts, u8 *data)
+{
+	u8	ret = _SUCCESS;
+	u16	mapLen = 0, i = 0;
+	
+	EFUSE_GetEfuseDefinition(padapter, EFUSE_WIFI, TYPE_EFUSE_MAP_LEN, (PVOID)&mapLen, _FALSE);
+	
+	ret = rtw_efuse_map_read(padapter, addr, cnts , data);
 
-//------------------------------------------------------------------------------
+	if (padapter->registrypriv.boffefusemask == 0) {
+
+			for (i = 0; i < cnts; i++) { 
+				if (padapter->registrypriv.bFileMaskEfuse == _TRUE) {
+					if (rtw_file_efuse_IsMasked(padapter, addr+i)) /*use file efuse mask.*/ 
+							data[i] = 0xff;
+				} else {
+					/*DBG_8192C(" %s , data[%d] = %x\n", __func__, i, data[i]);*/
+					if (efuse_IsMasked(padapter, addr+i)) {
+						data[i] = 0xff;
+						/*DBG_8192C(" %s ,mask data[%d] = %x\n", __func__, i, data[i]);*/
+					}
+				}
+			}
+	
+	}
+	return ret;
+
+}
+
 u8 rtw_BT_efuse_map_write(PADAPTER padapter, u16 addr, u16 cnts, u8 *data)
 {
 #define RT_ASSERT_RET(expr)												\
@@ -1188,9 +1237,9 @@ efuse_ShadowRead1Byte(
 	IN	u16		Offset,
 	IN OUT	u8		*Value)
 {
-	EEPROM_EFUSE_PRIV *pEEPROM = GET_EEPROM_EFUSE_PRIV(pAdapter);
+	PHAL_DATA_TYPE pHalData = GET_HAL_DATA(pAdapter);
 
-	*Value = pEEPROM->efuse_eeprom_data[Offset];
+	*Value = pHalData->efuse_eeprom_data[Offset];
 
 }	// EFUSE_ShadowRead1Byte
 
@@ -1201,10 +1250,10 @@ efuse_ShadowRead2Byte(
 	IN	u16		Offset,
 	IN OUT	u16		*Value)
 {
-	EEPROM_EFUSE_PRIV *pEEPROM = GET_EEPROM_EFUSE_PRIV(pAdapter);
+	PHAL_DATA_TYPE pHalData = GET_HAL_DATA(pAdapter);
 
-	*Value = pEEPROM->efuse_eeprom_data[Offset];
-	*Value |= pEEPROM->efuse_eeprom_data[Offset+1]<<8;
+	*Value = pHalData->efuse_eeprom_data[Offset];
+	*Value |= pHalData->efuse_eeprom_data[Offset+1]<<8;
 
 }	// EFUSE_ShadowRead2Byte
 
@@ -1215,12 +1264,12 @@ efuse_ShadowRead4Byte(
 	IN	u16		Offset,
 	IN OUT	u32		*Value)
 {
-	EEPROM_EFUSE_PRIV *pEEPROM = GET_EEPROM_EFUSE_PRIV(pAdapter);
+	PHAL_DATA_TYPE pHalData = GET_HAL_DATA(pAdapter);
 
-	*Value = pEEPROM->efuse_eeprom_data[Offset];
-	*Value |= pEEPROM->efuse_eeprom_data[Offset+1]<<8;
-	*Value |= pEEPROM->efuse_eeprom_data[Offset+2]<<16;
-	*Value |= pEEPROM->efuse_eeprom_data[Offset+3]<<24;
+	*Value = pHalData->efuse_eeprom_data[Offset];
+	*Value |= pHalData->efuse_eeprom_data[Offset+1]<<8;
+	*Value |= pHalData->efuse_eeprom_data[Offset+2]<<16;
+	*Value |= pHalData->efuse_eeprom_data[Offset+3]<<24;
 
 }	// efuse_ShadowRead4Byte
 
@@ -1256,9 +1305,9 @@ efuse_ShadowWrite1Byte(
 	IN	u16		Offset,
 	IN 	u8		Value)
 {
-	EEPROM_EFUSE_PRIV *pEEPROM = GET_EEPROM_EFUSE_PRIV(pAdapter);
+	PHAL_DATA_TYPE pHalData = GET_HAL_DATA(pAdapter);
 
-	pEEPROM->efuse_eeprom_data[Offset] = Value;
+	pHalData->efuse_eeprom_data[Offset] = Value;
 
 }	// efuse_ShadowWrite1Byte
 
@@ -1269,10 +1318,12 @@ efuse_ShadowWrite2Byte(
 	IN	u16		Offset,
 	IN 	u16		Value)
 {
-	EEPROM_EFUSE_PRIV *pEEPROM = GET_EEPROM_EFUSE_PRIV(pAdapter);
+	
+	PHAL_DATA_TYPE pHalData = GET_HAL_DATA(pAdapter);
+	
 
-	pEEPROM->efuse_eeprom_data[Offset] = Value&0x00FF;
-	pEEPROM->efuse_eeprom_data[Offset+1] = Value>>8;
+	pHalData->efuse_eeprom_data[Offset] = Value&0x00FF;
+	pHalData->efuse_eeprom_data[Offset+1] = Value>>8;
 
 }	// efuse_ShadowWrite1Byte
 
@@ -1283,12 +1334,12 @@ efuse_ShadowWrite4Byte(
 	IN	u16		Offset,
 	IN	u32		Value)
 {
-	EEPROM_EFUSE_PRIV *pEEPROM = GET_EEPROM_EFUSE_PRIV(pAdapter);
+	PHAL_DATA_TYPE pHalData = GET_HAL_DATA(pAdapter);
 
-	pEEPROM->efuse_eeprom_data[Offset] = (u8)(Value&0x000000FF);
-	pEEPROM->efuse_eeprom_data[Offset+1] = (u8)((Value>>8)&0x0000FF);
-	pEEPROM->efuse_eeprom_data[Offset+2] = (u8)((Value>>16)&0x00FF);
-	pEEPROM->efuse_eeprom_data[Offset+3] = (u8)((Value>>24)&0xFF);
+	pHalData->efuse_eeprom_data[Offset] = (u8)(Value&0x000000FF);
+	pHalData->efuse_eeprom_data[Offset+1] = (u8)((Value>>8)&0x0000FF);
+	pHalData->efuse_eeprom_data[Offset+2] = (u8)((Value>>16)&0x00FF);
+	pHalData->efuse_eeprom_data[Offset+3] = (u8)((Value>>24)&0xFF);
 
 }	// efuse_ShadowWrite1Byte
 
@@ -1313,25 +1364,25 @@ void EFUSE_ShadowMapUpdate(
 	IN u8		efuseType,
 	IN BOOLEAN	bPseudoTest)
 {
-	EEPROM_EFUSE_PRIV *pEEPROM = GET_EEPROM_EFUSE_PRIV(pAdapter);
+	PHAL_DATA_TYPE pHalData = GET_HAL_DATA(pAdapter);
 	u16	mapLen=0;
 
 	EFUSE_GetEfuseDefinition(pAdapter, efuseType, TYPE_EFUSE_MAP_LEN, (PVOID)&mapLen, bPseudoTest);
 
-	if (pEEPROM->bautoload_fail_flag == _TRUE)
+	if (pHalData->bautoload_fail_flag == _TRUE)
 	{
-		_rtw_memset(pEEPROM->efuse_eeprom_data, 0xFF, mapLen);
+		_rtw_memset(pHalData->efuse_eeprom_data, 0xFF, mapLen);
 	}
 	else
 	{
 		#ifdef CONFIG_ADAPTOR_INFO_CACHING_FILE			
-		if(_SUCCESS != retriveAdaptorInfoFile(pAdapter->registrypriv.adaptor_info_caching_file_path, pEEPROM)) {
+		if(_SUCCESS != retriveAdaptorInfoFile(pAdapter->registrypriv.adaptor_info_caching_file_path, pHalData->efuse_eeprom_data)) {
 		#endif
 		
-		Efuse_ReadAllMap(pAdapter, efuseType, pEEPROM->efuse_eeprom_data, bPseudoTest);
+		Efuse_ReadAllMap(pAdapter, efuseType, pHalData->efuse_eeprom_data, bPseudoTest);
 		
 		#ifdef CONFIG_ADAPTOR_INFO_CACHING_FILE
-			storeAdaptorInfoFile(pAdapter->registrypriv.adaptor_info_caching_file_path, pEEPROM);
+			storeAdaptorInfoFile(pAdapter->registrypriv.adaptor_info_caching_file_path, pHalData->efuse_eeprom_data);
 		}
 		#endif
 	}
@@ -1448,6 +1499,40 @@ Efuse_InitSomeVar(
 	_rtw_memset((PVOID)&fakeBTEfuseModifiedMap[0], 0xff, EFUSE_BT_MAX_MAP_LEN);
 }
 
+const u8 _mac_hidden_max_bw_to_hal_bw_cap[MAC_HIDDEN_MAX_BW_NUM] = {
+	0,
+	0,
+	(BW_CAP_160M|BW_CAP_80M|BW_CAP_40M|BW_CAP_20M|BW_CAP_10M|BW_CAP_5M),
+	(BW_CAP_5M),
+	(BW_CAP_10M|BW_CAP_5M),
+	(BW_CAP_20M|BW_CAP_10M|BW_CAP_5M),
+	(BW_CAP_40M|BW_CAP_20M|BW_CAP_10M|BW_CAP_5M),
+	(BW_CAP_80M|BW_CAP_40M|BW_CAP_20M|BW_CAP_10M|BW_CAP_5M),
+};
+
+const u8 _mac_hidden_proto_to_hal_proto_cap[MAC_HIDDEN_PROTOCOL_NUM] = {
+	0,
+	0,
+	(PROTO_CAP_11N|PROTO_CAP_11G|PROTO_CAP_11B),
+	(PROTO_CAP_11AC|PROTO_CAP_11N|PROTO_CAP_11G|PROTO_CAP_11B),
+};
+
+u8 mac_hidden_wl_func_to_hal_wl_func(u8 func)
+{
+	u8 wl_func = 0;
+
+	if (func & BIT0)
+		wl_func |= WL_FUNC_MIRACAST;
+	if (func & BIT1)
+		wl_func |= WL_FUNC_P2P;
+	if (func & BIT2)
+		wl_func |= WL_FUNC_TDLS;
+	if (func & BIT3)
+		wl_func |= WL_FUNC_FTM;
+
+	return wl_func;
+}
+
 #ifdef PLATFORM_LINUX
 #ifdef CONFIG_ADAPTOR_INFO_CACHING_FILE
 //#include <rtw_eeprom.h>
@@ -1457,12 +1542,12 @@ Efuse_InitSomeVar(
 	return _TRUE;
 }
 
-int storeAdaptorInfoFile(char *path, struct eeprom_priv * eeprom_priv)
+int storeAdaptorInfoFile(char *path, u8* efuse_data)
 {
 	int ret =_SUCCESS;
 
-	if(path && eeprom_priv) {
-		ret = rtw_store_to_file(path, eeprom_priv->efuse_eeprom_data, EEPROM_MAX_SIZE_512);
+	if(path && efuse_data) {
+		ret = rtw_store_to_file(path, efuse_data, EEPROM_MAX_SIZE_512);
 		if(ret == EEPROM_MAX_SIZE)
 			ret = _SUCCESS;
 		else
@@ -1474,15 +1559,15 @@ int storeAdaptorInfoFile(char *path, struct eeprom_priv * eeprom_priv)
 	return ret;
 }
 
-int retriveAdaptorInfoFile(char *path, struct eeprom_priv * eeprom_priv)
+int retriveAdaptorInfoFile(char *path, u8* efuse_data)
 {
 	int ret = _SUCCESS;
 	mm_segment_t oldfs;
 	struct file *fp;
 	
-	if(path && eeprom_priv) {
+	if(path && efuse_data) {
 
-		ret = rtw_retrive_from_file(path, eeprom_priv->efuse_eeprom_data, EEPROM_MAX_SIZE);
+		ret = rtw_retrieve_from_file(path, efuse_data, EEPROM_MAX_SIZE);
 		
 		if(ret == EEPROM_MAX_SIZE)
 			ret = _SUCCESS;
@@ -1503,117 +1588,141 @@ int retriveAdaptorInfoFile(char *path, struct eeprom_priv * eeprom_priv)
 	}
 	return ret;
 }
-#endif //CONFIG_ADAPTOR_INFO_CACHING_FILE
-#endif //PLATFORM_LINUX
+#endif /* CONFIG_ADAPTOR_INFO_CACHING_FILE */
 
 #ifdef CONFIG_EFUSE_CONFIG_FILE
-
-void Rtw_Hal_ReadMACAddrFromFile(PADAPTER padapter)
+u32 rtw_read_efuse_from_file(const char *path, u8 *buf)
 {
 	u32 i;
+	u8 temp[3];
+	u32 ret = _FAIL;
+
 	struct file *fp;
 	mm_segment_t fs;
-	u8 source_addr[18];
 	loff_t pos = 0;
-	u32 curtime = rtw_get_current_time();
-	EEPROM_EFUSE_PRIV *pEEPROM = GET_EEPROM_EFUSE_PRIV(padapter);
-	u8 *head, *end;
 
-	u8 null_mac_addr[ETH_ALEN] = {0, 0, 0,0, 0, 0};
-	u8 multi_mac_addr[ETH_ALEN] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
-	
-	_rtw_memset(source_addr, 0, 18);
-	_rtw_memset(pEEPROM->mac_addr, 0, ETH_ALEN);
+	fp = filp_open(path, O_RDONLY, 0);
+	if (fp == NULL || IS_ERR(fp)) {
+		if (fp != NULL)
+			DBG_871X_LEVEL(_drv_always_, "%s open %s fail, err:%ld\n"
+				, __func__, path, PTR_ERR(fp));
+		else
+			DBG_871X_LEVEL(_drv_always_, "%s open %s fail, fp is NULL\n"
+				, __func__, path);
 
-	fp = filp_open("/data/wifimac.txt", O_RDWR,  0644);
-	if (IS_ERR(fp)) {
-		pEEPROM->bloadmac_fail_flag = _TRUE;
-		DBG_871X("Error, wifi mac address file doesn't exist.\n");
-	} else {
-		fs = get_fs();
-		set_fs(KERNEL_DS);
+		goto exit;
+	}
 
-		DBG_871X("wifi mac address:\n");
-		vfs_read(fp, source_addr, 18, &pos);
-		source_addr[17] = ':';
+	temp[2] = 0; /* add end of string '\0' */
 
-		head = end = source_addr;
-		for (i=0; i<ETH_ALEN; i++) {
-			while (end && (*end != ':') )
-				end++;
+	fs = get_fs();
+	set_fs(KERNEL_DS);
 
-			if (end && (*end == ':') )
-				*end = '\0';
-
-			pEEPROM->mac_addr[i] = simple_strtoul(head, NULL, 16 );
-
-			if (end) {
-				end++;
-				head = end;
-			}
-			DBG_871X("%02x \n", pEEPROM->mac_addr[i]);
+	for (i = 0 ; i < HWSET_MAX_SIZE ; i++) {
+		vfs_read(fp, temp, 2, &pos);
+		if (sscanf(temp, "%hhx", &buf[i]) != 1) {
+			if (0)
+				DBG_871X_LEVEL(_drv_err_, "%s sscanf fail\n", __func__);
+			buf[i] = 0xFF;
 		}
-		DBG_871X("\n");
-		set_fs(fs);
-		pEEPROM->bloadmac_fail_flag = _FALSE;
-		filp_close(fp, NULL);
+		if ((i % EFUSE_FILE_COLUMN_NUM) == (EFUSE_FILE_COLUMN_NUM - 1)) {
+			/* Filter the lates space char. */
+			vfs_read(fp, temp, 1, &pos);
+			if (strchr(temp, ' ') == NULL) {
+				pos--;
+				vfs_read(fp, temp, 2, &pos);
+			}
+		} else {
+			pos += 1; /* Filter the space character */
+		}
 	}
 
-	if ( (_rtw_memcmp(pEEPROM->mac_addr, null_mac_addr, ETH_ALEN)) ||
-		(_rtw_memcmp(pEEPROM->mac_addr, multi_mac_addr, ETH_ALEN)) ) {
-		pEEPROM->mac_addr[0] = 0x00;
-		pEEPROM->mac_addr[1] = 0xe0;
-		pEEPROM->mac_addr[2] = 0x4c;
-		pEEPROM->mac_addr[3] = (u8)(curtime & 0xff) ;
-		pEEPROM->mac_addr[4] = (u8)((curtime>>8) & 0xff) ;
-		pEEPROM->mac_addr[5] = (u8)((curtime>>16) & 0xff) ;
-	}
+	set_fs(fs);
 
-	DBG_871X("Hal_ReadMACAddrFromFile: Permanent Address = %02x-%02x-%02x-%02x-%02x-%02x !!!\n",
-		  pEEPROM->mac_addr[0], pEEPROM->mac_addr[1],
-		  pEEPROM->mac_addr[2], pEEPROM->mac_addr[3],
-		  pEEPROM->mac_addr[4], pEEPROM->mac_addr[5]);
+	DBG_871X_LEVEL(_drv_always_, "efuse file: %s\n", path);
+#ifdef CONFIG_DEBUG
+	for (i = 0; i < HWSET_MAX_SIZE; i++) {
+		if (i % 16 == 0)
+			DBG_871X_SEL_NL(RTW_DBGDUMP, "0x%03x: ", i);
+
+		DBG_871X_SEL(RTW_DBGDUMP, "%02X%s"
+			, buf[i]
+			, ((i + 1) % 16 == 0) ? "\n" : (((i + 1) % 8 == 0) ? "    " : " ")
+		);
+	}
+	DBG_871X_SEL(RTW_DBGDUMP, "\n");
+#endif
+
+	ret = _SUCCESS;
+
+exit:
+	return ret;
 }
 
-
-u32 Rtw_Hal_readPGDataFromConfigFile(PADAPTER	padapter)
+u32 rtw_read_macaddr_from_file(const char *path, u8 *buf)
 {
-	u32 i;
 	struct file *fp;
 	mm_segment_t fs;
-	u8 temp[3];
 	loff_t pos = 0;
-	EEPROM_EFUSE_PRIV *pEEPROM = GET_EEPROM_EFUSE_PRIV(padapter);
-	u8	*PROMContent = pEEPROM->efuse_eeprom_data;
 
+	u8 source_addr[18];
+	u8 *head, *end;
+	int i;
+	u32 ret = _FAIL;
 
-	temp[2] = 0; // add end of string '\0'
+	_rtw_memset(source_addr, 0, 18);
 
-	fp = filp_open("/system/etc/wifi/wifi_efuse.map", O_RDWR,  0644);
-	if (IS_ERR(fp)) {
-		pEEPROM->bloadfile_fail_flag = _TRUE;
-		DBG_871X("Error, Efuse configure file doesn't exist.\n");
-		return _FAIL;
+	fp = filp_open(path, O_RDONLY, 0);
+	if (fp == NULL || IS_ERR(fp)) {
+		if (fp != NULL)
+			DBG_871X_LEVEL(_drv_always_, "%s open %s fail, err:%ld\n"
+				, __func__, path, PTR_ERR(fp));
+		else
+			DBG_871X_LEVEL(_drv_always_, "%s open %s fail, fp is NULL\n"
+				, __func__, path);
+
+		goto exit;
 	}
 
 	fs = get_fs();
 	set_fs(KERNEL_DS);
 
-	DBG_871X("Efuse configure file:\n");
-	for (i=0; i< EFUSE_MAP_SIZE  ; i++) {
-		vfs_read(fp, temp, 2, &pos);
-		PROMContent[i] = simple_strtoul(temp, NULL, 16 );
-		pos += 1; // Filter the space character
-		DBG_871X("%02X \n", PROMContent[i]);
+	vfs_read(fp, source_addr, 18, &pos);
+	source_addr[17] = ':';
+
+	head = end = source_addr;
+	for (i = 0; i < ETH_ALEN; i++) {
+		while (end && (*end != ':'))
+			end++;
+
+		if (end && (*end == ':'))
+			*end = '\0';
+
+		if (sscanf(head, "%hhx", &buf[i]) != 1) {
+			if (0)
+				DBG_871X_LEVEL(_drv_err_, "%s sscanf fail\n", __func__);
+			buf[i] = 0xFF;
+		}
+
+		if (end) {
+			end++;
+			head = end;
+		}
 	}
-	DBG_871X("\n");
+
 	set_fs(fs);
 
-	filp_close(fp, NULL);
-	
-	pEEPROM->bloadfile_fail_flag = _FALSE;
-	
-	return _SUCCESS;
-}
+	DBG_871X_LEVEL(_drv_always_, "wifi_mac file: %s\n", path);
+#ifdef CONFIG_DEBUG
+	DBG_871X(MAC_FMT"\n", MAC_ARG(buf));
+#endif
 
-#endif //#CONFIG_EFUSE_CONFIG_FILE
+	ret = _SUCCESS;
+
+exit:
+	return ret;
+}
+#endif /* CONFIG_EFUSE_CONFIG_FILE */
+
+#endif /* PLATFORM_LINUX */
+

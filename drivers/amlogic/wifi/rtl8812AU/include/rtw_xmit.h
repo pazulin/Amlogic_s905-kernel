@@ -40,7 +40,7 @@
 #elif defined (CONFIG_USB_HCI)
 
 #ifdef CONFIG_USB_TX_AGGREGATION
-	#if defined(CONFIG_PLATFORM_ARM_SUNxI) || defined(CONFIG_PLATFORM_ARM_SUN6I) || defined(CONFIG_PLATFORM_ARM_SUN7I) || defined(CONFIG_PLATFORM_ARM_SUN8I)
+	#if defined(CONFIG_PLATFORM_ARM_SUNxI) || defined(CONFIG_PLATFORM_ARM_SUN6I) || defined(CONFIG_PLATFORM_ARM_SUN7I) || defined(CONFIG_PLATFORM_ARM_SUN8I) || defined(CONFIG_PLATFORM_ARM_SUN50IW1P1)
 		#define MAX_XMITBUF_SZ (12288)  //12k 1536*8
 	#elif defined (CONFIG_PLATFORM_MSTAR)
 		#define MAX_XMITBUF_SZ	7680	// 7.5k
@@ -85,7 +85,7 @@
 #endif
 
 #ifdef CONFIG_RTL8812A
-#define MAX_CMDBUF_SZ	(512*12)
+#define MAX_CMDBUF_SZ	(512*14)
 #else
 #define MAX_CMDBUF_SZ	(5120)	//(4096)
 #endif
@@ -155,24 +155,17 @@ do{\
 
 // For Buffer Descriptor ring architecture
 #ifdef BUF_DESC_ARCH	
-#if defined (CONFIG_RTL8192E)
-#define TX_BUFFER_SEG_NUM 	1 // 0:2 seg, 1: 4 seg, 2: 8 seg.  	
+#if defined(CONFIG_RTL8192E)
+#define TX_BUFFER_SEG_NUM	1 /* 0:2 seg, 1: 4 seg, 2: 8 seg. */
+#elif defined(CONFIG_RTL8814A)
+#define TX_BUFFER_SEG_NUM	1 /* 0:2 seg, 1: 4 seg, 2: 8 seg. */
 #endif
 #endif
 
-#if defined(CONFIG_RTL8812A) || defined(CONFIG_RTL8821A)|| defined(CONFIG_RTL8723B) || defined(CONFIG_RTL8814A)
+#if defined(CONFIG_RTL8812A) || defined(CONFIG_RTL8821A) || defined(CONFIG_RTL8723B) || defined(CONFIG_RTL8192E) || defined(CONFIG_RTL8814A) || defined(CONFIG_RTL8703B) || defined(CONFIG_RTL8188F)
 #define TXDESC_SIZE 40
-//8192EE_TODO
-#elif defined (CONFIG_RTL8192E) // this section is defined for buffer descriptor ring architecture
-	#ifdef CONFIG_PCI_HCI
-		#define TXDESC_SIZE ((TX_BUFFER_SEG_NUM ==0)?16: ((TX_BUFFER_SEG_NUM ==1)? 32:64) )
-		#define TX_WIFI_INFO_SIZE 40  
-	#else  //8192E USB or SDIO
-		#define TXDESC_SIZE 40
-	#endif
-//8192EE_TODO
 #else
-#define TXDESC_SIZE 32
+#define TXDESC_SIZE 32 /* old IC (ex: 8188E) */
 #endif
 
 #ifdef CONFIG_TX_EARLY_MODE
@@ -194,13 +187,18 @@ do{\
 #endif
 
 #ifdef CONFIG_PCI_HCI
-#if defined(CONFIG_RTL8192E) // this section is defined for buffer descriptor ring architecture
-#define TXDESC_OFFSET TX_WIFI_INFO_SIZE
+#if defined(CONFIG_RTL8192E) || defined(CONFIG_RTL8814A)
+/* this section is defined for buffer descriptor ring architecture */
+#define TX_WIFI_INFO_SIZE (TXDESC_SIZE) /* it may add 802.11 hdr or others... */
+/* tx desc and payload are in the same buf */
+#define TXDESC_OFFSET (TX_WIFI_INFO_SIZE)
 #else
-#define TXDESC_OFFSET 0
-#endif 
+/* tx desc and payload are NOT in the same buf */
+#define TXDESC_OFFSET (0)
+/* 8188ee/8723be/8812ae/8821ae has extra PCI DMA info in tx desc */
 #define TX_DESC_NEXT_DESC_OFFSET	(TXDESC_SIZE + 8)
-#endif //CONFIG_PCI_HCI
+#endif
+#endif /* CONFIG_PCI_HCI */
 
 enum TXDESC_SC{
 	SC_DONT_CARE = 0x00,
@@ -211,11 +209,11 @@ enum TXDESC_SC{
 
 #ifdef CONFIG_PCI_HCI
 #define TXDESC_64_BYTES
-#elif defined(CONFIG_RTL8812A) || defined(CONFIG_RTL8821A) || defined(CONFIG_RTL8723B)
+#elif defined(CONFIG_RTL8812A) || defined(CONFIG_RTL8821A) || defined(CONFIG_RTL8723B) || defined(CONFIG_RTL8188F)
 #define TXDESC_40_BYTES
 #endif
 
-#if defined(CONFIG_RTL8192E) && defined(CONFIG_PCI_HCI) //8192ee
+#if (defined(CONFIG_RTL8192E) || defined(CONFIG_RTL8814A)) && defined(CONFIG_PCI_HCI) /* 8192ee or 8814ae */
 //8192EE_TODO
 struct tx_desc
 {
@@ -404,8 +402,11 @@ struct pkt_attrib
 	u8 direct_link;
 	struct sta_info *ptdls_sta;
 #endif //CONFIG_TDLS
+	u8 key_type;
 
 	u8 icmp_pkt;
+	u16 txbf_p_aid;/*beamforming Partial_AID*/
+	u16 txbf_g_id;/*beamforming Group ID*/
 	
 };
 #endif
@@ -446,6 +447,8 @@ enum {
 	XMITBUF_MGNT = 1,
 	XMITBUF_CMD = 2,
 };
+
+bool rtw_xmit_ac_blocked(_adapter *adapter);
 
 struct  submit_ctx{
 	u32 submit_time; /* */
@@ -574,10 +577,6 @@ struct xmit_frame
 	u8	agg_num;
 #endif
 	s8	pkt_offset;
-#ifdef CONFIG_RTL8192D
-	u8	EMPktNum;
-	u16	EMPktLen[5];//The max value by HW
-#endif
 #endif
 
 #ifdef CONFIG_XMIT_ACK
