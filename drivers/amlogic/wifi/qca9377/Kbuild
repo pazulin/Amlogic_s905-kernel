@@ -1,5 +1,20 @@
 # We can build either as part of a standalone Kernel build or as
 # an external module.  Determine which mechanism is being used
+WLAN_ROOT = $(PWD)/drivers/amlogic/wifi/qca9377
+MODNAME=wlan
+
+# Determine if the driver license is Open source or proprietary
+# This is determined under the assumption that LICENSE doesn't change.
+# Please change here if driver license text changes.
+LICENSE_FILE ?= $(WLAN_ROOT)/CORE/HDD/src/wlan_hdd_main.c
+WLAN_OPEN_SOURCE = $(shell if grep -q "MODULE_LICENSE(\"Dual BSD/GPL\")" \
+		$(LICENSE_FILE); then echo 1; else echo 0; fi)
+
+#By default build for CLD
+WLAN_SELECT := CONFIG_QCA_CLD_WLAN=m
+CONFIG_QCA_WIFI_ISOC=0
+CONFIG_QCA_WIFI_2_0=1
+
 ifeq ($(MODNAME),)
 	KERNEL_BUILD := 1
 else
@@ -22,8 +37,9 @@ endif
 ifeq ($(KERNEL_BUILD),1)
 	# These are provided in external module based builds
 	# Need to explicitly define for Kernel-based builds
-	MODNAME := wlan
-	WLAN_ROOT := drivers/staging/qcacld-2.0
+#	MODNAME := wlan
+#	WLAN_ROOT := drivers/staging/qcacld-2.0
+	WLAN_ROOT := drivers/amlogic/wifi/qca9377
 	WLAN_OPEN_SOURCE := 1
 	CONFIG_QCA_WIFI_2_0 := 1
 	CONFIG_QCA_WIFI_ISOC := 0
