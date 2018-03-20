@@ -60,7 +60,6 @@ static s32 update_txdesc(struct xmit_frame *pxmitframe, u8 *pmem, s32 sz ,u8 bag
 	struct mlme_priv	*pmlmepriv = &padapter->mlmepriv;		
 	struct pkt_attrib	*pattrib = &pxmitframe->attrib;
 	HAL_DATA_TYPE	*pHalData = GET_HAL_DATA(padapter);
-	//struct dm_priv	*pdmpriv = &pHalData->dmpriv;
 	u8	*ptxdesc =  pmem;
 	struct mlme_ext_priv	*pmlmeext = &padapter->mlmeextpriv;
 	struct mlme_ext_info	*pmlmeinfo = &(pmlmeext->mlmext_info);
@@ -173,14 +172,13 @@ static s32 update_txdesc(struct xmit_frame *pxmitframe, u8 *pmem, s32 sz ,u8 bag
 			SET_TX_DESC_DATA_RATE_FB_LIMIT_92E(ptxdesc, 0x1f);
 			SET_TX_DESC_RTS_RATE_FB_LIMIT_92E(ptxdesc, 0xf);
 
-			if(pHalData->fw_ractrl == _FALSE)  {
-				struct dm_priv	*pdmpriv = &pHalData->dmpriv;
+			if(pHalData->fw_ractrl == _FALSE)  {				
 				SET_TX_DESC_USE_RATE_92E(ptxdesc, 1);
 				
-				if(pdmpriv->INIDATA_RATE[pattrib->mac_id] & BIT(7))
+				if(pHalData->INIDATA_RATE[pattrib->mac_id] & BIT(7))
 					SET_TX_DESC_DATA_SHORT_92E(ptxdesc, 1);
 
-				SET_TX_DESC_TX_RATE_92E(ptxdesc, (pdmpriv->INIDATA_RATE[pattrib->mac_id] & 0x7F));
+				SET_TX_DESC_TX_RATE_92E(ptxdesc, (pHalData->INIDATA_RATE[pattrib->mac_id] & 0x7F));
 			}
 
 			//for debug
@@ -279,6 +277,10 @@ static s32 update_txdesc(struct xmit_frame *pxmitframe, u8 *pmem, s32 sz ,u8 bag
 		SET_TX_DESC_TX_RATE_92E(ptxdesc, MRateToHwRate(pmlmeext->tx_rate));
 	}
 
+#ifdef CONFIG_ANTENNA_DIVERSITY
+	ODM_SetTxAntByTxInfo(&pHalData->odmpriv, ptxdesc, pxmitframe->attrib.mac_id);
+#endif
+
 	rtl8192e_cal_txdesc_chksum(ptxdesc);
 	_dbg_dump_tx_info(padapter,pxmitframe->frame_tag,ptxdesc);	
 	return pull;
@@ -312,11 +314,12 @@ s32 rtl8192eu_xmit_buf_handler(PADAPTER padapter)
 		return _FAIL;
 	}
 
-	ret = (padapter->bDriverStopped == _TRUE) || (padapter->bSurpriseRemoved == _TRUE);
-	if (ret) {
-		RT_TRACE(_module_hal_xmit_c_, _drv_notice_,
-				 ("%s: bDriverStopped(%d) bSurpriseRemoved(%d)!\n",
-				  __FUNCTION__, padapter->bDriverStopped, padapter->bSurpriseRemoved));
+	if (RTW_CANNOT_RUN(padapter)) {
+		RT_TRACE(_module_hal_xmit_c_, _drv_notice_
+				, ("%s: bDriverStopped(%s) bSurpriseRemoved(%s)!\n"
+				, __func__
+				, rtw_is_drv_stopped(padapter)?"True":"False"
+				, rtw_is_surprise_removed(padapter)?"True":"False"));
 		return _FAIL;
 	}
 
@@ -482,6 +485,9 @@ s32 rtl8192eu_xmitframe_complete(_adapter *padapter, struct xmit_priv *pxmitpriv
 	// dump frame variable
 	u32 ff_hwaddr;
 
+	_list *sta_plist, *sta_phead;
+	u8 single_sta_in_queue = _FALSE;
+
 #ifndef IDEA_CONDITION
 	int res = _SUCCESS;
 #endif
@@ -605,6 +611,10 @@ s32 rtl8192eu_xmitframe_complete(_adapter *padapter, struct xmit_priv *pxmitpriv
 
 	_enter_critical_bh(&pxmitpriv->lock, &irqL);
 
+	sta_phead = get_list_head(phwxmit->sta_queue);
+	sta_plist = get_next(sta_phead);
+	single_sta_in_queue = rtw_end_of_queue_search(sta_phead, get_next(sta_plist));
+
 	xmitframe_phead = get_list_head(&ptxservq->sta_pending);
 	xmitframe_plist = get_next(xmitframe_phead);
 	
@@ -699,10 +709,13 @@ s32 rtl8192eu_xmitframe_complete(_adapter *padapter, struct xmit_priv *pxmitpriv
 			bulkPtr = ((pbuf / bulkSize) + 1) * bulkSize;
 		}
 	}//end while( aggregate same priority and same DA(AP or STA) frames)
-
-
 	if (_rtw_queue_empty(&ptxservq->sta_pending) == _TRUE)
 		rtw_list_delete(&ptxservq->tx_pending);
+	else if (single_sta_in_queue == _FALSE) {
+		/* Re-arrange the order of stations in this ac queue to balance the service for these stations */
+		rtw_list_delete(&ptxservq->tx_pending);
+		rtw_list_insert_tail(&ptxservq->tx_pending, get_list_head(phwxmit->sta_queue));
+	}
 
 	_exit_critical_bh(&pxmitpriv->lock, &irqL);
 #ifdef CONFIG_80211N_HT
@@ -864,10 +877,9 @@ static s32 pre_xmitframe(_adapter *padapter, struct xmit_frame *pxmitframe)
 	struct xmit_priv *pxmitpriv = &padapter->xmitpriv;
 	struct pkt_attrib *pattrib = &pxmitframe->attrib;
 	struct mlme_priv *pmlmepriv = &padapter->mlmepriv;
-	
-	_enter_critical_bh(&pxmitpriv->lock, &irqL);
+	u8 lg_sta_num;
 
-//DBG_8192C("==> %s \n",__FUNCTION__);
+	_enter_critical_bh(&pxmitpriv->lock, &irqL);
 
 	if (rtw_txframes_sta_ac_pending(padapter, pattrib) > 0)
 	{
@@ -875,14 +887,12 @@ static s32 pre_xmitframe(_adapter *padapter, struct xmit_frame *pxmitframe)
 		goto enqueue;
 	}
 
-
-	if (check_fwstate(pmlmepriv, _FW_UNDER_SURVEY|_FW_UNDER_LINKING) == _TRUE)
+	if (rtw_xmit_ac_blocked(padapter) == _TRUE)
 		goto enqueue;
 
-#ifdef CONFIG_CONCURRENT_MODE	
-	if (check_buddy_fwstate(padapter, _FW_UNDER_SURVEY|_FW_UNDER_LINKING) == _TRUE)
+	rtw_dev_iface_status(padapter, NULL, NULL , &lg_sta_num, NULL, NULL);
+	if (lg_sta_num)
 		goto enqueue;
-#endif
 
 	pxmitbuf = rtw_alloc_xmitbuf(pxmitpriv);
 	if (pxmitbuf == NULL)

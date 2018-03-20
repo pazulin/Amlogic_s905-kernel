@@ -297,6 +297,10 @@ _pkt *rtw_os_alloc_msdu_pkt(union recv_frame *prframe, u16 nSubframe_Length, u8 
 	return sub_skb;
 }
 
+#ifdef DBG_UDP_PKT_LOSE_11AC
+#define PAYLOAD_LEN_LOC_OF_IP_HDR 0x10 /*ethernet payload length location of ip header (DA+SA+eth_type+(version&hdr_len)) */	
+#endif
+
 void rtw_os_recv_indicate_pkt(_adapter *padapter, _pkt *pkt, struct rx_pkt_attrib *pattrib)
 {
 	struct mlme_priv*pmlmepriv = &padapter->mlmepriv;
@@ -389,6 +393,23 @@ void rtw_os_recv_indicate_pkt(_adapter *padapter, _pkt *pkt, struct rx_pkt_attri
 #endif	// CONFIG_BR_EXT
 		if( precvpriv->sink_udpport > 0)
 			rtw_sink_rtp_seq_dbg(padapter,pkt);
+#ifdef DBG_UDP_PKT_LOSE_11AC
+		/* After eth_type_trans process , pkt->data pointer will move from ethrnet header to ip header ,  
+		*	we have to check ethernet type , so this debug must be print before eth_type_trans
+		*/
+		if (*((unsigned short *)(pkt->data+ETH_ALEN*2)) == htons(ETH_P_ARP)) {
+			/* ARP Payload length will be 42bytes or 42+18(tailer)=60bytes*/
+			if (pkt->len != 42 && pkt->len != 60) 
+				DBG_871X("Error !!%s,ARP Payload length %u not correct\n" , __func__ , pkt->len);
+		} else if (*((unsigned short *)(pkt->data+ETH_ALEN*2)) == htons(ETH_P_IP)) { 
+			if (be16_to_cpu(*((u16 *)(pkt->data+PAYLOAD_LEN_LOC_OF_IP_HDR))) != (pkt->len)-ETH_HLEN) {
+				DBG_871X("Error !!%s,Payload length not correct\n" , __func__);
+				DBG_871X("%s, IP header describe Total length=%u\n" , __func__ , be16_to_cpu(*((u16 *)(pkt->data+PAYLOAD_LEN_LOC_OF_IP_HDR))));
+				DBG_871X("%s, Pkt real length=%u\n" , __func__ , (pkt->len)-ETH_HLEN);
+			} 
+		}
+#endif
+		/* After eth_type_trans process , pkt->data pointer will move from ethrnet header to ip header */
 		pkt->protocol = eth_type_trans(pkt, padapter->pnetdev);
 		pkt->dev = padapter->pnetdev;
 
@@ -410,7 +431,7 @@ void rtw_os_recv_indicate_pkt(_adapter *padapter, _pkt *pkt, struct rx_pkt_attri
 	}
 }
 
-void rtw_handle_tkip_mic_err(_adapter *padapter,u8 bgroup)
+void rtw_handle_tkip_mic_err(_adapter *padapter, struct sta_info *sta, u8 bgroup)
 {
 #ifdef CONFIG_IOCTL_CFG80211
 	enum nl80211_key_type key_type = 0;
@@ -451,8 +472,7 @@ void rtw_handle_tkip_mic_err(_adapter *padapter,u8 bgroup)
 		key_type |= NL80211_KEYTYPE_PAIRWISE;
 	}
 
-	cfg80211_michael_mic_failure(padapter->pnetdev, (u8 *)&pmlmepriv->assoc_bssid[ 0 ], key_type, -1,
-		NULL, GFP_ATOMIC);
+	cfg80211_michael_mic_failure(padapter->pnetdev, sta->hwaddr, key_type, -1, NULL, GFP_ATOMIC);
 #endif
 
 	_rtw_memset( &ev, 0x00, sizeof( ev ) );
@@ -466,7 +486,7 @@ void rtw_handle_tkip_mic_err(_adapter *padapter,u8 bgroup)
 	}
 
 	ev.src_addr.sa_family = ARPHRD_ETHER;
-	_rtw_memcpy( ev.src_addr.sa_data, &pmlmepriv->assoc_bssid[ 0 ], ETH_ALEN );
+	_rtw_memcpy(ev.src_addr.sa_data, sta->hwaddr, ETH_ALEN);
 
 	_rtw_memset( &wrqu, 0x00, sizeof( wrqu ) );
 	wrqu.data.length = sizeof( ev );
@@ -562,6 +582,52 @@ static void rtw_os_ksocket_send(_adapter *padapter, union recv_frame *precv_fram
 
 }
 #endif //CONFIG_AUTO_AP_MODE
+
+int rtw_recv_monitor(_adapter *padapter, union recv_frame *precv_frame)
+{
+	int ret = _FAIL;
+	struct recv_priv *precvpriv;
+	_queue	*pfree_recv_queue;
+	_pkt *skb;
+	struct mlme_priv *pmlmepriv = &padapter->mlmepriv;
+	struct rx_pkt_attrib *pattrib;
+
+	if (NULL == precv_frame)
+		goto _recv_drop;
+
+	pattrib = &precv_frame->u.hdr.attrib;
+	precvpriv = &(padapter->recvpriv);
+	pfree_recv_queue = &(precvpriv->free_recv_queue);
+
+	skb = precv_frame->u.hdr.pkt;
+	if (skb == NULL) {
+		DBG_871X("%s :skb==NULL something wrong!!!!\n", __func__);
+		goto _recv_drop;
+	}
+
+	skb->data = precv_frame->u.hdr.rx_data;
+	skb_set_tail_pointer(skb, precv_frame->u.hdr.len);
+	skb->len = precv_frame->u.hdr.len;
+	skb->ip_summed = CHECKSUM_NONE;
+	skb->pkt_type = PACKET_OTHERHOST;
+	skb->protocol = htons(0x0019); /* ETH_P_80211_RAW */
+
+	rtw_netif_rx(padapter->pnetdev, skb);
+
+	/* pointers to NULL before rtw_free_recvframe() */
+	precv_frame->u.hdr.pkt = NULL;
+
+	ret = _SUCCESS;
+
+_recv_drop:
+
+	/* enqueue back to free_recv_queue */
+	if (precv_frame)
+		rtw_free_recvframe(precv_frame, pfree_recv_queue);
+
+	return ret;
+
+}
 
 int rtw_recv_indicatepkt(_adapter *padapter, union recv_frame *precv_frame)
 {

@@ -25,19 +25,6 @@
 #define		PathC                     			0x2
 #define		PathD                     			0x3
 
-typedef enum _RATE_SECTION {
-	CCK = 0,
-	OFDM,
-	HT_MCS0_MCS7,
-	HT_MCS8_MCS15,
-	HT_MCS16_MCS23,
-	HT_MCS24_MCS31,
-	VHT_1SSMCS0_1SSMCS9,
-	VHT_2SSMCS0_2SSMCS9,
-	VHT_3SSMCS0_3SSMCS9,
-	VHT_4SSMCS0_4SSMCS9,
-} RATE_SECTION;
-
 typedef enum _RF_TX_NUM {
 	RF_1TX = 0,
 	RF_2TX,
@@ -109,13 +96,13 @@ PHY_GetRateSectionIndexOfTxPowerByRate(
 
 VOID
 PHY_GetRateValuesOfTxPowerByRate(
-	IN	PADAPTER	pAdapter,
-	IN	u32			RegAddr,
-	IN	u32			BitMask,
-	IN	u32			Value,
-	OUT	u8*			RateIndex,
-	OUT	s8*			PwrByRateVal,
-	OUT	u8*			RateNum
+	IN	PADAPTER pAdapter,
+	IN	u32 RegAddr,
+	IN	u32 BitMask,
+	IN	u32 Value,
+	OUT	u8 *Rate,
+	OUT	s8 *PwrByRateVal,
+	OUT	u8 *RateNum
 	);
 
 u8
@@ -209,18 +196,6 @@ PHY_GetTxPowerLimit(
 	IN	u8				Channel
 	);
 
-VOID
-PHY_SetTxPowerLimit(
-	IN	PADAPTER			Adapter,
-	IN	u8					*Regulation,
-	IN	u8					*Band,
-	IN	u8					*Bandwidth,
-	IN	u8					*RateSection,
-	IN	u8					*RfPath,
-	IN	u8					*Channel,
-	IN	u8					*PowerLimit
-	);
-
 VOID 
 PHY_ConvertTxPowerLimitToPowerIndex(
 	IN	PADAPTER			Adapter
@@ -255,11 +230,9 @@ PHY_SetTxPowerIndex(
 	IN	u8				Rate
 	);
 
-VOID
-Hal_ChannelPlanToRegulation(
-	IN	PADAPTER		Adapter,
-	IN	u16				ChannelPlan
-	);
+void dump_tx_power_by_rate_base(void *sel, _adapter *adapter);
+void dump_tx_power_by_rate(void *sel, _adapter *adapter);
+void dump_tx_power_limit(void *sel, _adapter *adapter);
 
 #ifdef CONFIG_LOAD_PHY_PARA_FROM_FILE
 #define MAX_PARA_FILE_BUF_LEN	25600

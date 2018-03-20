@@ -14,7 +14,6 @@
  * more details.
  *
 */
-#define pr_fmt(fmt) "audio_dsp: " fmt
 
 #include <linux/module.h>
 #include <linux/sched.h>

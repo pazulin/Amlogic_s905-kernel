@@ -23,7 +23,7 @@
 #include <rtl8192e_hal.h>
 
 #ifdef CONFIG_SUPPORT_USB_INT
-void interrupt_handler_8192e(_adapter *padapter,u16 pkt_len,u8 *pbuf)
+void interrupt_handler_8192eu(_adapter *padapter, u16 pkt_len, u8 *pbuf)
 {	
 	HAL_DATA_TYPE	*pHalData=GET_HAL_DATA(padapter);
 	struct reportpwrstate_parm pwr_rpt;
@@ -150,103 +150,6 @@ void interrupt_handler_8192e(_adapter *padapter,u16 pkt_len,u8 *pbuf)
 		//rtw_c2h_wk_cmd(padapter); to do..
 	}		
 
-}
-#endif
-				
-#ifdef CONFIG_USB_INTERRUPT_IN_PIPE
-static void usb_read_interrupt_complete(struct urb *purb, struct pt_regs *regs)
-{
-	int	err;
-	_adapter		*padapter = (_adapter	 *)purb->context;
-
-	if(RTW_CANNOT_RX(padapter))
-	{
-		DBG_8192C("%s() RX Warning! bDriverStopped(%d) OR bSurpriseRemoved(%d) \n", 
-		__FUNCTION__,padapter->bDriverStopped, padapter->bSurpriseRemoved);
-
-		return;
-	}
-		
-	if(purb->status==0)//SUCCESS
-	{
-		if (purb->actual_length > INTERRUPT_MSG_FORMAT_LEN)
-		{
-			DBG_8192C("usb_read_interrupt_complete: purb->actual_length > INTERRUPT_MSG_FORMAT_LEN(%d)\n",INTERRUPT_MSG_FORMAT_LEN);			
-		}
-
-		interrupt_handler_8192e(padapter, purb->actual_length,purb->transfer_buffer );
-		
-		err = usb_submit_urb(purb, GFP_ATOMIC);
-		if((err) && (err != (-EPERM)))
-		{
-			DBG_8192C("cannot submit interrupt in-token(err = 0x%08x),urb_status = %d\n",err, purb->status);
-		}
-	}
-	else
-	{
-		DBG_8192C("###=> usb_read_interrupt_complete => urb status(%d)\n", purb->status);
-
-		switch(purb->status) {
-			case -EINVAL:
-			case -EPIPE:			
-			case -ENODEV:
-			case -ESHUTDOWN:
-				//padapter->bSurpriseRemoved=_TRUE;
-				//RT_TRACE(_module_hci_ops_os_c_,_drv_err_,("usb_read_port_complete:bSurpriseRemoved=TRUE\n"));
-			case -ENOENT:
-				padapter->bDriverStopped=_TRUE;			
-				RT_TRACE(_module_hci_ops_os_c_,_drv_err_,("usb_read_port_complete:bDriverStopped=TRUE\n"));
-				break;
-			case -EPROTO:
-				break;
-			case -EINPROGRESS:
-				DBG_8192C("ERROR: URB IS IN PROGRESS!/n");
-				break;
-			default:
-				break;				
-		}
-	}	
-
-}
-
-static u32 usb_read_interrupt(struct intf_hdl *pintfhdl, u32 addr)
-{
-	int	err;
-	unsigned int pipe;
-	u32	ret = _SUCCESS;
-	_adapter			*adapter = pintfhdl->padapter;
-	struct dvobj_priv	*pdvobj = adapter_to_dvobj(adapter);
-	struct recv_priv	*precvpriv = &adapter->recvpriv;
-	struct usb_device	*pusbd = pdvobj->pusbdev;
-
-_func_enter_;
-
-	if (RTW_CANNOT_RX(adapter))
-	{
-		RT_TRACE(_module_hci_ops_os_c_,_drv_err_,("usb_read_interrupt:( RTW_CANNOT_RX )!!!\n"));
-		return _FAIL;
-	}
-
-	//translate DMA FIFO addr to pipehandle
-	pipe = ffaddr2pipehdl(pdvobj, addr);
-
-	usb_fill_int_urb(precvpriv->int_in_urb, pusbd, pipe, 
-					precvpriv->int_in_buf,
-            				INTERRUPT_MSG_FORMAT_LEN,
-            				usb_read_interrupt_complete,
-            				adapter,
-            				1);
-
-	err = usb_submit_urb(precvpriv->int_in_urb, GFP_ATOMIC);
-	if((err) && (err != (-EPERM)))
-	{
-		DBG_8192C("cannot submit interrupt in-token(err = 0x%08x),urb_status = %d\n",err, precvpriv->int_in_urb->status);
-		ret = _FAIL;
-	}
-
-_func_exit_;
-
-	return ret;
 }
 #endif
 
@@ -498,30 +401,27 @@ int recvbuf2recvframe(PADAPTER padapter, void *ptr)
 
 			if(pattrib->physt && pphy_status)
 				rx_query_phy_status(precvframe, pphy_status);
-
 			if(rtw_recv_entry(precvframe) != _SUCCESS)
 			{
-				RT_TRACE(_module_rtl871x_recv_c_,_drv_err_,
-					("recvbuf2recvframe: rtw_recv_entry(precvframe) != _SUCCESS\n"));
+				//keep quite for now
+				//RT_TRACE(_module_rtl871x_recv_c_,_drv_err_, ("recvbuf2recvframe: rtw_recv_entry(precvframe) != _SUCCESS\n"));
 			}
-
 		}
 		else{ // pkt_rpt_type == TX_REPORT1-CCX, TX_REPORT2-TX RTP,HIS_REPORT-USB HISR RTP
 
-			if(pattrib->pkt_rpt_type == C2H_PACKET)
-			{
-				//DBG_8192C("rx C2H_PACKET \n");
+			if (pattrib->pkt_rpt_type == C2H_PACKET) {	
+				/*DBG_8192C("rx C2H_PACKET\n");*/
 				C2HPacketHandler_8192E(padapter,precvframe->u.hdr.rx_data,pattrib->pkt_len);
 			}			
-		/*	
+			#if 0
 			else if(pattrib->pkt_rpt_type == HIS_REPORT)
 			{
-				//DBG_8192C("%s , rx USB HISR \n",__FUNCTION__);
+				/*DBG_8192C("%s, rx USB HISR\n", __func__);*/
 				#ifdef CONFIG_SUPPORT_USB_INT
-				interrupt_handler_8192e(padapter,pattrib->pkt_len,precvframe->u.hdr.rx_data);
+				interrupt_handler_8192eu(padapter, pattrib->pkt_len, precvframe->u.hdr.rx_data);
 				#endif
 			}
-		*/	
+			#endif
 			
 			rtw_free_recvframe(precvframe, pfree_recv_queue);			
 			
@@ -558,13 +458,8 @@ void rtl8192eu_xmit_tasklet(void *priv)
 			break;
 		}
 
-		if(check_fwstate(&padapter->mlmepriv, _FW_UNDER_SURVEY) == _TRUE
-			#ifdef CONFIG_CONCURRENT_MODE
-			|| check_buddy_fwstate(padapter, _FW_UNDER_SURVEY) == _TRUE
-			#endif
-		) {
+		if (rtw_xmit_ac_blocked(padapter) == _TRUE)
 			break;
-		}
 
 		ret = rtl8192eu_xmitframe_complete(padapter, pxmitpriv, NULL);
 
@@ -611,9 +506,9 @@ void rtl8192eu_set_intf_ops(struct _io_ops	*pops)
 
 }
 
-void rtl8192eu_set_hw_type(_adapter *padapter)
+void rtl8192eu_set_hw_type(struct dvobj_priv *pdvobj)
 {
-	padapter->HardwareType = HARDWARE_TYPE_RTL8192EU;
+	pdvobj->HardwareType = HARDWARE_TYPE_RTL8192EU;
 	DBG_871X("CHIP TYPE: RTL8192E\n");
 }
 

@@ -44,6 +44,17 @@
 #define	MAX_CHANNEL_NUM_5G				24
 #define	MAX_CHANNEL_NUM					38//14+24
 
+#define CENTER_CH_2G_NUM		14
+#define CENTER_CH_5G_20M_NUM	28	/* 20M center channels */
+#define CENTER_CH_5G_40M_NUM	14	/* 40M center channels */
+#define CENTER_CH_5G_80M_NUM	7	/* 80M center channels */
+#define CENTER_CH_5G_ALL_NUM	(CENTER_CH_5G_20M_NUM + CENTER_CH_5G_40M_NUM + CENTER_CH_5G_80M_NUM)
+
+extern u8 center_ch_5g_20m[CENTER_CH_5G_20M_NUM];
+extern u8 center_ch_5g_40m[CENTER_CH_5G_40M_NUM];
+extern u8 center_ch_5g_80m[CENTER_CH_5G_80M_NUM];
+extern u8 center_ch_5g_all[CENTER_CH_5G_ALL_NUM];
+
 //#define NUM_REGULATORYS	21
 #define NUM_REGULATORYS	1
 
@@ -99,14 +110,14 @@ enum _RTL8712_RF_MIMO_CONFIG_{
  RTL8712_RFCONFIG_2T2R=0x22
 };
 
+typedef enum _RF_PATH {
+	RF_PATH_A = 0,
+	RF_PATH_B = 1,
+	RF_PATH_C = 2,
+	RF_PATH_D = 3,
+} RF_PATH, *PRF_PATH;
 
-typedef enum _RF90_RADIO_PATH{
-	RF90_PATH_A = 0,			//Radio Path A
-	RF90_PATH_B = 1,			//Radio Path B
-	RF90_PATH_C = 2,			//Radio Path C
-	RF90_PATH_D = 3 		//Radio Path D
-	//RF90_PATH_MAX 			//Max RF number 90 support
-}RF90_RADIO_PATH_E, *PRF90_RADIO_PATH_E;
+const char rf_path_char(u8 path);
 
 // Bandwidth Offset
 #define HAL_PRIME_CHNL_OFFSET_DONT_CARE	0
@@ -123,6 +134,8 @@ typedef enum _CHANNEL_WIDTH{
 	CHANNEL_WIDTH_80_80 = 4,
 	CHANNEL_WIDTH_MAX = 5,
 }CHANNEL_WIDTH, *PCHANNEL_WIDTH;
+
+const char *ch_width_str(u8 bw);
 
 //
 // Represent Extention Channel Offset in HT Capabilities
@@ -155,7 +168,6 @@ typedef enum _PROTECTION_MODE{
 	PROTECTION_MODE_FORCE_DISABLE = 2,
 }PROTECTION_MODE, *PPROTECTION_MODE;
 
-/* 2007/11/15 MH Define different RF type. */
 typedef	enum _RT_RF_TYPE_DEFINITION
 {
 	RF_1T2R = 0,
@@ -163,15 +175,43 @@ typedef	enum _RT_RF_TYPE_DEFINITION
 	RF_2T2R = 2,
 	RF_1T1R = 3,
 	RF_2T2R_GREEN = 4,
-	RF_3T3R = 5,
-	RF_4T4R = 6,
+	RF_2T3R = 5,	
+	RF_3T3R = 6,
+	RF_3T4R	= 7,
+	RF_4T4R	= 8,
+
 	RF_MAX_TYPE = 0xF, /* u1Byte */
 }RT_RF_TYPE_DEF_E;
 
+int rtw_ch2freq(int chan);
+int rtw_freq2ch(int freq);
+bool rtw_chbw_to_freq_range(u8 ch, u8 bw, u8 offset, u32 *hi, u32 *lo);
 
-u32 rtw_ch2freq(u32 ch);
-u32 rtw_freq2ch(u32 freq);
+int rtw_get_chplan_from_country(const char *country_code);
 
+#define BB_GAIN_2G 0
+#ifdef CONFIG_IEEE80211_BAND_5GHZ
+#define BB_GAIN_5GLB1 1
+#define BB_GAIN_5GLB2 2
+#define BB_GAIN_5GMB1 3
+#define BB_GAIN_5GMB2 4
+#define BB_GAIN_5GHB 5
+#endif
+
+#ifdef CONFIG_IEEE80211_BAND_5GHZ
+#define BB_GAIN_NUM 6
+#else
+#define BB_GAIN_NUM 1
+#endif
+
+int rtw_ch_to_bb_gain_sel(int ch);
+void rtw_rf_set_tx_gain_offset(_adapter *adapter, u8 path, s8 offset);
+void rtw_rf_apply_tx_gain_offset(_adapter *adapter, u8 ch);
+
+bool rtw_is_dfs_range(u32 hi, u32 lo);
+bool rtw_is_dfs_ch(u8 ch, u8 bw, u8 offset);
+bool rtw_is_long_cac_range(u32 hi, u32 lo);
+bool rtw_is_long_cac_ch(u8 ch, u8 bw, u8 offset);
 
 #endif //_RTL8711_RF_H_
 

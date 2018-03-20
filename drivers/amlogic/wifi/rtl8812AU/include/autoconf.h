@@ -44,7 +44,6 @@
 	//#define CONFIG_DEBUG_CFG80211 
 	//#define CONFIG_DRV_ISSUE_PROV_REQ // IOT FOR S2
 	#define CONFIG_SET_SCAN_DENY_TIMER
-	#define CONFIG_IEEE80211_BAND_5GHZ
 #endif
 
 /*
@@ -65,6 +64,18 @@
 #ifdef CONFIG_80211N_HT
 	#define CONFIG_80211AC_VHT 1
 	#define CONFIG_BEAMFORMING
+		
+	#ifdef CONFIG_BEAMFORMING
+		#define CONFIG_BEAMFORMER_FW_NDPA
+		#define CONFIG_PHYDM_BEAMFORMING
+		#ifdef CONFIG_PHYDM_BEAMFORMING	
+		#define BEAMFORMING_SUPPORT		1	/*for phydm beamforming*/
+		#define SUPPORT_MU_BF				0
+		#else
+		#define BEAMFORMING_SUPPORT		0	/*for driver beamforming*/
+		#endif
+	#endif
+	
 #endif
 
 #define CONFIG_RECV_REORDERING_CTRL	1
@@ -111,7 +122,7 @@
 		//#define CONFIG_HWPORT_SWAP				//Port0->Sec , Port1 -> Pri
 		#define CONFIG_RUNTIME_PORT_SWITCH
 		//#define DBG_RUNTIME_PORT_SWITCH
-		#define CONFIG_STA_MODE_SCAN_UNDER_AP_MODE
+		#define CONFIG_SCAN_BACKOP
 		//#ifdef CONFIG_RTL8812A
 		//	#define CONFIG_TSF_RESET_OFFLOAD 1		// For 2 PORT TSF SYNC.
 		//#endif
@@ -192,9 +203,8 @@
 //#define CONFIG_BACKGROUND_NOISE_MONITOR
 #endif
 #define RTW_NOTCH_FILTER 0 /* 0:Disable, 1:Enable, */
-#define CONFIG_DEAUTH_BEFORE_CONNECT
 
-#define CONFIG_TX_MCAST2UNI	1	// Support IP multicast->unicast
+#define CONFIG_TX_MCAST2UNI		/*Support IP multicast->unicast*/
 //#define CONFIG_CHECK_AC_LIFETIME 1	// Check packet lifetime of 4 ACs.
 
 
@@ -237,7 +247,7 @@
 //#define CONFIG_USB_SUPPORT_ASYNC_VDN_REQ 1
 
 #ifdef CONFIG_WOWLAN
-	#define CONFIG_GTK_OL
+	//#define CONFIG_GTK_OL
 	#define CONFIG_ARP_KEEP_ALIVE
 #endif // CONFIG_WOWLAN
 
@@ -260,7 +270,7 @@
 
 #define ENABLE_USB_DROP_INCORRECT_OUT
 
-#define RTL8192CU_ADHOC_WORKAROUND_SETTING	1
+#define CONFIG_ADHOC_WORKAROUND_SETTING	1
 
 #define ENABLE_NEW_RFE_TYPE	0
 
@@ -318,44 +328,7 @@
 	#define BT_30_SUPPORT 0
 #endif // !CONFIG_BT_COEXIST
 
-/*
- * Outsource  Related Config
- */
 
-#define TESTCHIP_SUPPORT				0
-
-#define RTL8192CE_SUPPORT 				0
-#define RTL8192CU_SUPPORT 				0
-#define RTL8192C_SUPPORT 				(RTL8192CE_SUPPORT|RTL8192CU_SUPPORT)	
-
-#define RTL8192DE_SUPPORT 				0
-#define RTL8192DU_SUPPORT 				0
-#define RTL8192D_SUPPORT 				(RTL8192DE_SUPPORT|RTL8192DU_SUPPORT)	
-
-#define RTL8723AU_SUPPORT				0
-#define RTL8723AS_SUPPORT				0
-#define RTL8723AE_SUPPORT				0
-#define RTL8723A_SUPPORT				(RTL8723AU_SUPPORT|RTL8723AS_SUPPORT|RTL8723AE_SUPPORT)
-#define RTL8723_FPGA_VERIFICATION		0
-
-#define RTL8188E_SUPPORT				0
-#ifdef CONFIG_RTL8812A
-#define RTL8812A_SUPPORT				1
-#else
-#define RTL8812A_SUPPORT				0
-#endif
-#ifdef CONFIG_RTL8821A
-#define RTL8821A_SUPPORT				1
-#else
-#define RTL8821A_SUPPORT				0
-#endif
-#define RTL8723B_SUPPORT				0
-#define RTL8192E_SUPPORT				0
-#define RTL8814A_SUPPORT				0
-#define 	RTL8195A_SUPPORT				0
-
-#define RATE_ADAPTIVE_SUPPORT 			0
-#define POWER_TRAINING_ACTIVE			0
 
 #ifdef CONFIG_USB_TX_AGGREGATION
 //#define 	CONFIG_TX_EARLY_MODE
@@ -370,14 +343,14 @@
 /*
  * Debug Related Config
  */
-#define DBG	1
+#define DBG	0
 
 //#define CONFIG_DEBUG /* DBG_871X, etc... */
 //#define CONFIG_DEBUG_RTL871X /* RT_TRACE, RT_PRINT_DATA, _func_enter_, _func_exit_ */
 
-#define CONFIG_PROC_DEBUG
+//#define CONFIG_PROC_DEBUG
 
-#define DBG_CONFIG_ERROR_DETECT
+//#define DBG_CONFIG_ERROR_DETECT
 //#define DBG_CONFIG_ERROR_DETECT_INT
 //#define DBG_CONFIG_ERROR_RESET
 

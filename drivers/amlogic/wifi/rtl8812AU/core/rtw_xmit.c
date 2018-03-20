@@ -740,6 +740,13 @@ static s32 update_attrib_sec_info(_adapter *padapter, struct pkt_attrib *pattrib
 			pattrib->encrypt=_NO_PRIVACY_;
 		
 	}
+
+#ifdef CONFIG_TDLS
+	if (pattrib->direct_link == _TRUE) {
+		if (pattrib->encrypt > 0)
+			pattrib->encrypt = _AES_;
+	}
+#endif 
 	
 	switch (pattrib->encrypt)
 	{
@@ -823,25 +830,16 @@ static s32 update_attrib_sec_info(_adapter *padapter, struct pkt_attrib *pattrib
 		pattrib->bswenc = _TRUE;//force using sw enc.
 	}
 #endif
+#ifdef DYNAMIC_CAMID_ALLOC
+	if (pattrib->encrypt && bmcast && _rtw_camctl_chk_flags(padapter, SEC_STATUS_STA_PK_GK_CONFLICT_DIS_BMC_SEARCH))
+		pattrib->bswenc = _TRUE;
+#endif
 
 #ifdef CONFIG_WAPI_SUPPORT
 	if(pattrib->encrypt == _SMS4_)
 		pattrib->bswenc = _FALSE;
 #endif
 
-#ifdef CONFIG_TDLS
-	if(pattrib->direct_link == _TRUE)
-	{
-		pattrib->mac_id = pattrib->ptdls_sta->mac_id;
-		if(pattrib->encrypt>0)
-		{
-			pattrib->encrypt= _AES_;
-			pattrib->iv_len=8;
-			pattrib->icv_len=8;
-			pattrib->bswenc = _FALSE;
-		}
-	}
-#endif //CONFIG_TDLS
 exit:
 
 	return res;
@@ -1177,8 +1175,9 @@ static s32 update_attrib(_adapter *padapter, _pkt *pkt, struct pkt_attrib *pattr
 		DBG_871X("%s, psta("MAC_FMT")->state(0x%x) != _FW_LINKED\n", __func__, MAC_ARG(psta->hwaddr), psta->state);
 		return _FAIL;
 	}
-
-
+#ifdef CONFIG_BEAMFORMING
+	update_attrib_txbf_info(padapter, pattrib, psta);
+#endif
 
 	//TODO:_lock
 	if(update_attrib_sec_info(padapter, pattrib, psta) == _FAIL)
@@ -2259,9 +2258,6 @@ _func_enter_;
 			
 	_enter_critical_bh(&padapter->security_key_mutex, &irqL);
 	
-	//only support station mode
-	if(!check_fwstate(pmlmepriv, WIFI_STATION_STATE) || !check_fwstate(pmlmepriv, _FW_LINKED))
-		goto xmitframe_coalesce_success;
 	
 	//IGTK key is not install, it may not support 802.11w
 	if(padapter->securitypriv.binstallBIPkey != _TRUE)
@@ -2358,9 +2354,8 @@ _func_enter_;
 				goto xmitframe_coalesce_fail;
 			}
 		
-			if(!(psta->state & _FW_LINKED) || pxmitframe->buf_addr==NULL)
-			{
-				DBG_871X("%s, not _FW_LINKED or addr null\n", __func__);
+			if (pxmitframe->buf_addr == NULL) {
+				DBG_871X("%s, pxmitframe->buf_addr\n", __func__);
 				goto xmitframe_coalesce_fail;
 			}
 			
@@ -2383,6 +2378,13 @@ _func_enter_;
 			}*/
 			if(pattrib->encrypt>0)
 				_rtw_memcpy(pattrib->dot118021x_UncstKey.skey, psta->dot118021x_UncstKey.skey, 16);
+			
+			/* To use wrong key */
+			if (pattrib->key_type == IEEE80211W_WRONG_KEY) {
+				DBG_871X("use wrong key\n");
+				pattrib->dot118021x_UncstKey.skey[0] = 0xff;
+			}
+			
 			//bakeup original management packet
 			_rtw_memcpy(tmp_buf, pframe, pattrib->pktlen);
 			//move to data portion
@@ -3946,9 +3948,11 @@ inline bool xmitframe_hiq_filter(struct xmit_frame *xmitframe)
 	_adapter *adapter = xmitframe->padapter;
 	struct registry_priv *registry = &adapter->registrypriv;
 
-if (adapter->interface_type != RTW_PCIE) {
+if (rtw_get_intf_type(adapter) != RTW_PCIE) {
 
-	if (registry->hiq_filter == RTW_HIQ_FILTER_ALLOW_SPECIAL) {
+	if (adapter->registrypriv.wifi_spec == 1) {
+		allow = _TRUE;
+	} else if (registry->hiq_filter == RTW_HIQ_FILTER_ALLOW_SPECIAL) {
 	
 		struct pkt_attrib *attrib = &xmitframe->attrib;
 
@@ -4071,14 +4075,21 @@ sint xmitframe_enqueue_for_sleeping_sta(_adapter *padapter, struct xmit_frame *p
 			pstapriv->sta_dz_bitmap |= BIT(0);
 
 			//DBG_871X("enqueue, sq_len=%d, tim=%x\n", psta->sleepq_len, pstapriv->tim_bitmap);
-
-			if (update_tim == _TRUE) {
-				if (is_broadcast_mac_addr(pattrib->ra))
-					_update_beacon(padapter, _TIM_IE_, NULL, _TRUE, "buffer BC");
-				else
-					_update_beacon(padapter, _TIM_IE_, NULL, _TRUE, "buffer MC");
+			if (padapter->registrypriv.wifi_spec == 1) {
+				/*
+				*if (update_tim == _TRUE)
+				*	rtw_chk_hi_queue_cmd(padapter);
+				*/
 			} else {
-				chk_bmc_sleepq_cmd(padapter);
+
+				if (update_tim == _TRUE) {
+					if (is_broadcast_mac_addr(pattrib->ra))
+						_update_beacon(padapter, _TIM_IE_, NULL, _TRUE, "buffer BC");
+					else
+						_update_beacon(padapter, _TIM_IE_, NULL, _TRUE, "buffer MC");
+				} else {
+					chk_bmc_sleepq_cmd(padapter);
+				}
 			}
 
 			//_exit_critical_bh(&psta->sleep_q.lock, &irqL);				
@@ -4726,6 +4737,39 @@ thread_return rtw_xmit_thread(thread_context context)
 }
 #endif
 
+bool rtw_xmit_ac_blocked(_adapter *adapter)
+{
+	struct dvobj_priv *dvobj = adapter_to_dvobj(adapter);
+	_adapter *iface;
+	struct mlme_ext_priv *mlmeext;
+	struct mlme_ext_info *mlmeextinfo;
+	bool blocked = _FALSE;
+	int i;
+
+	for (i = 0; i < dvobj->iface_nums; i++) {
+		iface = dvobj->padapters[i];
+		mlmeext = &iface->mlmeextpriv;
+
+		/* check scan state */
+		if (mlmeext_scan_state(mlmeext) != SCAN_DISABLE
+			&& mlmeext_scan_state(mlmeext) != SCAN_BACK_OP
+		) {
+			blocked = _TRUE;
+			goto exit;
+		}
+
+		if (mlmeext_scan_state(mlmeext) == SCAN_BACK_OP
+			&& !mlmeext_chk_scan_backop_flags(mlmeext, SS_BACKOP_TX_RESUME)
+		) {
+			blocked = _TRUE;
+			goto exit;
+		}
+	}
+
+exit:
+	return blocked;
+}
+
 void rtw_sctx_init(struct submit_ctx *sctx, int timeout_ms)
 {
 	sctx->timeout_ms = timeout_ms;
@@ -4822,11 +4866,11 @@ int rtw_ack_tx_polling(struct xmit_priv *pxmitpriv, u32 timeout_ms)
 		if (pack_tx_ops->status != RTW_SCTX_SUBMITTED)
 			break;
 
-		if (adapter->bDriverStopped) {
+		if (rtw_is_drv_stopped(adapter)) {
 			pack_tx_ops->status = RTW_SCTX_DONE_DRV_STOP;
 			break;
 		}
-		if (adapter->bSurpriseRemoved) {
+		if (rtw_is_surprise_removed(adapter)) {
 			pack_tx_ops->status = RTW_SCTX_DONE_DEV_REMOVE;
 			break;
 		}

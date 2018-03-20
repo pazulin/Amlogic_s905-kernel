@@ -66,6 +66,53 @@ static u8 	WIFI_OFDMRATES[] =
  IEEE80211_OFDM_RATE_48MB,
  IEEE80211_OFDM_RATE_54MB};
 
+u8 mgn_rates_cck[4] = {MGN_1M, MGN_2M, MGN_5_5M, MGN_11M};
+u8 mgn_rates_ofdm[8] = {MGN_6M, MGN_9M, MGN_12M, MGN_18M, MGN_24M, MGN_36M, MGN_48M, MGN_54M};
+u8 mgn_rates_mcs0_7[8] = {MGN_MCS0, MGN_MCS1, MGN_MCS2, MGN_MCS3, MGN_MCS4, MGN_MCS5, MGN_MCS6, MGN_MCS7};
+u8 mgn_rates_mcs8_15[8] = {MGN_MCS8, MGN_MCS9, MGN_MCS10, MGN_MCS11, MGN_MCS12, MGN_MCS13, MGN_MCS14, MGN_MCS15};
+u8 mgn_rates_mcs16_23[8] = {MGN_MCS16, MGN_MCS17, MGN_MCS18, MGN_MCS19, MGN_MCS20, MGN_MCS21, MGN_MCS22, MGN_MCS23};
+u8 mgn_rates_mcs24_31[8] = {MGN_MCS24, MGN_MCS25, MGN_MCS26, MGN_MCS27, MGN_MCS28, MGN_MCS29, MGN_MCS30, MGN_MCS31};
+u8 mgn_rates_vht1ss[10] = {MGN_VHT1SS_MCS0, MGN_VHT1SS_MCS1, MGN_VHT1SS_MCS2, MGN_VHT1SS_MCS3, MGN_VHT1SS_MCS4
+	, MGN_VHT1SS_MCS5, MGN_VHT1SS_MCS6, MGN_VHT1SS_MCS7, MGN_VHT1SS_MCS8, MGN_VHT1SS_MCS9};
+u8 mgn_rates_vht2ss[10] = {MGN_VHT2SS_MCS0, MGN_VHT2SS_MCS1, MGN_VHT2SS_MCS2, MGN_VHT2SS_MCS3, MGN_VHT2SS_MCS4
+	, MGN_VHT2SS_MCS5, MGN_VHT2SS_MCS6, MGN_VHT2SS_MCS7, MGN_VHT2SS_MCS8, MGN_VHT2SS_MCS9};
+u8 mgn_rates_vht3ss[10] = {MGN_VHT3SS_MCS0, MGN_VHT3SS_MCS1, MGN_VHT3SS_MCS2, MGN_VHT3SS_MCS3, MGN_VHT3SS_MCS4
+	, MGN_VHT3SS_MCS5, MGN_VHT3SS_MCS6, MGN_VHT3SS_MCS7, MGN_VHT3SS_MCS8, MGN_VHT3SS_MCS9};
+u8 mgn_rates_vht4ss[10] = {MGN_VHT4SS_MCS0, MGN_VHT4SS_MCS1, MGN_VHT4SS_MCS2, MGN_VHT4SS_MCS3, MGN_VHT4SS_MCS4
+	, MGN_VHT4SS_MCS5, MGN_VHT4SS_MCS6, MGN_VHT4SS_MCS7, MGN_VHT4SS_MCS8, MGN_VHT4SS_MCS9};
+
+static const char * const _rate_section_str[] = {
+	"CCK",
+	"OFDM",
+	"HT_1SS",
+	"HT_2SS",
+	"HT_3SS",
+	"HT_4SS",
+	"VHT_1SS",
+	"VHT_2SS",
+	"VHT_3SS",
+	"VHT_4SS",
+	"RATE_SECTION_UNKNOWN",
+};
+
+const char *rate_section_str(u8 section)
+{
+	section = (section >= RATE_SECTION_NUM) ? RATE_SECTION_NUM : section;
+	return _rate_section_str[section];
+}
+
+struct rate_section_ent rates_by_sections[RATE_SECTION_NUM] = {
+	{RF_1TX, 4, mgn_rates_cck},
+	{RF_1TX, 8, mgn_rates_ofdm},
+	{RF_1TX, 8, mgn_rates_mcs0_7},
+	{RF_2TX, 8, mgn_rates_mcs8_15},
+	{RF_3TX, 8, mgn_rates_mcs16_23},
+	{RF_4TX, 8, mgn_rates_mcs24_31},
+	{RF_1TX, 10, mgn_rates_vht1ss},
+	{RF_2TX, 10, mgn_rates_vht2ss},
+	{RF_3TX, 10, mgn_rates_vht3ss},
+	{RF_4TX, 10, mgn_rates_vht4ss},
+};
 
 int rtw_get_bit_value_from_ieee_value(u8 val)
 {
@@ -493,6 +540,28 @@ _func_exit_;
 
 	return sz;
 
+}
+
+bool rtw_regsty_adjust_chbw(struct registry_priv *regsty, u8 req_ch, u8 *req_bw, u8 *req_offset)
+{
+	u8 regsty_allowed_bw;
+
+	if (req_ch <= 14)
+		regsty_allowed_bw = regsty->bw_mode & 0x0F;
+	else
+		regsty_allowed_bw = regsty->bw_mode >> 4;
+
+	if (regsty_allowed_bw == 2 && *req_bw > CHANNEL_WIDTH_80)
+		*req_bw = CHANNEL_WIDTH_80;
+	else if (regsty_allowed_bw == 1 && *req_bw > CHANNEL_WIDTH_40)
+		*req_bw = CHANNEL_WIDTH_40;
+	else if (regsty_allowed_bw == 0 && *req_bw > CHANNEL_WIDTH_20) {
+		*req_bw = CHANNEL_WIDTH_20;
+		*req_offset = HAL_PRIME_CHNL_OFFSET_DONT_CARE;
+	} else
+		return _FALSE;
+
+	return _TRUE;
 }
 
 unsigned char *rtw_get_wpa_ie(unsigned char *pie, int *wpa_ie_len, int limit)
@@ -1367,7 +1436,7 @@ int rtw_get_mac_addr_intel(unsigned char *buf)
 
 	DBG_871X("%s Enter\n", __FUNCTION__);
 
-	ret = rtw_retrive_from_file(fname, c_mac, MAC_ADDRESS_LEN);
+	ret = rtw_retrieve_from_file(fname, c_mac, MAC_ADDRESS_LEN);
 	if(ret < MAC_ADDRESS_LEN)
 	{
 		return -1;
@@ -1392,6 +1461,7 @@ int rtw_get_mac_addr_intel(unsigned char *buf)
  *
  * Input:
  * adapter: mac_address pointer.
+ * check_local_bit: check locally bit or not.
  *
  * Output:
  * _TRUE: The mac address is invalid.
@@ -1399,7 +1469,7 @@ int rtw_get_mac_addr_intel(unsigned char *buf)
  *
  * Auther: Isaac.Li
  */
-u8 rtw_check_invalid_mac_address(u8 *mac_addr)
+u8 rtw_check_invalid_mac_address(u8 *mac_addr, u8 check_local_bit)
 {
 	u8 null_mac_addr[ETH_ALEN] = {0, 0, 0, 0, 0, 0};
 	u8 multi_mac_addr[ETH_ALEN] = {0xff, 0xff, 0xff, 0xff, 0xff, 0xff};
@@ -1420,9 +1490,11 @@ u8 rtw_check_invalid_mac_address(u8 *mac_addr)
 		goto func_exit;
 	}
 
-	if (mac_addr[0] & BIT1) {
-		res = _TRUE;
-		goto func_exit;
+	if (check_local_bit == _TRUE) {
+		if (mac_addr[0] & BIT1) {
+			res = _TRUE;
+			goto func_exit;
+		}
 	}
 
 func_exit:
@@ -1437,6 +1509,7 @@ extern char* rtw_initmac;
  */
 void rtw_macaddr_cfg(u8 *out, const u8 *hw_mac_addr)
 {
+#define DEFAULT_RANDOM_MACADDR 1
 	u8 mac[ETH_ALEN];
 
 	if (out == NULL) {
@@ -1454,6 +1527,7 @@ void rtw_macaddr_cfg(u8 *out, const u8 *hw_mac_addr)
 		goto err_chk;
 	}
 
+	/* platform specified */
 #ifdef CONFIG_PLATFORM_INTEL_BYT
 	if (rtw_get_mac_addr_intel(mac) == 0)
 		goto err_chk;
@@ -1466,16 +1540,22 @@ void rtw_macaddr_cfg(u8 *out, const u8 *hw_mac_addr)
 	}
 
 err_chk:
-	if (rtw_check_invalid_mac_address(mac) == _TRUE) {
-		DBG_871X_LEVEL(_drv_err_, "invalid mac addr:"MAC_FMT", assign default one!!!\n", MAC_ARG(mac));
-
-		/* use default mac address */
+	if (rtw_check_invalid_mac_address(mac, _TRUE) == _TRUE) {
+		#if DEFAULT_RANDOM_MACADDR
+		DBG_871X_LEVEL(_drv_err_, "invalid mac addr:"MAC_FMT", assign random MAC\n", MAC_ARG(mac));
+		*((u32 *)(&mac[2])) = rtw_random32();
+		mac[0] = 0x00;
+		mac[1] = 0xe0;
+		mac[2] = 0x4c;
+		#else
+		DBG_871X_LEVEL(_drv_err_, "invalid mac addr:"MAC_FMT", assign default one\n", MAC_ARG(mac));
 		mac[0] = 0x00;
 		mac[1] = 0xe0;
 		mac[2] = 0x4c;
 		mac[3] = 0x87;
 		mac[4] = 0x00;
 		mac[5] = 0x00;
+		#endif
 	}
 
 	_rtw_memcpy(out, mac, ETH_ALEN);
@@ -1560,6 +1640,182 @@ void dump_wps_ie(void *sel, u8 *ie, u32 ie_len)
 		DBG_871X_SEL_NL(sel, "%s ID:0x%04x, LEN:%u\n", __FUNCTION__, id, len);
 
 		pos+=(4+len);
+	}
+}
+
+/**
+ * rtw_ies_get_chbw - get operation ch, bw, offset from IEs of BSS.
+ * @ies: pointer of the first tlv IE
+ * @ies_len: length of @ies
+ * @ch: pointer of ch, used as output
+ * @bw: pointer of bw, used as output
+ * @offset: pointer of offset, used as output
+ */
+void rtw_ies_get_chbw(u8 *ies, int ies_len, u8 *ch, u8 *bw, u8 *offset)
+{
+	u8 *p;
+	int	ie_len;
+
+	*ch = 0;
+	*bw = CHANNEL_WIDTH_20;
+	*offset = HAL_PRIME_CHNL_OFFSET_DONT_CARE;
+
+	p = rtw_get_ie(ies, _DSSET_IE_, &ie_len, ies_len);
+	if (p && ie_len > 0)
+		*ch = *(p + 2);
+
+#ifdef CONFIG_80211N_HT
+{
+	u8 *ht_cap_ie, *ht_op_ie;
+	int ht_cap_ielen, ht_op_ielen;
+
+	ht_cap_ie = rtw_get_ie(ies, EID_HTCapability, &ht_cap_ielen, ies_len);
+	if (ht_cap_ie && ht_cap_ielen) {
+		if (GET_HT_CAP_ELE_CHL_WIDTH(ht_cap_ie + 2))
+			*bw = CHANNEL_WIDTH_40;
+	}
+
+	ht_op_ie = rtw_get_ie(ies, EID_HTInfo, &ht_op_ielen, ies_len);
+	if (ht_op_ie && ht_op_ielen) {
+		if (*ch == 0) {
+			*ch = GET_HT_OP_ELE_PRI_CHL(ht_op_ie + 2);
+		} else if (*ch != 0 && *ch != GET_HT_OP_ELE_PRI_CHL(ht_op_ie + 2)) {
+			DBG_871X("%s ch inconsistent, DSSS:%u, HT primary:%u\n"
+				, __func__, *ch, GET_HT_OP_ELE_PRI_CHL(ht_op_ie + 2));
+		}
+
+		if (!GET_HT_OP_ELE_STA_CHL_WIDTH(ht_op_ie + 2))
+			*bw = CHANNEL_WIDTH_20;
+
+		if (*bw == CHANNEL_WIDTH_40) {
+			switch (GET_HT_OP_ELE_2ND_CHL_OFFSET(ht_op_ie + 2)) {
+			case SCA:
+				*offset = HAL_PRIME_CHNL_OFFSET_LOWER;
+				break;
+			case SCB:
+				*offset = HAL_PRIME_CHNL_OFFSET_UPPER;
+				break;
+			}
+		}
+	}
+}
+#endif /* CONFIG_80211N_HT */
+#ifdef CONFIG_80211AC_VHT
+{
+	u8 *vht_op_ie;
+	int vht_op_ielen;
+
+	vht_op_ie = rtw_get_ie(ies, EID_VHTOperation, &vht_op_ielen, ies_len);
+	if (vht_op_ie && vht_op_ielen) {
+		if (GET_VHT_OPERATION_ELE_CHL_WIDTH(vht_op_ie + 2) >= 1)
+			*bw = CHANNEL_WIDTH_80;
+	}
+}
+#endif
+}
+
+void rtw_bss_get_chbw(WLAN_BSSID_EX *bss, u8 *ch, u8 *bw, u8 *offset)
+{
+	rtw_ies_get_chbw(bss->IEs + sizeof(NDIS_802_11_FIXED_IEs)
+		, bss->IELength - sizeof(NDIS_802_11_FIXED_IEs)
+		, ch, bw, offset);
+
+	if (*ch == 0) {
+		*ch = bss->Configuration.DSConfig;
+	} else if (*ch != bss->Configuration.DSConfig) {
+		DBG_871X("inconsistent ch - ies:%u bss->Configuration.DSConfig:%u\n"
+			, *ch, bss->Configuration.DSConfig);
+		*ch = bss->Configuration.DSConfig;
+		rtw_warn_on(1);
+	}
+}
+
+/**
+ * rtw_is_chbw_grouped - test if the two ch settings can be grouped together
+ * @ch_a: ch of set a
+ * @bw_a: bw of set a
+ * @offset_a: offset of set a
+ * @ch_b: ch of set b
+ * @bw_b: bw of set b
+ * @offset_b: offset of set b
+ */
+bool rtw_is_chbw_grouped(u8 ch_a, u8 bw_a, u8 offset_a
+	, u8 ch_b, u8 bw_b, u8 offset_b)
+{
+	bool is_grouped = _FALSE;
+
+	if (ch_a != ch_b) {
+		/* ch is different */
+		goto exit;
+	} else if ((bw_a == CHANNEL_WIDTH_40 || bw_a == CHANNEL_WIDTH_80)
+			&& (bw_b == CHANNEL_WIDTH_40 || bw_b == CHANNEL_WIDTH_80)
+	) {
+		if (offset_a != offset_b)
+			goto exit;
+	}
+
+	is_grouped = _TRUE;
+
+exit:
+	return is_grouped;
+}
+
+/**
+ * rtw_sync_chbw - obey g_ch, adjust g_bw, g_offset, bw, offset
+ * @req_ch: pointer of the request ch, may be modified further
+ * @req_bw: pointer of the request bw, may be modified further
+ * @req_offset: pointer of the request offset, may be modified further
+ * @g_ch: pointer of the ongoing group ch
+ * @g_bw: pointer of the ongoing group bw, may be modified further
+ * @g_offset: pointer of the ongoing group offset, may be modified further
+ */
+void rtw_sync_chbw(u8 *req_ch, u8 *req_bw, u8 *req_offset
+	, u8 *g_ch, u8 *g_bw, u8 *g_offset)
+{
+
+	*req_ch = *g_ch;
+
+	if (*req_bw == CHANNEL_WIDTH_80 && *g_ch <= 14) {
+		/*2.4G ch, downgrade to 40Mhz */
+		*req_bw = CHANNEL_WIDTH_40;
+	}
+
+	switch (*req_bw) {
+	case CHANNEL_WIDTH_80:
+		if (*g_bw == CHANNEL_WIDTH_40 || *g_bw == CHANNEL_WIDTH_80)
+			*req_offset = *g_offset;
+		else if (*g_bw == CHANNEL_WIDTH_20)
+			*req_offset = rtw_get_offset_by_ch(*req_ch);
+
+		if (*req_offset == HAL_PRIME_CHNL_OFFSET_DONT_CARE) {
+			DBG_871X_LEVEL(_drv_err_, "%s req 80MHz BW without offset, down to 20MHz\n", __func__);
+			rtw_warn_on(1);
+			*req_bw = CHANNEL_WIDTH_20;
+		}
+		break;
+	case CHANNEL_WIDTH_40:
+		if (*g_bw == CHANNEL_WIDTH_40 || *g_bw == CHANNEL_WIDTH_80)
+			*req_offset = *g_offset;
+		else if (*g_bw == CHANNEL_WIDTH_20)
+			*req_offset = rtw_get_offset_by_ch(*req_ch);
+
+		if (*req_offset == HAL_PRIME_CHNL_OFFSET_DONT_CARE) {
+			DBG_871X_LEVEL(_drv_err_, "%s req 40MHz BW without offset, down to 20MHz\n", __func__);
+			rtw_warn_on(1);
+			*req_bw = CHANNEL_WIDTH_20;
+		}
+		break;
+	case CHANNEL_WIDTH_20:
+		*req_offset = HAL_PRIME_CHNL_OFFSET_DONT_CARE;
+		break;
+	default:
+		DBG_871X_LEVEL(_drv_err_, "%s req unsupported BW:%u\n", __func__, *req_bw);
+		rtw_warn_on(1);
+	}
+
+	if (*req_bw > *g_bw) {
+		*g_bw = *req_bw;
+		*g_offset = *req_offset;
 	}
 }
 
@@ -2221,34 +2477,48 @@ void rtw_get_bcn_info(struct wlan_network *pnetwork)
 	}
 }
 
+u8	rtw_ht_mcsset_to_nss(u8 *supp_mcs_set)
+{
+	u8 nss = 1;
+	
+	if (supp_mcs_set[3])
+		nss = 4;
+	else if (supp_mcs_set[2])
+		nss = 3;
+	else if (supp_mcs_set[1])
+		nss = 2;
+	else if (supp_mcs_set[0])
+		nss = 1;
+	else
+		DBG_871X("%s,%d, warning! supp_mcs_set is zero\n", __func__, __LINE__);
+	/* DBG_871X("%s HT: %dSS\n", __FUNCTION__, nss); */
+	return nss;
+}
+
 //show MCS rate, unit: 100Kbps
 u16 rtw_mcs_rate(u8 rf_type, u8 bw_40MHz, u8 short_GI, unsigned char * MCS_rate)
 {
 	u16 max_rate = 0;
-	
-	if(rf_type == RF_1T1R)
-	{
-		if(MCS_rate[0] & BIT(7))
-			max_rate = (bw_40MHz) ? ((short_GI)?1500:1350):((short_GI)?722:650);
-		else if(MCS_rate[0] & BIT(6))
+
+	/*MCS_rate[2] = 3T3R , MCS_rate[1] = 2T2R , MCS_rate[0] = 1T1R*/
+	if (MCS_rate[2]) {
+		if (MCS_rate[2] & BIT(7))
+			max_rate = (bw_40MHz) ? ((short_GI)?4500:4050):((short_GI)?2167:1950);
+		else if (MCS_rate[2] & BIT(6))
+			max_rate = (bw_40MHz) ? ((short_GI)?4050:3645):((short_GI)?1950:1750);
+		else if (MCS_rate[2] & BIT(5))
+			max_rate = (bw_40MHz) ? ((short_GI)?3600:3240):((short_GI)?1733:1560);
+		else if (MCS_rate[2] & BIT(4))
+			max_rate = (bw_40MHz) ? ((short_GI)?2700:2430):((short_GI)?1300:1170);
+		else if (MCS_rate[2] & BIT(3))
+			max_rate = (bw_40MHz) ? ((short_GI)?1800:1620):((short_GI)?867:780);
+		else if (MCS_rate[2] & BIT(2))
 			max_rate = (bw_40MHz) ? ((short_GI)?1350:1215):((short_GI)?650:585);
-		else if(MCS_rate[0] & BIT(5))
-			max_rate = (bw_40MHz) ? ((short_GI)?1200:1080):((short_GI)?578:520);
-		else if(MCS_rate[0] & BIT(4))
+		else if (MCS_rate[2] & BIT(1))
 			max_rate = (bw_40MHz) ? ((short_GI)?900:810):((short_GI)?433:390);
-		else if(MCS_rate[0] & BIT(3))
-			max_rate = (bw_40MHz) ? ((short_GI)?600:540):((short_GI)?289:260);
-		else if(MCS_rate[0] & BIT(2))
+		else if (MCS_rate[2] & BIT(0))
 			max_rate = (bw_40MHz) ? ((short_GI)?450:405):((short_GI)?217:195);
-		else if(MCS_rate[0] & BIT(1))
-			max_rate = (bw_40MHz) ? ((short_GI)?300:270):((short_GI)?144:130);
-		else if(MCS_rate[0] & BIT(0))
-			max_rate = (bw_40MHz) ? ((short_GI)?150:135):((short_GI)?72:65);
-	}
-	else
-	{
-		if(MCS_rate[1])
-		{
+	} else if (MCS_rate[1]) {
 			if(MCS_rate[1] & BIT(7))
 				max_rate = (bw_40MHz) ? ((short_GI)?3000:2700):((short_GI)?1444:1300);
 			else if(MCS_rate[1] & BIT(6))
@@ -2265,9 +2535,7 @@ u16 rtw_mcs_rate(u8 rf_type, u8 bw_40MHz, u8 short_GI, unsigned char * MCS_rate)
 				max_rate = (bw_40MHz) ? ((short_GI)?600:540):((short_GI)?289:260);
 			else if(MCS_rate[1] & BIT(0))
 				max_rate = (bw_40MHz) ? ((short_GI)?300:270):((short_GI)?144:130);
-		}
-		else
-		{
+	} else {
 			if(MCS_rate[0] & BIT(7))
 				max_rate = (bw_40MHz) ? ((short_GI)?1500:1350):((short_GI)?722:650);
 			else if(MCS_rate[0] & BIT(6))
@@ -2285,7 +2553,7 @@ u16 rtw_mcs_rate(u8 rf_type, u8 bw_40MHz, u8 short_GI, unsigned char * MCS_rate)
 			else if(MCS_rate[0] & BIT(0))
 				max_rate = (bw_40MHz) ? ((short_GI)?150:135):((short_GI)?72:65);
 		}
-	}
+
 	return max_rate;
 }
 

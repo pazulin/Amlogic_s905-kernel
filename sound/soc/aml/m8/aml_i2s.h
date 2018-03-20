@@ -18,8 +18,6 @@
 #ifndef __AML_I2S_H__
 #define __AML_I2S_H__
 
-#include <linux/mutex.h>
-
 /* #define debug_printk */
 #ifdef debug_printk
 #define dug_printk(fmt, args...)  printk(fmt, ## args)
@@ -27,18 +25,9 @@
 #define dug_printk(fmt, args...)
 #endif
 
-#define BASE_IRQ                (32)
-#define AM_IRQ(reg)             (reg + BASE_IRQ)
-#define INT_TIMER_D             AM_IRQ(29)
-/* note: we use TIEMRD. MODE: 1: periodic, 0: one-shot*/
-#define TIMERD_MODE             1
-/* timerbase resolution: 00: 1us; 01: 10us; 10: 100us; 11: 1ms*/
-#define TIMERD_RESOLUTION       0x1
-/* timer count: 16bits*/
-#define TIMER_COUNT             100
-
 struct audio_stream {
 	int stream_id;
+	int active;
 	unsigned int last_ptr;
 	unsigned int size;
 	unsigned int sample_rate;
@@ -47,12 +36,11 @@ struct audio_stream {
 	struct snd_pcm_substream *stream;
 	unsigned i2s_mode; /* 0:master, 1:slave, */
 	unsigned device_type;
+	unsigned int xrun_num;
 };
 struct aml_audio_buffer {
 	void *buffer_start;
 	unsigned int buffer_size;
-	char cache_buffer_bytes[256];
-	int cached_len;
 };
 
 struct aml_i2s_dma_params {
@@ -79,12 +67,11 @@ struct aml_runtime_data {
 	struct snd_pcm_substream *substream;
 	struct audio_stream s;
 	struct timer_list timer;	/* timeer for playback and capture */
-	spinlock_t timer_lock;
+	struct hrtimer hrtimer;
 	void *buf; /* tmp buffer for playback or capture */
-	int active;
-	unsigned int xrun_num;
-	struct mutex chmap_lock;
-	int chmap_layout;
 };
+
+extern struct snd_soc_platform_driver aml_soc_platform;
+/* extern struct aml_audio_interface aml_i2s_interface; */
 
 #endif

@@ -159,7 +159,6 @@ void rtl8192es_recv_hdl(PADAPTER padapter, struct recv_buf *precvbuf);
 #endif
 
 #ifdef CONFIG_USB_HCI
-#define INTERRUPT_MSG_FORMAT_LEN 60
 void rtl8192eu_init_recvbuf(_adapter *padapter, struct recv_buf *precvbuf);
 s32 rtl8192eu_init_recv_priv(PADAPTER padapter);
 void rtl8192eu_free_recv_priv(PADAPTER padapter);

@@ -602,7 +602,13 @@
 #define	IMR_RXFOVW_8814A					BIT8			// Receive FIFO Overflow
 
 
+#ifdef CONFIG_PCI_HCI
+#define IMR_TX_MASK			(IMR_VODOK_8814A | IMR_VIDOK_8814A | IMR_BEDOK_8814A | IMR_BKDOK_8814A | IMR_MGNTDOK_8814A | IMR_HIGHDOK_8814A)
 
+#define RT_BCN_INT_MASKS	(IMR_BCNDMAINT0_8814A | IMR_TXBCN0OK_8814A | IMR_TXBCN0ERR_8814A | IMR_BCNDERR0_8814A)
+
+#define RT_AC_INT_MASKS	(IMR_VIDOK_8814A | IMR_VODOK_8814A | IMR_BEDOK_8814A | IMR_BKDOK_8814A)
+#endif
 
 
 /*===================================================================
@@ -627,6 +633,7 @@ So the following defines for 92C is not entire!!!!!!
 #define LAST_ENTRY_OF_TX_PKT_BUFFER_8814A       2048-1	//20130415 KaiYuan add for 8814
 
 #define MACID_NUM_8814A 128
-#define CAM_ENTRY_NUM_8814A 64
+#define SEC_CAM_ENT_NUM_8814A 64
+#define NSS_NUM_8814A 3
 
 #endif //__RTL8814A_SPEC_H__

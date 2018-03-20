@@ -18,7 +18,6 @@
  *
  ******************************************************************************/
 #define _RTW_BR_EXT_C_
-#include <net/ip6_checksum.h>
 
 #ifdef __KERNEL__
 #include <linux/if_arp.h>
@@ -49,7 +48,12 @@
 #include <linux/ipv6.h>
 #include <linux/icmpv6.h>
 #include <net/ndisc.h>
+#if (LINUX_VERSION_CODE >= KERNEL_VERSION(2, 6, 24))
+#include <net/ip6_checksum.h>
+#else
 #include <net/checksum.h>
+#include <net/ip6_checksum.h>
+#endif
 #endif
 #endif
 
