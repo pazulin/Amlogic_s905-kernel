@@ -25,8 +25,8 @@ snd-soc-aml-m8-objs := aml_m8.o
 obj-$(CONFIG_SND_AML_M8) += snd-soc-aml-m8.o
 snd-soc-aml-m8-new-objs := aml_m8_new.o
 obj-$(CONFIG_SND_AML_M8_NEW) += snd-soc-aml-m8-new.o
-snd-soc-aml-m8-new1-objs := aml_m8.o
-obj-$(CONFIG_SND_AML_M8_NEW1) += snd-soc-aml-m8-new1.o
+snd-soc-aml-m8-volumio-objs := aml_m8.o
+obj-$(CONFIG_SND_AML_M8_VOLUMIO) += snd-soc-aml-m8-volumio.o
 
 #AML G9TV Machine support
 snd-soc-aml-g9tv-objs := aml_g9tv.o
