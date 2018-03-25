@@ -36,13 +36,6 @@
 		status = "disable";
 	};
 
-	aml_m8_snd {
-		mute_gpio-gpios = <&gpio GPIODV_22 0>;
-
-		codec0: codec0 {
-			sound-dai = <&es8323>;
-		};
-	};
 };
 
 &i2c_a {

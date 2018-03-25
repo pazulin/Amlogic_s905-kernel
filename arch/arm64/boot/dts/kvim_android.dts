@@ -856,22 +856,20 @@
 
 	/* AUDIO MESON8 DEVICES */
 	i2s_dai: I2S {
-		#sound-dai-cells = <0>;
-		resets = <
-			&clock GCLK_IDX_AIU_AI_TOP_GLUE
-			&clock GCLK_IDX_AUD_BUF_ABD
-			&clock GCLK_IDX_AIU_I2S_OUT
-			&clock GCLK_IDX_AIU_AMCLK_MEASURE
-			&clock GCLK_IDX_AIU_AIFIFO2
-			&clock GCLK_IDX_AIU_AUD_MIXER
-			&clock GCLK_IDX_AIU_MIXER_REG
-			&clock GCLK_IDX_AIU_ADC
-			&clock GCLK_IDX_AIU_TOP_LEVEL
-			&clock GCLK_IDX_AIU_AOCLK
-			&clock GCLK_IDX_AUD_IN
-		>;
-		reset-names =
-			"top_glue",
+                compatible = "amlogic, aml-i2s-dai";
+                #sound-dai-cells = <0>;
+                resets = <&clock GCLK_IDX_AIU_AI_TOP_GLUE
+                        &clock GCLK_IDX_AUD_BUF_ABD
+                        &clock GCLK_IDX_AIU_I2S_OUT
+                        &clock GCLK_IDX_AIU_AMCLK_MEASURE
+                        &clock GCLK_IDX_AIU_AIFIFO2
+                        &clock GCLK_IDX_AIU_AUD_MIXER
+                        &clock GCLK_IDX_AIU_MIXER_REG
+                        &clock GCLK_IDX_AIU_ADC
+                        &clock GCLK_IDX_AIU_TOP_LEVEL
+                        &clock GCLK_IDX_AIU_AOCLK
+                        &clock GCLK_IDX_AUD_IN>;
+                reset-names = "top_glue",
 			"aud_buf",
 			"i2s_out",
 			"amclk_measure",
@@ -882,52 +880,43 @@
 			"top_level",
 			"aoclk",
 			"aud_in";
-		clocks = <&clock CLK_MPLL2>,
-			<&clock CLK_AMCLK>;
-		clock-names = "mpll2", "mclk";
-		compatible = "amlogic, aml-i2s-dai";
-	};
-	spdif_dai: SPDIF {
-		#sound-dai-cells = <0>;
-		compatible = "amlogic, aml-spdif-dai";
-		resets = <
-			&clock GCLK_IDX_AIU_IEC958
-			&clock GCLK_IDX_AIU_ICE958_AMCLK
-		>;
-		reset-names =
-			"iec958",
-			"iec958_amclk";
-		clocks = <&clock CLK_MPLL1>,
-			<&clock CLK_I958>,
-			<&clock CLK_AMCLK>,
-			<&clock CLK_SPDIF>,
-			<&clock CLK_81>;
-		clock-names = "mpll1", "i958", "mclk", "spdif", "clk_81";
-	};
-	pcm_dai: PCM {
-		#sound-dai-cells = <0>;
-		compatible = "amlogic, aml-pcm-dai";
-		pinctrl-names = "aml_audio_btpcm";
-		pinctrl-0 = <&audio_btpcm_pins>;
 		clocks = <&clock CLK_MPLL0>,
-			<&clock CLK_PCM_MCLK>,
-			<&clock CLK_PCM_SCLK>;
-		clock-names = "mpll0", "pcm_mclk", "pcm_sclk";
-		pcm_mode = <1>;	/* 0=slave mode, 1=master mode */
+			<&clock CLK_AMCLK>;
+                clock-names = "mpll0", "mclk";
 	};
 	i2s_plat: i2s_platform {
 		compatible = "amlogic, aml-i2s";
-		interrupts = <0 29 1>;
 	};
-	pcm_plat: pcm_platform {
-		compatible = "amlogic, aml-pcm";
+	spdif_dai: SPDIF {
+		compatible = "amlogic, aml-spdif-dai";
+		#sound-dai-cells = <0>;
+                resets = <&clock GCLK_IDX_AIU_IEC958
+                        &clock GCLK_IDX_AIU_ICE958_AMCLK>;
+                reset-names = "iec958",
+                        "iec958_amclk";
+                clocks = <&clock CLK_MPLL1>,
+                       <&clock CLK_I958>,
+                       <&clock CLK_AMCLK>,
+                       <&clock CLK_SPDIF>;
+                clock-names = "mpll1", "i958", "mclk", "spdif";
 	};
+
 	spdif_codec: spdif_codec{
 		#sound-dai-cells = <0>;
 		compatible = "amlogic, aml-spdif-codec";
 		pinctrl-names = "aml_audio_spdif";
 		pinctrl-0 = <&audio_spdif_pins>;
 	};
+
+	pcm_dai: PCM {
+		#sound-dai-cells = <0>;
+		compatible = "amlogic, aml-pcm-dai";
+	};
+
+	pcm_plat: pcm_platform {
+		compatible = "amlogic, aml-pcm";
+	};
+
 	pcm_codec: pcm_codec{
 		#sound-dai-cells = <0>;
 		compatible = "amlogic, pcm2BT-codec";
@@ -938,49 +927,54 @@
 	dummy_codec:dummy{
 		#sound-dai-cells = <0>;
 		compatible = "amlogic, aml_dummy_codec";
-		status = "disable";
-	};
-	amlogic_codec:t9015{
-		#sound-dai-cells = <0>;
-		compatible = "amlogic, aml_codec_T9015";
-		reg = <0x0 0xc8832000 0x0 0x14>;
 		status = "okay";
 	};
-	aml_m8_snd {
-		compatible = "aml, aml_snd_m8";
+
+	pcm5102_codec:pcm5102{
+		#sound-dai-cells = <0>;
+		compatible = "hardkernel, pcm5102";
+		status = "okay";
+	};
+
+	odroid_hdmi {
+		compatible = "sound_card, odroid_hdmi";
 		status = "okay";
 		aml-sound-card,format = "i2s";
-		aml_sound_card,name = "AML-M8AUDIO";
-		aml,audio-routing =
-				"Ext Spk","LOUTL",
-				"Ext Spk","LOUTR";
-
-		mute_inv;
-		sleep_time = <100>;
-		hp_disable;
-		hp_paraments = <800 300 0 5 1>;
-		pinctrl-names = "aml_snd_m8";
-		cpu_list = <&cpudai0 &cpudai1 &cpudai2>;
-		codec_list = <&codec0 &codec1 &codec2>;
-		plat_list = <&i2s_plat &i2s_plat &pcm_plat>;
+		aml_sound_card,name = "ODROID-HDMI";
+		cpu_list = <&i2sdai0>;
+		codec_list = <&dit0>;
+		plat_list = <&i2s_plat>;
+		i2sdai0: i2sdai0 {
+			sound-dai = <&i2s_dai>;
+		};
+		dit0: dit0 {
+			sound-dai = <&spdif_codec>;
+		};
+	};
+	odroid_dac {
+		compatible = "sound_card, odroid_dac";
+		status = "okay";
+		aml-sound-card,format = "i2s";
+		aml_sound_card,name = "ODROID-DAC";
+		pinctrl-names = "aml_snd_i2s";
+		pinctrl-0 = <&audio_pins>;
+		cpu_list = <&cpudai0>;
+		codec_list = <&codec0>;
+		plat_list = <&i2s_plat>;
 		cpudai0: cpudai0 {
 			sound-dai = <&i2s_dai>;
 		};
-		cpudai1: cpudai1 {
-			sound-dai = <&spdif_dai>;
-		};
-		cpudai2: cpudai2 {
-			sound-dai = <&pcm_dai>;
-		};
 		codec0: codec0 {
-			sound-dai = <&amlogic_codec>;
+			sound-dai = <&pcm5102_codec>;
 		};
-		codec1: codec1 {
-			sound-dai = <&spdif_codec>;
-		};
-		codec2: codec2 {
-			sound-dai = <&pcm_codec>;
-		};
+	};
+
+	odroid_dac2{
+		compatible = "sound_card, odroid_dac2";
+		aml,sound_card = "ODROID-DAC2";
+		pinctrl-names = "odroid_i2s";
+		pinctrl-0 = <&audio_pins>;
+		status = "okay";
 	};
 	/* END OF AUDIO board specific */
 
@@ -1134,17 +1128,20 @@
 };
 
 &pinmux {
-	audio_pins:audio_pin{
-		amlogic,setmask=<6 0x7800000>;
-		amlogic,clrmask=<6 0x07e0000>;
-		amlogic,pins = "GPIOH_6","GPIOH_7","GPIOH_8","GPIOH_9";
-	};
+        audio_pins:audio_pin{
+                amlogic,setmask = <AO 0x78000000>;
+                amlogic,clrmask = <AO 0x40000>;
+                amlogic,pins = "GPIOAO_8",
+                        "GPIOAO_9",
+                        "GPIOAO_10",
+                        "GPIOAO_11";
+        };
 
-	audio_spdif_pins:audio_pin1{
-		amlogic,setmask=<6 0x10000000>;		/*spdif_out*/
-		amlogic,clrmask=<6 0x8000000>;
-		amlogic,pins ="GPIOH_4";		  /*spdif_out*/
-	};
+        audio_spdif_pins:audio_pin1{
+                amlogic,setmask = <AO 0x10000>;
+                amlogic,clrmask = <AO 0x40000>;
+                amlogic,pins = "GPIOAO_6";
+        };
 
 	audio_btpcm_pins:audio_btpcm_pins{
 		/* BT PCM PINMUX SETTING*/
@@ -1156,9 +1153,7 @@
 &efuse {
 	status = "okay";
 };
-&audio_data{
-	status = "okay";
-};
+
 &defendkey {
 	status = "okay";
 };
