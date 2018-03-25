@@ -4,7 +4,7 @@ menu "Amlogic Audio Interface V2"
 
 config	AMAUDIO2
 	bool "Amlogic Audio Interface V2"
-	default y
+    	default n
 	help
 		"Amlogic Audio Interface V2, The interface different from amaudio"
 

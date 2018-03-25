@@ -14,7 +14,6 @@
  * more details.
  *
  */
-#define pr_fmt(fmt) "amaudio: " fmt
 
 #include <linux/version.h>
 #include <linux/module.h>
@@ -287,9 +286,9 @@ static ssize_t output_enable_show(struct class *class,
 	unsigned iec958_size =
 	    aml_read_cbus(AIU_MEM_IEC958_END_PTR) -
 	    aml_read_cbus(AIU_MEM_IEC958_START_PTR);
-	/* normal spdif buffer MUST NOT less than 512 bytes */
+	iec958_size += 64;
 	return sprintf(buf, "%d\n", (if_audio_out_enable() ||
-			(if_958_audio_out_enable() && iec958_size > 512)));
+			 (if_958_audio_out_enable() && iec958_size > 128)));
 }
 
 
@@ -326,7 +325,7 @@ static ssize_t record_type_show(struct class *class,
 	}
 }
 
-static int dtsm6_stream_type = -1;
+static unsigned int dtsm6_stream_type;
 static unsigned int dtsm6_apre_cnt;
 static unsigned int dtsm6_apre_sel;
 static unsigned int dtsm6_apre_assets_sel;
@@ -369,7 +368,7 @@ static ssize_t store_debug(struct class *class, struct class_attribute *attr,
 		if (kstrtoint(buf + 19, 10, &dtsm6_mulasset_hint))
 			return -EINVAL;
 	} else if (strncmp(buf, "dtsm6_clear_info", 16) == 0) {
-		dtsm6_stream_type = -1;
+		dtsm6_stream_type = 0;
 		dtsm6_apre_cnt = 0;
 		dtsm6_apre_sel = 0;
 		dtsm6_apre_assets_sel = 0;
@@ -503,7 +502,7 @@ static struct class_attribute amaudio_attrs[] = {
 };
 
 static struct class amaudio_class = {
-	.name = AMAUDIO_CLASS_NAME,
+	.name = "amaudio",
 	.class_attrs = amaudio_attrs,
 };
 
@@ -549,7 +548,7 @@ static int __init amaudio_init(void)
 
 	amaudio_dev =
 	    device_create(&amaudio_class, NULL, MKDEV(AMAUDIO_MAJOR, 10), NULL,
-			  AMAUDIO_CLASS_NAME);
+			  "amaudio0");
 	if (IS_ERR(amaudio_dev)) {
 		pr_err("amaudio creat device fail.\n");
 		goto err4;
