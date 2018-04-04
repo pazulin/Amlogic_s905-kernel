@@ -47,6 +47,8 @@
 #include <linux/amlogic/vpu.h>
 #endif
 
+#include <linux/amlogic/hdmi_tx/hdmi_tx_module.h>
+
 /* Local Headers */
 #include "tvregs.h"
 #include "tv_vout.h"
