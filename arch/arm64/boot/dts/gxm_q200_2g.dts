@@ -963,20 +963,21 @@
 
 	/* AUDIO MESON8 DEVICES */
 	i2s_dai: I2S {
-                compatible = "amlogic, aml-i2s-dai";
-                #sound-dai-cells = <0>;
-                resets = <&clock GCLK_IDX_AIU_AI_TOP_GLUE
-                        &clock GCLK_IDX_AUD_BUF_ABD
-                        &clock GCLK_IDX_AIU_I2S_OUT
-                        &clock GCLK_IDX_AIU_AMCLK_MEASURE
-                        &clock GCLK_IDX_AIU_AIFIFO2
-                        &clock GCLK_IDX_AIU_AUD_MIXER
-                        &clock GCLK_IDX_AIU_MIXER_REG
-                        &clock GCLK_IDX_AIU_ADC
-                        &clock GCLK_IDX_AIU_TOP_LEVEL
-                        &clock GCLK_IDX_AIU_AOCLK
-                        &clock GCLK_IDX_AUD_IN>;
-                reset-names = "top_glue",
+		compatible = "amlogic, aml-i2s-dai";
+		#sound-dai-cells = <0>;
+		resets = <&clock GCLK_IDX_AIU_AI_TOP_GLUE
+			&clock GCLK_IDX_AUD_BUF_ABD
+			&clock GCLK_IDX_AIU_I2S_OUT
+			&clock GCLK_IDX_AIU_AMCLK_MEASURE
+			&clock GCLK_IDX_AIU_AIFIFO2
+			&clock GCLK_IDX_AIU_AUD_MIXER
+			&clock GCLK_IDX_AIU_MIXER_REG
+			&clock GCLK_IDX_AIU_ADC
+			&clock GCLK_IDX_AIU_TOP_LEVEL
+			&clock GCLK_IDX_AIU_AOCLK
+			&clock GCLK_IDX_AUD_IN>;
+		reset-names =
+			"top_glue",
 			"aud_buf",
 			"i2s_out",
 			"amclk_measure",
@@ -989,38 +990,33 @@
 			"aud_in";
 		clocks = <&clock CLK_MPLL0>,
 			<&clock CLK_AMCLK>;
-                clock-names = "mpll0",
-                        "mclk";
+		clock-names = "mpll0", "mclk";
 	};
-
 	i2s_plat: i2s_platform {
 		compatible = "amlogic, aml-i2s";
+		interrupts = <0 29 1>;
 	};
-
 	spdif_dai: SPDIF {
 		compatible = "amlogic, aml-spdif-dai";
 		#sound-dai-cells = <0>;
-                resets = <&clock GCLK_IDX_AIU_IEC958
-                        &clock GCLK_IDX_AIU_ICE958_AMCLK>;
-                reset-names = "iec958",
-                        "iec958_amclk";
-                clocks = <&clock CLK_MPLL1>,
-                       <&clock CLK_I958>,
-                       <&clock CLK_AMCLK>,
-                       <&clock CLK_SPDIF>;
-                clock-names = "mpll1",
-                        "i958",
-                        "mclk",
-                        "spdif";
+		resets = <&clock GCLK_IDX_AIU_IEC958
+			&clock GCLK_IDX_AIU_ICE958_AMCLK>;
+		reset-names =
+			"iec958",
+			"iec958_amclk";
+			clocks = <&clock CLK_MPLL1>,
+			<&clock CLK_I958>,
+			<&clock CLK_AMCLK>,
+			<&clock CLK_SPDIF>,
+			<&clock CLK_81>;
+		clock-names = "mpll1", "i958", "mclk", "spdif", "clk_81";
 	};
-
 	spdif_codec: spdif_codec{
 		#sound-dai-cells = <0>;
 		compatible = "amlogic, aml-spdif-codec";
 		pinctrl-names = "aml_audio_spdif";
 		pinctrl-0 = <&audio_spdif_pins>;
 	};
-
 	pcm_dai: PCM {
 		#sound-dai-cells = <0>;
 		compatible = "amlogic, aml-pcm-dai";
@@ -1053,7 +1049,7 @@
 		compatible = "sound_card, odroid_hdmi";
 		status = "okay";
 		aml-sound-card,format = "i2s";
-		aml_sound_card,name = "ODROID-HDMI";
+		aml_sound_card,name = "AML-M8AUDIO";
 		cpu_list = <&i2sdai0>;
 		codec_list = <&dit0>;
 		plat_list = <&i2s_plat>;

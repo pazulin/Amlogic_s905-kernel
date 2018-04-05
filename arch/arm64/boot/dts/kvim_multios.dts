@@ -856,9 +856,9 @@
 
 	/* AUDIO MESON8 DEVICES */
 	i2s_dai: I2S {
+		compatible = "amlogic, aml-i2s-dai";
 		#sound-dai-cells = <0>;
-		resets = <
-			&clock GCLK_IDX_AIU_AI_TOP_GLUE
+		resets = <&clock GCLK_IDX_AIU_AI_TOP_GLUE
 			&clock GCLK_IDX_AUD_BUF_ABD
 			&clock GCLK_IDX_AIU_I2S_OUT
 			&clock GCLK_IDX_AIU_AMCLK_MEASURE
@@ -868,8 +868,7 @@
 			&clock GCLK_IDX_AIU_ADC
 			&clock GCLK_IDX_AIU_TOP_LEVEL
 			&clock GCLK_IDX_AIU_AOCLK
-			&clock GCLK_IDX_AUD_IN
-		>;
+			&clock GCLK_IDX_AUD_IN>;
 		reset-names =
 			"top_glue",
 			"aud_buf",
@@ -885,24 +884,31 @@
 		clocks = <&clock CLK_MPLL2>,
 			<&clock CLK_AMCLK>;
 		clock-names = "mpll2", "mclk";
-		compatible = "amlogic, aml-i2s-dai";
+	};
+	i2s_plat: i2s_platform {
+		compatible = "amlogic, aml-i2s";
+		interrupts = <0 29 1>;
 	};
 	spdif_dai: SPDIF {
-		#sound-dai-cells = <0>;
 		compatible = "amlogic, aml-spdif-dai";
-		resets = <
-			&clock GCLK_IDX_AIU_IEC958
-			&clock GCLK_IDX_AIU_ICE958_AMCLK
-		>;
+		#sound-dai-cells = <0>;
+		resets = <&clock GCLK_IDX_AIU_IEC958
+			&clock GCLK_IDX_AIU_ICE958_AMCLK>;
 		reset-names =
 			"iec958",
 			"iec958_amclk";
-		clocks = <&clock CLK_MPLL1>,
+			clocks = <&clock CLK_MPLL1>,
 			<&clock CLK_I958>,
 			<&clock CLK_AMCLK>,
 			<&clock CLK_SPDIF>,
 			<&clock CLK_81>;
 		clock-names = "mpll1", "i958", "mclk", "spdif", "clk_81";
+	};
+	spdif_codec: spdif_codec{
+		#sound-dai-cells = <0>;
+		compatible = "amlogic, aml-spdif-codec";
+		pinctrl-names = "aml_audio_spdif";
+		pinctrl-0 = <&audio_spdif_pins>;
 	};
 	pcm_dai: PCM {
 		#sound-dai-cells = <0>;
@@ -915,19 +921,11 @@
 		clock-names = "mpll0", "pcm_mclk", "pcm_sclk";
 		pcm_mode = <1>;	/* 0=slave mode, 1=master mode */
 	};
-	i2s_plat: i2s_platform {
-		compatible = "amlogic, aml-i2s";
-		interrupts = <0 29 1>;
-	};
+
 	pcm_plat: pcm_platform {
 		compatible = "amlogic, aml-pcm";
 	};
-	spdif_codec: spdif_codec{
-		#sound-dai-cells = <0>;
-		compatible = "amlogic, aml-spdif-codec";
-		pinctrl-names = "aml_audio_spdif";
-		pinctrl-0 = <&audio_spdif_pins>;
-	};
+
 	pcm_codec: pcm_codec{
 		#sound-dai-cells = <0>;
 		compatible = "amlogic, pcm2BT-codec";
