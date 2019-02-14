@@ -19,6 +19,7 @@
 	Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
 */
 
+#include <linux/bitops.h>
 #include "stb0899_drv.h"
 #include "stb0899_priv.h"
 #include "stb0899_reg.h"
@@ -924,8 +925,7 @@ static void stb0899_dvbs2_set_btr_loopbw(struct stb0899_state *state)
 		wn = (4 * zeta * zeta) + 1000000;
 		wn = (2 * (loopbw_percent * 1000) * 40 * zeta) /wn;  /*wn =wn 10^-8*/
 
-		k_indirect = (wn * wn) / K;
-		k_indirect = k_indirect;	  /*kindirect = kindirect 10^-6*/
+		k_indirect = (wn * wn) / K;	/*kindirect = kindirect 10^-6*/
 		k_direct   = (2 * wn * zeta) / K;	/*kDirect = kDirect 10^-2*/
 		k_direct  *= 100;
 
@@ -1490,9 +1490,7 @@ enum stb0899_status stb0899_dvbs2_algo(struct stb0899_state *state)
 		/* Store signal parameters	*/
 		offsetfreq = STB0899_READ_S2REG(STB0899_S2DEMOD, CRL_FREQ);
 
-		/* sign extend 30 bit value before using it in calculations */
-		if (offsetfreq & (1 << 29))
-			offsetfreq |= -1 << 30;
+		offsetfreq = sign_extend32(offsetfreq, 29);
 
 		offsetfreq = offsetfreq / ((1 << 30) / 1000);
 		offsetfreq *= (internal->master_clk / 1000000);

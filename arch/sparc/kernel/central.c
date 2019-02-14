@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /* central.c: Central FHC driver for Sunfire/Starfire/Wildfire.
  *
  * Copyright (C) 1997, 1999, 2008 David S. Miller (davem@davemloft.net)
@@ -152,7 +153,6 @@ static struct platform_driver clock_board_driver = {
 	.probe		= clock_board_probe,
 	.driver = {
 		.name = "clock_board",
-		.owner = THIS_MODULE,
 		.of_match_table = clock_board_match,
 	},
 };
@@ -257,7 +257,6 @@ static struct platform_driver fhc_driver = {
 	.probe		= fhc_probe,
 	.driver = {
 		.name = "fhc",
-		.owner = THIS_MODULE,
 		.of_match_table = fhc_match,
 	},
 };

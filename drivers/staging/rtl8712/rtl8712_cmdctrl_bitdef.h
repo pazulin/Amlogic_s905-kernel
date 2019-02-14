@@ -21,7 +21,8 @@
 #define __RTL8712_CMDCTRL_BITDEF_H__
 
 /*
- * 2. Command Control Registers	 (Offset: 0x0040 - 0x004F)*/
+ * 2. Command Control Registers	 (Offset: 0x0040 - 0x004F)
+ */
 /*--------------------------------------------------------------------------*/
 /*       8192S (CMD) command register bits	(Offset 0x40, 16 bits)*/
 /*--------------------------------------------------------------------------*/
@@ -62,7 +63,7 @@
 #define _IMEM_CHK_RPT			BIT(1)
 #define _IMEM_CODE_DONE			BIT(0)
 
-#define	_TXDMA_INIT_VALUE	(_IMEM_CHK_RPT|_EMEM_CHK_RPT)
+#define	_TXDMA_INIT_VALUE	(_IMEM_CHK_RPT | _EMEM_CHK_RPT)
 
 /*RCR*/
 #define	_ENMBID				BIT(27)

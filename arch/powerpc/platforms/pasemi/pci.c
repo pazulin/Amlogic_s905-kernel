@@ -31,6 +31,8 @@
 
 #include <asm/ppc-pci.h>
 
+#include "pasemi.h"
+
 #define PA_PXP_CFA(bus, devfn, off) (((bus) << 20) | ((devfn) << 12) | (off))
 
 static inline int pa_pxp_offset_valid(u8 bus, u8 devfn, int offset)
@@ -191,7 +193,7 @@ static int __init pas_add_bridge(struct device_node *dev)
 {
 	struct pci_controller *hose;
 
-	pr_debug("Adding PCI host bridge %s\n", dev->full_name);
+	pr_debug("Adding PCI host bridge %pOF\n", dev);
 
 	hose = pcibios_alloc_controller(dev);
 	if (!hose)
@@ -199,10 +201,11 @@ static int __init pas_add_bridge(struct device_node *dev)
 
 	hose->first_busno = 0;
 	hose->last_busno = 0xff;
+	hose->controller_ops = pasemi_pci_controller_ops;
 
 	setup_pa_pxp(hose);
 
-	printk(KERN_INFO "Found PA-PXP PCI host bridge.\n");
+	pr_info("Found PA-PXP PCI host bridge.\n");
 
 	/* Interpret the "ranges" property */
 	pci_process_bridge_OF_ranges(hose, dev, 1);
@@ -213,22 +216,21 @@ static int __init pas_add_bridge(struct device_node *dev)
 void __init pas_pci_init(void)
 {
 	struct device_node *np, *root;
+	int res;
 
 	root = of_find_node_by_path("/");
 	if (!root) {
-		printk(KERN_CRIT "pas_pci_init: can't find root "
-			"of device tree\n");
+		pr_crit("pas_pci_init: can't find root of device tree\n");
 		return;
 	}
 
-	for (np = NULL; (np = of_get_next_child(root, np)) != NULL;)
-		if (np->name && !strcmp(np->name, "pxp") && !pas_add_bridge(np))
-			of_node_get(np);
+	pci_set_flags(PCI_SCAN_ALL_PCIE_DEVS);
 
-	of_node_put(root);
-
-	/* Setup the linkage between OF nodes and PHBs */
-	pci_devs_phb_init();
+	np = of_find_compatible_node(root, NULL, "pasemi,rootbus");
+	if (np) {
+		res = pas_add_bridge(np);
+		of_node_put(np);
+	}
 }
 
 void __iomem *pasemi_pci_getcfgaddr(struct pci_dev *dev, int offset)
@@ -239,3 +241,5 @@ void __iomem *pasemi_pci_getcfgaddr(struct pci_dev *dev, int offset)
 
 	return (void __iomem *)pa_pxp_cfg_addr(hose, dev->bus->number, dev->devfn, offset);
 }
+
+struct pci_controller_ops pasemi_pci_controller_ops;

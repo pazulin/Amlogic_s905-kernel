@@ -1,5 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (C) 2005-2015 Junjiro R. Okajima
+ * Copyright (C) 2005-2018 Junjiro R. Okajima
  *
  * This program, aufs is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -19,10 +20,37 @@
  * sub-routines for VFS
  */
 
+#include <linux/mnt_namespace.h>
 #include <linux/namei.h>
+#include <linux/nsproxy.h>
 #include <linux/security.h>
 #include <linux/splice.h>
 #include "aufs.h"
+
+#ifdef CONFIG_AUFS_BR_FUSE
+int vfsub_test_mntns(struct vfsmount *mnt, struct super_block *h_sb)
+{
+	if (!au_test_fuse(h_sb) || !au_userns)
+		return 0;
+
+	return is_current_mnt_ns(mnt) ? 0 : -EACCES;
+}
+#endif
+
+int vfsub_sync_filesystem(struct super_block *h_sb, int wait)
+{
+	int err;
+
+	lockdep_off();
+	down_read(&h_sb->s_umount);
+	err = __sync_filesystem(h_sb, wait);
+	up_read(&h_sb->s_umount);
+	lockdep_on();
+
+	return err;
+}
+
+/* ---------------------------------------------------------------------- */
 
 int vfsub_update_h_iattr(struct path *h_path, int *did)
 {
@@ -39,7 +67,7 @@ int vfsub_update_h_iattr(struct path *h_path, int *did)
 	h_sb = h_path->dentry->d_sb;
 	*did = (!au_test_fs_remote(h_sb) && au_test_fs_refresh_iattr(h_sb));
 	if (*did)
-		err = vfs_getattr(h_path, &st);
+		err = vfsub_getattr(h_path, &st);
 
 	return err;
 }
@@ -54,7 +82,7 @@ struct file *vfsub_dentry_open(struct path *path, int flags)
 			   current_cred());
 	if (!IS_ERR_OR_NULL(file)
 	    && (file->f_mode & (FMODE_READ | FMODE_WRITE)) == FMODE_READ)
-		i_readcount_inc(path->dentry->d_inode);
+		i_readcount_inc(d_inode(path->dentry));
 
 	return file;
 }
@@ -83,9 +111,10 @@ out:
  * cf. linux/fs/namei.c:do_last(), lookup_open() and atomic_open().
  */
 int vfsub_atomic_open(struct inode *dir, struct dentry *dentry,
-		      struct vfsub_aopen_args *args, struct au_branch *br)
+		      struct vfsub_aopen_args *args)
 {
 	int err;
+	struct au_branch *br = args->br;
 	struct file *file = args->file;
 	/* copied from linux/fs/namei.c:atomic_open() */
 	struct dentry *const DENTRY_NOT_SET = (void *)-1UL;
@@ -97,31 +126,37 @@ int vfsub_atomic_open(struct inode *dir, struct dentry *dentry,
 	if (unlikely(err))
 		goto out;
 
-	args->file->f_path.dentry = DENTRY_NOT_SET;
-	args->file->f_path.mnt = au_br_mnt(br);
+	au_lcnt_inc(&br->br_nfiles);
+	file->f_path.dentry = DENTRY_NOT_SET;
+	file->f_path.mnt = au_br_mnt(br);
+	AuDbg("%ps\n", dir->i_op->atomic_open);
 	err = dir->i_op->atomic_open(dir, dentry, file, args->open_flag,
-				     args->create_mode, args->opened);
-	if (err >= 0) {
-		/* some filesystems don't set FILE_CREATED while succeeded? */
-		if (*args->opened & FILE_CREATED)
-			fsnotify_create(dir, dentry);
-	} else
+				     args->create_mode);
+	if (unlikely(err < 0)) {
+		au_lcnt_dec(&br->br_nfiles);
 		goto out;
-
-
-	if (!err) {
-		/* todo: call VFS:may_open() here */
-		err = open_check_o_direct(file);
-		/* todo: ima_file_check() too? */
-		if (!err && (args->open_flag & __FMODE_EXEC))
-			err = deny_write_access(file);
-		if (unlikely(err))
-			/* note that the file is created and still opened */
-			goto out;
 	}
 
-	atomic_inc(&br->br_count);
-	fsnotify_open(file);
+	/* temporary workaround for nfsv4 branch */
+	if (au_test_nfs(dir->i_sb))
+		nfs_mark_for_revalidate(dir);
+
+	if (file->f_mode & FMODE_CREATED)
+		fsnotify_create(dir, dentry);
+	if (!(file->f_mode & FMODE_OPENED)) {
+		au_lcnt_dec(&br->br_nfiles);
+		goto out;
+	}
+
+	/* todo: call VFS:may_open() here */
+	/* todo: ima_file_check() too? */
+	if (!err && (args->open_flag & __FMODE_EXEC))
+		err = deny_write_access(file);
+	if (!err)
+		fsnotify_open(file);
+	else
+		au_lcnt_dec(&br->br_nfiles);
+	/* note that the file is created and still opened */
 
 out:
 	return err;
@@ -132,9 +167,27 @@ int vfsub_kern_path(const char *name, unsigned int flags, struct path *path)
 	int err;
 
 	err = kern_path(name, flags, path);
-	if (!err && path->dentry->d_inode)
+	if (!err && d_is_positive(path->dentry))
 		vfsub_update_h_iattr(path, /*did*/NULL); /*ignore*/
 	return err;
+}
+
+struct dentry *vfsub_lookup_one_len_unlocked(const char *name,
+					     struct dentry *parent, int len)
+{
+	struct path path = {
+		.mnt = NULL
+	};
+
+	path.dentry = lookup_one_len_unlocked(name, parent, len);
+	if (IS_ERR(path.dentry))
+		goto out;
+	if (d_is_positive(path.dentry))
+		vfsub_update_h_iattr(&path, /*did*/NULL); /*ignore*/
+
+out:
+	AuTraceErrPtr(path.dentry);
+	return path.dentry;
 }
 
 struct dentry *vfsub_lookup_one_len(const char *name, struct dentry *parent,
@@ -145,12 +198,12 @@ struct dentry *vfsub_lookup_one_len(const char *name, struct dentry *parent,
 	};
 
 	/* VFS checks it too, but by WARN_ON_ONCE() */
-	IMustLock(parent->d_inode);
+	IMustLock(d_inode(parent));
 
 	path.dentry = lookup_one_len(name, parent, len);
 	if (IS_ERR(path.dentry))
 		goto out;
-	if (path.dentry->d_inode)
+	if (d_is_positive(path.dentry))
 		vfsub_update_h_iattr(&path, /*did*/NULL); /*ignore*/
 
 out:
@@ -311,7 +364,7 @@ int vfsub_link(struct dentry *src_dentry, struct inode *dir, struct path *path,
 
 	IMustLock(dir);
 
-	err = au_test_nlink(src_dentry->d_inode);
+	err = au_test_nlink(d_inode(src_dentry));
 	if (unlikely(err))
 		return err;
 
@@ -522,7 +575,7 @@ int vfsub_flush(struct file *file, fl_owner_t id)
 
 	err = 0;
 	if (file->f_op->flush) {
-		if (!au_test_nfs(file->f_dentry->d_sb))
+		if (!au_test_nfs(file->f_path.dentry->d_sb))
 			err = file->f_op->flush(file, id);
 		else {
 			lockdep_off();
@@ -540,13 +593,14 @@ int vfsub_iterate_dir(struct file *file, struct dir_context *ctx)
 {
 	int err;
 
-	AuDbg("%pD, ctx{%pf, %llu}\n", file, ctx->actor, ctx->pos);
+	AuDbg("%pD, ctx{%ps, %llu}\n", file, ctx->actor, ctx->pos);
 
 	lockdep_off();
 	err = iterate_dir(file, ctx);
 	lockdep_on();
 	if (err >= 0)
 		vfsub_update_h_iattr(&file->f_path, /*did*/NULL); /*ignore*/
+
 	return err;
 }
 
@@ -609,7 +663,7 @@ int vfsub_trunc(struct path *h_path, loff_t length, unsigned int attr,
 		goto out;
 	}
 
-	h_inode = h_path->dentry->d_inode;
+	h_inode = d_inode(h_path->dentry);
 	h_sb = h_inode->i_sb;
 	lockdep_off();
 	sb_start_write(h_sb);
@@ -718,7 +772,7 @@ static void call_notify_change(void *args)
 	struct notify_change_args *a = args;
 	struct inode *h_inode;
 
-	h_inode = a->path->dentry->d_inode;
+	h_inode = d_inode(a->path->dentry);
 	IMustLock(h_inode);
 
 	*a->errp = -EPERM;
@@ -794,9 +848,11 @@ static void call_unlink(void *args)
 
 	if (!stop_sillyrename)
 		dget(d);
-	h_inode = d->d_inode;
-	if (h_inode)
+	h_inode = NULL;
+	if (d_is_positive(d)) {
+		h_inode = d_inode(d);
 		ihold(h_inode);
+	}
 
 	lockdep_off();
 	*a->errp = vfs_unlink(a->dir, d, a->delegated_inode);

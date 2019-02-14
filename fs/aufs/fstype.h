@@ -1,5 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Copyright (C) 2005-2015 Junjiro R. Okajima
+ * Copyright (C) 2005-2018 Junjiro R. Okajima
  *
  * This program, aufs is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -26,8 +27,8 @@
 
 #include <linux/fs.h>
 #include <linux/magic.h>
-#include <linux/romfs_fs.h>
 #include <linux/nfs_fs.h>
+#include <linux/romfs_fs.h>
 
 static inline int au_test_aufs(struct super_block *sb)
 {
@@ -41,7 +42,7 @@ static inline const char *au_sbtype(struct super_block *sb)
 
 static inline int au_test_iso9660(struct super_block *sb __maybe_unused)
 {
-#if defined(CONFIG_ISO9660_FS) || defined(CONFIG_ISO9660_FS_MODULE)
+#if IS_ENABLED(CONFIG_ISO9660_FS)
 	return sb->s_magic == ISOFS_SUPER_MAGIC;
 #else
 	return 0;
@@ -50,7 +51,7 @@ static inline int au_test_iso9660(struct super_block *sb __maybe_unused)
 
 static inline int au_test_romfs(struct super_block *sb __maybe_unused)
 {
-#if defined(CONFIG_ROMFS_FS) || defined(CONFIG_ROMFS_FS_MODULE)
+#if IS_ENABLED(CONFIG_ROMFS_FS)
 	return sb->s_magic == ROMFS_MAGIC;
 #else
 	return 0;
@@ -59,7 +60,7 @@ static inline int au_test_romfs(struct super_block *sb __maybe_unused)
 
 static inline int au_test_cramfs(struct super_block *sb __maybe_unused)
 {
-#if defined(CONFIG_CRAMFS) || defined(CONFIG_CRAMFS_MODULE)
+#if IS_ENABLED(CONFIG_CRAMFS)
 	return sb->s_magic == CRAMFS_MAGIC;
 #endif
 	return 0;
@@ -67,7 +68,7 @@ static inline int au_test_cramfs(struct super_block *sb __maybe_unused)
 
 static inline int au_test_nfs(struct super_block *sb __maybe_unused)
 {
-#if defined(CONFIG_NFS_FS) || defined(CONFIG_NFS_FS_MODULE)
+#if IS_ENABLED(CONFIG_NFS_FS)
 	return sb->s_magic == NFS_SUPER_MAGIC;
 #else
 	return 0;
@@ -76,7 +77,7 @@ static inline int au_test_nfs(struct super_block *sb __maybe_unused)
 
 static inline int au_test_fuse(struct super_block *sb __maybe_unused)
 {
-#if defined(CONFIG_FUSE_FS) || defined(CONFIG_FUSE_FS_MODULE)
+#if IS_ENABLED(CONFIG_FUSE_FS)
 	return sb->s_magic == FUSE_SUPER_MAGIC;
 #else
 	return 0;
@@ -85,7 +86,7 @@ static inline int au_test_fuse(struct super_block *sb __maybe_unused)
 
 static inline int au_test_xfs(struct super_block *sb __maybe_unused)
 {
-#if defined(CONFIG_XFS_FS) || defined(CONFIG_XFS_FS_MODULE)
+#if IS_ENABLED(CONFIG_XFS_FS)
 	return sb->s_magic == XFS_SB_MAGIC;
 #else
 	return 0;
@@ -103,7 +104,7 @@ static inline int au_test_tmpfs(struct super_block *sb __maybe_unused)
 
 static inline int au_test_ecryptfs(struct super_block *sb __maybe_unused)
 {
-#if defined(CONFIG_ECRYPT_FS) || defined(CONFIG_ECRYPT_FS_MODULE)
+#if IS_ENABLED(CONFIG_ECRYPT_FS)
 	return !strcmp(au_sbtype(sb), "ecryptfs");
 #else
 	return 0;
@@ -117,7 +118,7 @@ static inline int au_test_ramfs(struct super_block *sb)
 
 static inline int au_test_ubifs(struct super_block *sb __maybe_unused)
 {
-#if defined(CONFIG_UBIFS_FS) || defined(CONFIG_UBIFS_FS_MODULE)
+#if IS_ENABLED(CONFIG_UBIFS_FS)
 	return sb->s_magic == UBIFS_SUPER_MAGIC;
 #else
 	return 0;
@@ -144,7 +145,7 @@ static inline int au_test_sysfs(struct super_block *sb __maybe_unused)
 
 static inline int au_test_configfs(struct super_block *sb __maybe_unused)
 {
-#if defined(CONFIG_CONFIGFS_FS) || defined(CONFIG_CONFIGFS_FS_MODULE)
+#if IS_ENABLED(CONFIG_CONFIGFS_FS)
 	return sb->s_magic == CONFIGFS_MAGIC;
 #else
 	return 0;
@@ -153,7 +154,7 @@ static inline int au_test_configfs(struct super_block *sb __maybe_unused)
 
 static inline int au_test_minix(struct super_block *sb __maybe_unused)
 {
-#if defined(CONFIG_MINIX_FS) || defined(CONFIG_MINIX_FS_MODULE)
+#if IS_ENABLED(CONFIG_MINIX_FS)
 	return sb->s_magic == MINIX3_SUPER_MAGIC
 		|| sb->s_magic == MINIX2_SUPER_MAGIC
 		|| sb->s_magic == MINIX2_SUPER_MAGIC2
@@ -166,7 +167,7 @@ static inline int au_test_minix(struct super_block *sb __maybe_unused)
 
 static inline int au_test_fat(struct super_block *sb __maybe_unused)
 {
-#if defined(CONFIG_FAT_FS) || defined(CONFIG_FAT_FS_MODULE)
+#if IS_ENABLED(CONFIG_FAT_FS)
 	return sb->s_magic == MSDOS_SUPER_MAGIC;
 #else
 	return 0;
@@ -194,7 +195,7 @@ static inline int au_test_securityfs(struct super_block *sb __maybe_unused)
 
 static inline int au_test_squashfs(struct super_block *sb __maybe_unused)
 {
-#if defined(CONFIG_SQUASHFS) || defined(CONFIG_SQUASHFS_MODULE)
+#if IS_ENABLED(CONFIG_SQUASHFS)
 	return sb->s_magic == SQUASHFS_MAGIC;
 #else
 	return 0;
@@ -203,7 +204,7 @@ static inline int au_test_squashfs(struct super_block *sb __maybe_unused)
 
 static inline int au_test_btrfs(struct super_block *sb __maybe_unused)
 {
-#if defined(CONFIG_BTRFS_FS) || defined(CONFIG_BTRFS_FS_MODULE)
+#if IS_ENABLED(CONFIG_BTRFS_FS)
 	return sb->s_magic == BTRFS_SUPER_MAGIC;
 #else
 	return 0;
@@ -212,7 +213,7 @@ static inline int au_test_btrfs(struct super_block *sb __maybe_unused)
 
 static inline int au_test_xenfs(struct super_block *sb __maybe_unused)
 {
-#if defined(CONFIG_XENFS) || defined(CONFIG_XENFS_MODULE)
+#if IS_ENABLED(CONFIG_XENFS)
 	return sb->s_magic == XENFS_SUPER_MAGIC;
 #else
 	return 0;
@@ -230,7 +231,7 @@ static inline int au_test_debugfs(struct super_block *sb __maybe_unused)
 
 static inline int au_test_nilfs(struct super_block *sb __maybe_unused)
 {
-#if defined(CONFIG_NILFS) || defined(CONFIG_NILFS_MODULE)
+#if IS_ENABLED(CONFIG_NILFS)
 	return sb->s_magic == NILFS_SUPER_MAGIC;
 #else
 	return 0;
@@ -239,7 +240,7 @@ static inline int au_test_nilfs(struct super_block *sb __maybe_unused)
 
 static inline int au_test_hfsplus(struct super_block *sb __maybe_unused)
 {
-#if defined(CONFIG_HFSPLUS_FS) || defined(CONFIG_HFSPLUS_FS_MODULE)
+#if IS_ENABLED(CONFIG_HFSPLUS_FS)
 	return sb->s_magic == HFSPLUS_SUPER_MAGIC;
 #else
 	return 0;
@@ -387,7 +388,7 @@ static inline int au_test_fs_rr(struct super_block *sb)
 
 /*
  * test if the @inode is nfs with 'noacl' option
- * NFS always sets MS_POSIXACL regardless its mount option 'noacl.'
+ * NFS always sets SB_POSIXACL regardless its mount option 'noacl.'
  */
 static inline int au_test_nfs_noacl(struct inode *inode)
 {

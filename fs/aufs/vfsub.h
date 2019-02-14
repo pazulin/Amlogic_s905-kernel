@@ -1,5 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Copyright (C) 2005-2015 Junjiro R. Okajima
+ * Copyright (C) 2005-2018 Junjiro R. Okajima
  *
  * This program, aufs is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,15 +26,16 @@
 #ifdef __KERNEL__
 
 #include <linux/fs.h>
+#include <linux/iversion.h>
 #include <linux/mount.h>
+#include <linux/posix_acl.h>
 #include <linux/xattr.h>
 #include "debug.h"
 
 /* copied from linux/fs/internal.h */
 /* todo: BAD approach!! */
 extern void __mnt_drop_write(struct vfsmount *);
-extern spinlock_t inode_sb_list_lock;
-extern int open_check_o_direct(struct file *f);
+extern struct file *alloc_empty_file(int, const struct cred *);
 
 /* ---------------------------------------------------------------------- */
 
@@ -41,7 +43,7 @@ extern int open_check_o_direct(struct file *f);
 /* default MAX_LOCKDEP_SUBCLASSES(8) is not enough */
 /* reduce? gave up. */
 enum {
-	AuLsc_I_Begin = I_MUTEX_NONDIR2, /* 4 */
+	AuLsc_I_Begin = I_MUTEX_PARENT2, /* 5 */
 	AuLsc_I_PARENT,		/* lower inode, parent first */
 	AuLsc_I_PARENT2,	/* copyup dirs */
 	AuLsc_I_PARENT3,	/* copyup wh */
@@ -52,7 +54,7 @@ enum {
 
 /* to debug easier, do not make them inlined functions */
 #define MtxMustLock(mtx)	AuDebugOn(!mutex_is_locked(mtx))
-#define IMustLock(i)		MtxMustLock(&(i)->i_mutex)
+#define IMustLock(i)		AuDebugOn(!inode_is_locked(i))
 
 /* ---------------------------------------------------------------------- */
 
@@ -71,28 +73,38 @@ static inline void vfsub_dead_dir(struct inode *inode)
 
 static inline int vfsub_native_ro(struct inode *inode)
 {
-	return (inode->i_sb->s_flags & MS_RDONLY)
+	return sb_rdonly(inode->i_sb)
 		|| IS_RDONLY(inode)
 		/* || IS_APPEND(inode) */
 		|| IS_IMMUTABLE(inode);
 }
+
+#ifdef CONFIG_AUFS_BR_FUSE
+int vfsub_test_mntns(struct vfsmount *mnt, struct super_block *h_sb);
+#else
+AuStubInt0(vfsub_test_mntns, struct vfsmount *mnt, struct super_block *h_sb);
+#endif
+
+int vfsub_sync_filesystem(struct super_block *h_sb, int wait);
 
 /* ---------------------------------------------------------------------- */
 
 int vfsub_update_h_iattr(struct path *h_path, int *did);
 struct file *vfsub_dentry_open(struct path *path, int flags);
 struct file *vfsub_filp_open(const char *path, int oflags, int mode);
-struct vfsub_aopen_args {
-	struct file	*file;
-	unsigned int	open_flag;
-	umode_t		create_mode;
-	int		*opened;
-};
 struct au_branch;
+struct vfsub_aopen_args {
+	struct file		*file;
+	unsigned int		open_flag;
+	umode_t			create_mode;
+	struct au_branch	*br;
+};
 int vfsub_atomic_open(struct inode *dir, struct dentry *dentry,
-		      struct vfsub_aopen_args *args, struct au_branch *br);
+		      struct vfsub_aopen_args *args);
 int vfsub_kern_path(const char *name, unsigned int flags, struct path *path);
 
+struct dentry *vfsub_lookup_one_len_unlocked(const char *name,
+					     struct dentry *parent, int len);
 struct dentry *vfsub_lookup_one_len(const char *name, struct dentry *parent,
 				    int len);
 
@@ -172,14 +184,6 @@ ssize_t vfsub_write_k(struct file *file, void *kbuf, size_t count,
 int vfsub_flush(struct file *file, fl_owner_t id);
 int vfsub_iterate_dir(struct file *file, struct dir_context *ctx);
 
-/* just for type-check */
-static inline filldir_t au_diractor(int (*func)(struct dir_context *,
-						const char *, int, loff_t, u64,
-						unsigned))
-{
-	return (filldir_t)func;
-}
-
 static inline loff_t vfsub_f_size_read(struct file *file)
 {
 	return i_size_read(file_inode(file));
@@ -196,6 +200,12 @@ static inline unsigned int vfsub_file_flags(struct file *file)
 	return flags;
 }
 
+static inline int vfsub_file_execed(struct file *file)
+{
+	/* todo: direct access f_flags */
+	return !!(vfsub_file_flags(file) & __FMODE_EXEC);
+}
+
 #if 0 /* reserved */
 static inline void vfsub_file_accessed(struct file *h_file)
 {
@@ -204,6 +214,7 @@ static inline void vfsub_file_accessed(struct file *h_file)
 }
 #endif
 
+#if 0 /* reserved */
 static inline void vfsub_touch_atime(struct vfsmount *h_mnt,
 				     struct dentry *h_dentry)
 {
@@ -214,13 +225,28 @@ static inline void vfsub_touch_atime(struct vfsmount *h_mnt,
 	touch_atime(&h_path);
 	vfsub_update_h_iattr(&h_path, /*did*/NULL); /*ignore*/
 }
+#endif
 
-static inline int vfsub_update_time(struct inode *h_inode, struct timespec *ts,
-				    int flags)
+static inline int vfsub_update_time(struct inode *h_inode,
+				    struct timespec64 *ts, int flags)
 {
 	return update_time(h_inode, ts, flags);
 	/* no vfsub_update_h_iattr() since we don't have struct path */
 }
+
+#ifdef CONFIG_FS_POSIX_ACL
+static inline int vfsub_acl_chmod(struct inode *h_inode, umode_t h_mode)
+{
+	int err;
+
+	err = posix_acl_chmod(h_inode, h_mode);
+	if (err == -EOPNOTSUPP)
+		err = 0;
+	return err;
+}
+#else
+AuStubInt0(vfsub_acl_chmod, struct inode *h_inode, umode_t h_mode);
+#endif
 
 long vfsub_splice_to(struct file *in, loff_t *ppos,
 		     struct pipe_inode_info *pipe, size_t len,
@@ -241,6 +267,36 @@ static inline long vfsub_truncate(struct path *path, loff_t length)
 int vfsub_trunc(struct path *h_path, loff_t length, unsigned int attr,
 		struct file *h_file);
 int vfsub_fsync(struct file *file, struct path *path, int datasync);
+
+/*
+ * re-use branch fs's ioctl(FICLONE) while aufs itself doesn't support such
+ * ioctl.
+ */
+static inline int vfsub_clone_file_range(struct file *src, struct file *dst,
+					 u64 len)
+{
+	int err;
+
+	lockdep_off();
+	err = vfs_clone_file_range(src, 0, dst, 0, len);
+	lockdep_on();
+
+	return err;
+}
+
+/* copy_file_range(2) is a systemcall */
+static inline ssize_t vfsub_copy_file_range(struct file *src, loff_t src_pos,
+					    struct file *dst, loff_t dst_pos,
+					    size_t len, unsigned int flags)
+{
+	ssize_t ssz;
+
+	lockdep_off();
+	ssz = vfs_copy_file_range(src, src_pos, dst, dst_pos, len, flags);
+	lockdep_on();
+
+	return ssz;
+}
 
 /* ---------------------------------------------------------------------- */
 
@@ -264,6 +320,11 @@ int vfsub_notify_change(struct path *path, struct iattr *ia,
 			struct inode **delegated_inode);
 int vfsub_unlink(struct inode *dir, struct path *path,
 		 struct inode **delegated_inode, int force);
+
+static inline int vfsub_getattr(const struct path *path, struct kstat *st)
+{
+	return vfs_getattr(path, st, STATX_BASIC_STATS, AT_STATX_SYNC_AS_STAT);
+}
 
 /* ---------------------------------------------------------------------- */
 

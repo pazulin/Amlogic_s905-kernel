@@ -1,5 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (C) 2005-2015 Junjiro R. Okajima
+ * Copyright (C) 2005-2018 Junjiro R. Okajima
  *
  * This program, aufs is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -82,7 +83,8 @@ static int au_dpages_append(struct au_dcsub_pages *dpages,
 		err = -ENOMEM;
 		sz = dpages->ndpage * sizeof(*dpages->dpages);
 		p = au_kzrealloc(dpages->dpages, sz,
-				 sz + sizeof(*dpages->dpages), gfp);
+				 sz + sizeof(*dpages->dpages), gfp,
+				 /*may_shrink*/0);
 		if (unlikely(!p))
 			goto out;
 
@@ -115,8 +117,7 @@ enum d_walk_ret {
 };
 
 extern void d_walk(struct dentry *parent, void *data,
-		   enum d_walk_ret (*enter)(void *, struct dentry *),
-		   void (*finish)(void *));
+		   enum d_walk_ret (*enter)(void *, struct dentry *));
 
 struct ac_dpages_arg {
 	int err;
@@ -156,7 +157,7 @@ int au_dcsub_pages(struct au_dcsub_pages *dpages, struct dentry *root,
 		.arg	= arg
 	};
 
-	d_walk(root, &args, au_call_dpages_append, NULL);
+	d_walk(root, &args, au_call_dpages_append);
 
 	return args.err;
 }

@@ -1,5 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Copyright (C) 2005-2015 Junjiro R. Okajima
+ * Copyright (C) 2005-2018 Junjiro R. Okajima
  *
  * This program, aufs is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -27,7 +28,6 @@
 #include <linux/path.h>
 
 struct file;
-struct super_block;
 
 /* ---------------------------------------------------------------------- */
 
@@ -42,17 +42,21 @@ struct super_block;
 #define AuOpt_PLINK		(1 << 6)	/* pseudo-link */
 #define AuOpt_DIRPERM1		(1 << 7)	/* ignore the lower dir's perm
 						   bits */
-#define AuOpt_REFROF		(1 << 8)	/* unimplemented */
 #define AuOpt_ALWAYS_DIROPQ	(1 << 9)	/* policy to creating diropq */
 #define AuOpt_SUM		(1 << 10)	/* summation for statfs(2) */
 #define AuOpt_SUM_W		(1 << 11)	/* unimplemented */
 #define AuOpt_WARN_PERM		(1 << 12)	/* warn when add-branch */
 #define AuOpt_VERBOSE		(1 << 13)	/* busy inode when del-branch */
 #define AuOpt_DIO		(1 << 14)	/* direct io */
+#define AuOpt_DIRREN		(1 << 15)	/* directory rename */
 
 #ifndef CONFIG_AUFS_HNOTIFY
 #undef AuOpt_UDBA_HNOTIFY
 #define AuOpt_UDBA_HNOTIFY	0
+#endif
+#ifndef CONFIG_AUFS_DIRREN
+#undef AuOpt_DIRREN
+#define AuOpt_DIRREN		0
 #endif
 #ifndef CONFIG_AUFS_SHWH
 #undef AuOpt_SHWH
@@ -100,6 +104,8 @@ enum {
 	AuWbrCreate_MFSV,	/* mfs with seconds */
 	AuWbrCreate_MFSRR,	/* mfs then rr */
 	AuWbrCreate_MFSRRV,	/* mfs then rr with seconds */
+	AuWbrCreate_TDMFS,	/* top down regardless parent and mfs */
+	AuWbrCreate_TDMFSV,	/* top down regardless parent and mfs */
 	AuWbrCreate_PMFS,	/* parent and mfs */
 	AuWbrCreate_PMFSV,	/* parent and mfs with seconds */
 	AuWbrCreate_PMFSRR,	/* parent, mfs and round-robin */
@@ -175,11 +181,18 @@ struct au_opt {
 #define AuOpts_REFRESH		(1 << 1)
 #define AuOpts_TRUNC_XIB	(1 << 2)
 #define AuOpts_REFRESH_DYAOP	(1 << 3)
+#define AuOpts_REFRESH_IDOP	(1 << 4)
+#define AuOpts_DR_FLUSHED	(1 << 5)
 #define au_ftest_opts(flags, name)	((flags) & AuOpts_##name)
 #define au_fset_opts(flags, name) \
 	do { (flags) |= AuOpts_##name; } while (0)
 #define au_fclr_opts(flags, name) \
 	do { (flags) &= ~AuOpts_##name; } while (0)
+
+#ifndef CONFIG_AUFS_DIRREN
+#undef AuOpts_DR_FLUSHED
+#define AuOpts_DR_FLUSHED	0
+#endif
 
 struct au_opts {
 	struct au_opt	*opt;
@@ -199,6 +212,7 @@ const char *au_optstr_wbr_copyup(int wbr_copyup);
 const char *au_optstr_wbr_create(int wbr_create);
 
 void au_opts_free(struct au_opts *opts);
+struct super_block;
 int au_opts_parse(struct super_block *sb, char *str, struct au_opts *opts);
 int au_opts_verify(struct super_block *sb, unsigned long sb_flags,
 		   unsigned int pending);

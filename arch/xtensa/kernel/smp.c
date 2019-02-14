@@ -21,6 +21,9 @@
 #include <linux/irq.h>
 #include <linux/kdebug.h>
 #include <linux/module.h>
+#include <linux/sched/mm.h>
+#include <linux/sched/hotplug.h>
+#include <linux/sched/task_stack.h>
 #include <linux/reboot.h>
 #include <linux/seq_file.h>
 #include <linux/smp.h>
@@ -135,8 +138,8 @@ void secondary_start_kernel(void)
 
 	/* All kernel threads share the same mm context. */
 
-	atomic_inc(&mm->mm_users);
-	atomic_inc(&mm->mm_count);
+	mmget(mm);
+	mmgrab(mm);
 	current->active_mm = mm;
 	cpumask_set_cpu(cpu, mm_cpumask(mm));
 	enter_lazy_tlb(mm, current);
@@ -157,7 +160,7 @@ void secondary_start_kernel(void)
 
 	complete(&cpu_running);
 
-	cpu_startup_entry(CPUHP_ONLINE);
+	cpu_startup_entry(CPUHP_AP_ONLINE_IDLE);
 }
 
 static void mx_cpu_start(void *p)
@@ -496,6 +499,21 @@ void flush_tlb_range(struct vm_area_struct *vma,
 	on_each_cpu(ipi_flush_tlb_range, &fd, 1);
 }
 
+static void ipi_flush_tlb_kernel_range(void *arg)
+{
+	struct flush_data *fd = arg;
+	local_flush_tlb_kernel_range(fd->addr1, fd->addr2);
+}
+
+void flush_tlb_kernel_range(unsigned long start, unsigned long end)
+{
+	struct flush_data fd = {
+		.addr1 = start,
+		.addr2 = end,
+	};
+	on_each_cpu(ipi_flush_tlb_kernel_range, &fd, 1);
+}
+
 /* Cache flush functions */
 
 static void ipi_flush_cache_all(void *arg)
@@ -556,6 +574,7 @@ void flush_icache_range(unsigned long start, unsigned long end)
 	};
 	on_each_cpu(ipi_flush_icache_range, &fd, 1);
 }
+EXPORT_SYMBOL(flush_icache_range);
 
 /* ------------------------------------------------------------------------- */
 

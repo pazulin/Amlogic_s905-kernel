@@ -1,5 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (C) 2005-2015 Junjiro R. Okajima
+ * Copyright (C) 2005-2018 Junjiro R. Okajima
  *
  * This program, aufs is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -122,10 +123,10 @@ out:
 static int au_rdu(struct file *file, struct aufs_rdu *rdu)
 {
 	int err;
-	aufs_bindex_t bend;
+	aufs_bindex_t bbot;
 	struct au_rdu_arg arg = {
 		.ctx = {
-			.actor = au_diractor(au_rdu_fill)
+			.actor = au_rdu_fill
 		}
 	};
 	struct dentry *dentry;
@@ -148,7 +149,7 @@ static int au_rdu(struct file *file, struct aufs_rdu *rdu)
 	arg.end += rdu->sz;
 
 	err = -ENOTDIR;
-	if (unlikely(!file->f_op->iterate))
+	if (unlikely(!file->f_op->iterate && !file->f_op->iterate_shared))
 		goto out;
 
 	err = security_file_permission(file, MAY_READ);
@@ -156,16 +157,9 @@ static int au_rdu(struct file *file, struct aufs_rdu *rdu)
 	if (unlikely(err))
 		goto out;
 
-	dentry = file->f_dentry;
-	inode = dentry->d_inode;
-#if 1
-	mutex_lock(&inode->i_mutex);
-#else
-	err = mutex_lock_killable(&inode->i_mutex);
-	AuTraceErr(err);
-	if (unlikely(err))
-		goto out;
-#endif
+	dentry = file->f_path.dentry;
+	inode = d_inode(dentry);
+	inode_lock_shared(inode);
 
 	arg.sb = inode->i_sb;
 	err = si_read_lock(arg.sb, AuLock_FLUSH | AuLock_NOPLM);
@@ -188,12 +182,12 @@ static int au_rdu(struct file *file, struct aufs_rdu *rdu)
 		if (!rdu->blk)
 			rdu->blk = au_dir_size(file, /*dentry*/NULL);
 	}
-	bend = au_fbstart(file);
-	if (cookie->bindex < bend)
-		cookie->bindex = bend;
-	bend = au_fbend_dir(file);
-	/* AuDbg("b%d, b%d\n", cookie->bindex, bend); */
-	for (; !err && cookie->bindex <= bend;
+	bbot = au_fbtop(file);
+	if (cookie->bindex < bbot)
+		cookie->bindex = bbot;
+	bbot = au_fbbot_dir(file);
+	/* AuDbg("b%d, b%d\n", cookie->bindex, bbot); */
+	for (; !err && cookie->bindex <= bbot;
 	     cookie->bindex++, cookie->h_pos = 0) {
 		h_file = au_hf_dir(file, cookie->bindex);
 		if (!h_file)
@@ -214,7 +208,7 @@ static int au_rdu(struct file *file, struct aufs_rdu *rdu)
 	}
 
 	ii_read_lock_child(inode);
-	fsstack_copy_attr_atime(inode, au_h_iptr(inode, au_ibstart(inode)));
+	fsstack_copy_attr_atime(inode, au_h_iptr(inode, au_ibtop(inode)));
 	ii_read_unlock(inode);
 
 out_unlock:
@@ -222,7 +216,7 @@ out_unlock:
 out_si:
 	si_read_unlock(arg.sb);
 out_mtx:
-	mutex_unlock(&inode->i_mutex);
+	inode_unlock_shared(inode);
 out:
 	AuTraceErr(err);
 	return err;
@@ -240,7 +234,7 @@ static int au_rdu_ino(struct file *file, struct aufs_rdu *rdu)
 	err = 0;
 	nent = rdu->nent;
 	u = &rdu->ent;
-	sb = file->f_dentry->d_sb;
+	sb = file->f_path.dentry->d_sb;
 	si_read_lock(sb, AuLock_FLUSH);
 	while (nent-- > 0) {
 		/* unnecessary to support mmap_sem since this is a dir */

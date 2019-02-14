@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ARCH_MIPS_LOCAL_H
 #define _ARCH_MIPS_LOCAL_H
 
@@ -5,6 +6,7 @@
 #include <linux/bitops.h>
 #include <linux/atomic.h>
 #include <asm/cmpxchg.h>
+#include <asm/compiler.h>
 #include <asm/war.h>
 
 typedef struct
@@ -33,7 +35,7 @@ static __inline__ long local_add_return(long i, local_t * l)
 		unsigned long temp;
 
 		__asm__ __volatile__(
-		"	.set	mips3					\n"
+		"	.set	arch=r4000				\n"
 		"1:"	__LL	"%1, %2		# local_add_return	\n"
 		"	addu	%0, %1, %3				\n"
 			__SC	"%0, %2					\n"
@@ -47,7 +49,7 @@ static __inline__ long local_add_return(long i, local_t * l)
 		unsigned long temp;
 
 		__asm__ __volatile__(
-		"	.set	mips3					\n"
+		"	.set	"MIPS_ISA_ARCH_LEVEL"			\n"
 		"1:"	__LL	"%1, %2		# local_add_return	\n"
 		"	addu	%0, %1, %3				\n"
 			__SC	"%0, %2					\n"
@@ -78,7 +80,7 @@ static __inline__ long local_sub_return(long i, local_t * l)
 		unsigned long temp;
 
 		__asm__ __volatile__(
-		"	.set	mips3					\n"
+		"	.set	arch=r4000				\n"
 		"1:"	__LL	"%1, %2		# local_sub_return	\n"
 		"	subu	%0, %1, %3				\n"
 			__SC	"%0, %2					\n"
@@ -92,7 +94,7 @@ static __inline__ long local_sub_return(long i, local_t * l)
 		unsigned long temp;
 
 		__asm__ __volatile__(
-		"	.set	mips3					\n"
+		"	.set	"MIPS_ISA_ARCH_LEVEL"			\n"
 		"1:"	__LL	"%1, %2		# local_sub_return	\n"
 		"	subu	%0, %1, %3				\n"
 			__SC	"%0, %2					\n"

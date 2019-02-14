@@ -13,11 +13,11 @@
  *  No volume control - only mute/unmute - you have to use line volume
  *  control on SB-part of SF16-FMI/SF16-FMP/SF16-FMD
  *
- * Converted to V4L2 API by Mauro Carvalho Chehab <mchehab@infradead.org>
+ * Converted to V4L2 API by Mauro Carvalho Chehab <mchehab@kernel.org>
  */
 
 #include <linux/kernel.h>	/* __setup			*/
-#include <linux/module.h>	/* Modules 			*/
+#include <linux/module.h>	/* Modules			*/
 #include <linux/init.h>		/* Initdata			*/
 #include <linux/ioport.h>	/* request_region		*/
 #include <linux/delay.h>	/* udelay			*/
@@ -56,7 +56,7 @@ struct fmi
 
 static struct fmi fmi_card;
 static struct pnp_dev *dev;
-bool pnp_attached;
+static bool pnp_attached;
 
 #define RSF16_MINFREQ (87U * 16000)
 #define RSF16_MAXFREQ (108U * 16000)
@@ -110,7 +110,7 @@ static inline int fmi_getsigstr(struct fmi *fmi)
 	val = fmi->mute ? 0x00 : 0x08;	/* mute/unmute */
 	outb(val, fmi->io);
 	outb(val | 0x10, fmi->io);
-	msleep(143); 		/* was schedule_timeout(HZ/7) */
+	msleep(143);		/* was schedule_timeout(HZ/7) */
 	res = (int)inb(fmi->io + 1);
 	outb(val, fmi->io);
 
@@ -285,7 +285,7 @@ static int __init fmi_init(void)
 				io = isapnp_fmi_probe();
 				if (io < 0)
 					continue;
-				pnp_attached = 1;
+				pnp_attached = true;
 			}
 			if (!request_region(io, 2, "radio-sf16fmi")) {
 				if (pnp_attached)
@@ -344,13 +344,12 @@ static int __init fmi_init(void)
 	fmi->vdev.fops = &fmi_fops;
 	fmi->vdev.ioctl_ops = &fmi_ioctl_ops;
 	fmi->vdev.release = video_device_release_empty;
-	set_bit(V4L2_FL_USE_FH_PRIO, &fmi->vdev.flags);
 	video_set_drvdata(&fmi->vdev, fmi);
 
 	mutex_init(&fmi->lock);
 
 	/* mute card and set default frequency */
-	fmi->mute = 1;
+	fmi->mute = true;
 	fmi->curfreq = RSF16_MINFREQ;
 	fmi_set_freq(fmi);
 

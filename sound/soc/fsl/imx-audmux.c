@@ -67,7 +67,7 @@ static ssize_t audmux_read_file(struct file *file, char __user *user_buf,
 {
 	ssize_t ret;
 	char *buf;
-	int port = (int)file->private_data;
+	uintptr_t port = (uintptr_t)file->private_data;
 	u32 pdcr, ptcr;
 
 	if (audmux_clk) {
@@ -145,9 +145,9 @@ static const struct file_operations audmux_debugfs_fops = {
 	.llseek = default_llseek,
 };
 
-static void __init audmux_debugfs_init(void)
+static void audmux_debugfs_init(void)
 {
-	int i;
+	uintptr_t i;
 	char buf[20];
 
 	audmux_debugfs_root = debugfs_create_dir("audmux", NULL);
@@ -157,10 +157,10 @@ static void __init audmux_debugfs_init(void)
 	}
 
 	for (i = 0; i < MX31_AUDMUX_PORT7_SSI_PINS_7 + 1; i++) {
-		snprintf(buf, sizeof(buf), "ssi%d", i);
+		snprintf(buf, sizeof(buf), "ssi%lu", i);
 		if (!debugfs_create_file(buf, 0444, audmux_debugfs_root,
 					 (void *)i, &audmux_debugfs_fops))
-			pr_warning("Failed to create AUDMUX port %d debugfs file\n",
+			pr_warning("Failed to create AUDMUX port %lu debugfs file\n",
 				   i);
 	}
 }
@@ -184,7 +184,7 @@ static enum imx_audmux_type {
 	IMX31_AUDMUX,
 } audmux_type;
 
-static struct platform_device_id imx_audmux_ids[] = {
+static const struct platform_device_id imx_audmux_ids[] = {
 	{
 		.name = "imx21-audmux",
 		.driver_data = IMX21_AUDMUX,
@@ -268,13 +268,13 @@ static int imx_audmux_parse_dt_defaults(struct platform_device *pdev,
 
 		ret = of_property_read_u32(child, "fsl,audmux-port", &port);
 		if (ret) {
-			dev_warn(&pdev->dev, "Failed to get fsl,audmux-port of child node \"%s\"\n",
-					child->full_name);
+			dev_warn(&pdev->dev, "Failed to get fsl,audmux-port of child node \"%pOF\"\n",
+					child);
 			continue;
 		}
 		if (!of_property_read_bool(child, "fsl,port-config")) {
-			dev_warn(&pdev->dev, "child node \"%s\" does not have property fsl,port-config\n",
-					child->full_name);
+			dev_warn(&pdev->dev, "child node \"%pOF\" does not have property fsl,port-config\n",
+					child);
 			continue;
 		}
 
@@ -292,15 +292,15 @@ static int imx_audmux_parse_dt_defaults(struct platform_device *pdev,
 		}
 
 		if (ret != -EOVERFLOW) {
-			dev_err(&pdev->dev, "Failed to read u32 at index %d of child %s\n",
-					i, child->full_name);
+			dev_err(&pdev->dev, "Failed to read u32 at index %d of child %pOF\n",
+					i, child);
 			continue;
 		}
 
 		if (audmux_type == IMX31_AUDMUX) {
 			if (i % 2) {
-				dev_err(&pdev->dev, "One pdcr value is missing in child node %s\n",
-						child->full_name);
+				dev_err(&pdev->dev, "One pdcr value is missing in child node %pOF\n",
+						child);
 				continue;
 			}
 			imx_audmux_v2_configure_port(port, ptcr, pdcr);
@@ -356,7 +356,6 @@ static struct platform_driver imx_audmux_driver = {
 	.id_table	= imx_audmux_ids,
 	.driver	= {
 		.name	= DRIVER_NAME,
-		.owner	= THIS_MODULE,
 		.of_match_table = imx_audmux_dt_ids,
 	}
 };

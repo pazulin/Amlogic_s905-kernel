@@ -31,7 +31,9 @@
 #include <mtd/mtd-abi.h>
 #include <asm/bootinfo.h>
 #include <asm/reboot.h>
+#include <asm/setup.h>
 #include <asm/mach-au1x00/au1000.h>
+#include <asm/mach-au1x00/gpio-au1000.h>
 #include <asm/mach-au1x00/au1xxx_eth.h>
 #include <prom.h>
 
@@ -57,7 +59,7 @@ void __init prom_init(void)
 	add_memory_region(0, memsize, BOOT_MEM_RAM);
 }
 
-void prom_putchar(unsigned char c)
+void prom_putchar(char c)
 {
 	alchemy_uart_putchar(AU1000_UART0_PHYS_ADDR, c);
 }
@@ -85,10 +87,10 @@ void __init board_setup(void)
 #endif /* IS_ENABLED(CONFIG_USB_OHCI_HCD) */
 
 	/* Initialize sys_pinfunc */
-	au_writel(SYS_PF_NI2, SYS_PINFUNC);
+	alchemy_wrsys(SYS_PF_NI2, AU1000_SYS_PINFUNC);
 
 	/* Initialize GPIO */
-	au_writel(~0, KSEG1ADDR(AU1000_SYS_PHYS_ADDR) + SYS_TRIOUTCLR);
+	alchemy_wrsys(~0, AU1000_SYS_TRIOUTCLR);
 	alchemy_gpio_direction_output(0, 0);	/* Disable M66EN (PCI 66MHz) */
 	alchemy_gpio_direction_output(3, 1);	/* Disable PCI CLKRUN# */
 	alchemy_gpio_direction_output(1, 1);	/* Enable EXT_IO3 */
@@ -144,7 +146,7 @@ static struct platform_device mtx1_wdt = {
 	.resource = mtx1_wdt_res,
 };
 
-static struct gpio_led default_leds[] = {
+static const struct gpio_led default_leds[] = {
 	{
 		.name	= "mtx1:green",
 		.gpio = 211,

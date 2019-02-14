@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * MT regs definitions, follows on from mipsregs.h
  * Copyright (C) 2004 - 2005 MIPS Technologies, Inc.  All rights reserved.
@@ -35,6 +36,8 @@
 #define write_c0_tcstatus(val)		__write_32bit_c0_register($2, 1, val)
 
 #define read_c0_tcbind()		__read_32bit_c0_register($2, 2)
+
+#define write_c0_tchalt(val)		__write_32bit_c0_register($2, 4, val)
 
 #define read_c0_tccontext()		__read_32bit_c0_register($2, 5)
 #define write_c0_tccontext(val)		__write_32bit_c0_register($2, 5, val)
@@ -175,6 +178,17 @@
 #define TCHALT_H		(_ULCAST_(1))
 
 #ifndef __ASSEMBLY__
+
+static inline unsigned core_nvpes(void)
+{
+	unsigned conf0;
+
+	if (!cpu_has_mipsmt)
+		return 1;
+
+	conf0 = read_c0_mvpconf0();
+	return ((conf0 & MVPCONF0_PVPE) >> MVPCONF0_PVPE_SHIFT) + 1;
+}
 
 static inline unsigned int dvpe(void)
 {

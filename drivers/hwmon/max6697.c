@@ -24,6 +24,7 @@
 #include <linux/hwmon-sysfs.h>
 #include <linux/err.h>
 #include <linux/mutex.h>
+#include <linux/of_device.h>
 #include <linux/of.h>
 
 #include <linux/platform_data/max6697.h>
@@ -495,15 +496,13 @@ static void max6697_get_config_of(struct device_node *node,
 	int len;
 	const __be32 *prop;
 
-	prop = of_get_property(node, "smbus-timeout-disable", &len);
-	if (prop)
-		pdata->smbus_timeout_disable = true;
-	prop = of_get_property(node, "extended-range-enable", &len);
-	if (prop)
-		pdata->extended_range_enable = true;
-	prop = of_get_property(node, "beta-compensation-enable", &len);
-	if (prop)
-		pdata->beta_compensation = true;
+	pdata->smbus_timeout_disable =
+		of_property_read_bool(node, "smbus-timeout-disable");
+	pdata->extended_range_enable =
+		of_property_read_bool(node, "extended-range-enable");
+	pdata->beta_compensation =
+		of_property_read_bool(node, "beta-compensation-enable");
+
 	prop = of_get_property(node, "alert-mask", &len);
 	if (prop && len == sizeof(u32))
 		pdata->alert_mask = be32_to_cpu(prop[0]);
@@ -634,7 +633,10 @@ static int max6697_probe(struct i2c_client *client,
 	if (!data)
 		return -ENOMEM;
 
-	data->type = id->driver_data;
+	if (client->dev.of_node)
+		data->type = (enum chips)of_device_get_match_data(&client->dev);
+	else
+		data->type = id->driver_data;
 	data->chip = &max6697_chip_data[data->type];
 	data->client = client;
 	mutex_init(&data->update_lock);
@@ -664,10 +666,56 @@ static const struct i2c_device_id max6697_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, max6697_id);
 
+static const struct of_device_id max6697_of_match[] = {
+	{
+		.compatible = "maxim,max6581",
+		.data = (void *)max6581
+	},
+	{
+		.compatible = "maxim,max6602",
+		.data = (void *)max6602
+	},
+	{
+		.compatible = "maxim,max6622",
+		.data = (void *)max6622
+	},
+	{
+		.compatible = "maxim,max6636",
+		.data = (void *)max6636
+	},
+	{
+		.compatible = "maxim,max6689",
+		.data = (void *)max6689
+	},
+	{
+		.compatible = "maxim,max6693",
+		.data = (void *)max6693
+	},
+	{
+		.compatible = "maxim,max6694",
+		.data = (void *)max6694
+	},
+	{
+		.compatible = "maxim,max6697",
+		.data = (void *)max6697
+	},
+	{
+		.compatible = "maxim,max6698",
+		.data = (void *)max6698
+	},
+	{
+		.compatible = "maxim,max6699",
+		.data = (void *)max6699
+	},
+	{ },
+};
+MODULE_DEVICE_TABLE(of, max6697_of_match);
+
 static struct i2c_driver max6697_driver = {
 	.class = I2C_CLASS_HWMON,
 	.driver = {
 		.name	= "max6697",
+		.of_match_table = of_match_ptr(max6697_of_match),
 	},
 	.probe = max6697_probe,
 	.id_table = max6697_id,

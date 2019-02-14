@@ -943,14 +943,14 @@ static const struct attribute_group pc87427_group_temp[6] = {
 	{ .attrs = pc87427_attributes_temp[5] },
 };
 
-static ssize_t show_name(struct device *dev, struct device_attribute
+static ssize_t name_show(struct device *dev, struct device_attribute
 			 *devattr, char *buf)
 {
 	struct pc87427_data *data = dev_get_drvdata(dev);
 
 	return sprintf(buf, "%s\n", data->name);
 }
-static DEVICE_ATTR(name, S_IRUGO, show_name, NULL);
+static DEVICE_ATTR_RO(name);
 
 
 /*
@@ -1081,10 +1081,8 @@ static int pc87427_probe(struct platform_device *pdev)
 
 	data = devm_kzalloc(&pdev->dev, sizeof(struct pc87427_data),
 			    GFP_KERNEL);
-	if (!data) {
-		pr_err("Out of memory\n");
+	if (!data)
 		return -ENOMEM;
-	}
 
 	data->address[0] = sio_data->address[0];
 	data->address[1] = sio_data->address[1];
@@ -1155,7 +1153,6 @@ static int pc87427_remove(struct platform_device *pdev)
 
 static struct platform_driver pc87427_driver = {
 	.driver = {
-		.owner	= THIS_MODULE,
 		.name	= DRVNAME,
 	},
 	.probe		= pc87427_probe,

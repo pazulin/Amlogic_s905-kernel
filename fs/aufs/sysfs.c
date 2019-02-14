@@ -1,5 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (C) 2005-2015 Junjiro R. Okajima
+ * Copyright (C) 2005-2018 Junjiro R. Okajima
  *
  * This program, aufs is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -100,15 +101,15 @@ static int sysaufs_si_br(struct seq_file *seq, struct super_block *sb,
 		err = au_seq_path(seq, &path);
 		if (!err) {
 			au_optstr_br_perm(&perm, br->br_perm);
-			err = seq_printf(seq, "=%s\n", perm.a);
+			seq_printf(seq, "=%s\n", perm.a);
 		}
 		break;
 	case AuBrSysfs_BRID:
-		err = seq_printf(seq, "%d\n", br->br_id);
+		seq_printf(seq, "%d\n", br->br_id);
 		break;
 	}
 	di_read_unlock(root, !AuLock_IR);
-	if (err == -1)
+	if (unlikely(err || seq_has_overflowed(seq)))
 		err = -E2BIG;
 
 	return err;
@@ -142,7 +143,7 @@ ssize_t sysaufs_si_show(struct kobject *kobj, struct attribute *attr,
 	ssize_t err;
 	int idx;
 	long l;
-	aufs_bindex_t bend;
+	aufs_bindex_t bbot;
 	struct au_sbinfo *sbinfo;
 	struct super_block *sb;
 	struct seq_file *seq;
@@ -195,8 +196,8 @@ ssize_t sysaufs_si_show(struct kobject *kobj, struct attribute *attr,
 
 	err = kstrtol(name, 10, &l);
 	if (!err) {
-		bend = au_sbend(sb);
-		if (l <= bend)
+		bbot = au_sbbot(sb);
+		if (l <= bbot)
 			err = sysaufs_si_br(seq, sb, (aufs_bindex_t)l, idx);
 		else
 			err = -ENOENT;
@@ -222,15 +223,15 @@ static int au_brinfo(struct super_block *sb, union aufs_brinfo __user *arg)
 {
 	int err;
 	int16_t brid;
-	aufs_bindex_t bindex, bend;
+	aufs_bindex_t bindex, bbot;
 	size_t sz;
 	char *buf;
 	struct seq_file *seq;
 	struct au_branch *br;
 
 	si_read_lock(sb, AuLock_FLUSH);
-	bend = au_sbend(sb);
-	err = bend + 1;
+	bbot = au_sbbot(sb);
+	err = bbot + 1;
 	if (!arg)
 		goto out;
 
@@ -245,7 +246,7 @@ static int au_brinfo(struct super_block *sb, union aufs_brinfo __user *arg)
 		goto out_buf;
 
 	sz = sizeof(*arg) - offsetof(union aufs_brinfo, path);
-	for (bindex = 0; bindex <= bend; bindex++, arg++) {
+	for (bindex = 0; bindex <= bbot; bindex++, arg++) {
 		err = !access_ok(VERIFY_WRITE, arg, sizeof(*arg));
 		if (unlikely(err))
 			break;
@@ -265,8 +266,8 @@ static int au_brinfo(struct super_block *sb, union aufs_brinfo __user *arg)
 		err = au_seq_path(seq, &br->br_path);
 		if (unlikely(err))
 			break;
-		err = seq_putc(seq, '\0');
-		if (!err && seq->count <= sz) {
+		seq_putc(seq, '\0');
+		if (!seq_has_overflowed(seq)) {
 			err = copy_to_user(arg->path, seq->buf, seq->count);
 			seq->count = 0;
 			if (unlikely(err))
@@ -290,13 +291,13 @@ out:
 
 long au_brinfo_ioctl(struct file *file, unsigned long arg)
 {
-	return au_brinfo(file->f_dentry->d_sb, (void __user *)arg);
+	return au_brinfo(file->f_path.dentry->d_sb, (void __user *)arg);
 }
 
 #ifdef CONFIG_COMPAT
 long au_brinfo_compat_ioctl(struct file *file, unsigned long arg)
 {
-	return au_brinfo(file->f_dentry->d_sb, compat_ptr(arg));
+	return au_brinfo(file->f_path.dentry->d_sb, compat_ptr(arg));
 }
 #endif
 
@@ -313,7 +314,7 @@ void sysaufs_br_init(struct au_branch *br)
 		attr = &br_sysfs->attr;
 		sysfs_attr_init(attr);
 		attr->name = br_sysfs->name;
-		attr->mode = S_IRUGO;
+		attr->mode = 0444;
 		br_sysfs++;
 	}
 }
@@ -324,16 +325,14 @@ void sysaufs_brs_del(struct super_block *sb, aufs_bindex_t bindex)
 	struct kobject *kobj;
 	struct au_brsysfs *br_sysfs;
 	int i;
-	aufs_bindex_t bend;
-
-	dbgaufs_brs_del(sb, bindex);
+	aufs_bindex_t bbot;
 
 	if (!sysaufs_brs)
 		return;
 
 	kobj = &au_sbi(sb)->si_kobj;
-	bend = au_sbend(sb);
-	for (; bindex <= bend; bindex++) {
+	bbot = au_sbbot(sb);
+	for (; bindex <= bbot; bindex++) {
 		br = au_sbr(sb, bindex);
 		br_sysfs = br->br_sysfs;
 		for (i = 0; i < ARRAY_SIZE(br->br_sysfs); i++) {
@@ -346,19 +345,17 @@ void sysaufs_brs_del(struct super_block *sb, aufs_bindex_t bindex)
 void sysaufs_brs_add(struct super_block *sb, aufs_bindex_t bindex)
 {
 	int err, i;
-	aufs_bindex_t bend;
+	aufs_bindex_t bbot;
 	struct kobject *kobj;
 	struct au_branch *br;
 	struct au_brsysfs *br_sysfs;
-
-	dbgaufs_brs_add(sb, bindex);
 
 	if (!sysaufs_brs)
 		return;
 
 	kobj = &au_sbi(sb)->si_kobj;
-	bend = au_sbend(sb);
-	for (; bindex <= bend; bindex++) {
+	bbot = au_sbbot(sb);
+	for (; bindex <= bbot; bindex++) {
 		br = au_sbr(sb, bindex);
 		br_sysfs = br->br_sysfs;
 		snprintf(br_sysfs[AuBrSysfs_BR].name, sizeof(br_sysfs->name),

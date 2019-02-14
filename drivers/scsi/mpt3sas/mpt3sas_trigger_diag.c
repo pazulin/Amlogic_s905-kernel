@@ -3,8 +3,9 @@
  * (Message Passing Technology) based controllers
  *
  * This code is based on drivers/scsi/mpt3sas/mpt3sas_trigger_diag.c
- * Copyright (C) 2012-2013  LSI Corporation
- *  (mailto:DL-MPTFusionLinux@lsi.com)
+ * Copyright (C) 2012-2014  LSI Corporation
+ * Copyright (C) 2013-2014 Avago Technologies
+ *  (mailto: MPT-FusionLinux.pdl@avagotech.com)
  *
  * This program is free software; you can redistribute it and/or
  * modify it under the terms of the GNU General Public License
@@ -61,7 +62,7 @@
 /**
  * _mpt3sas_raise_sigio - notifiy app
  * @ioc: per adapter object
- * @event_data:
+ * @event_data: ?
  */
 static void
 _mpt3sas_raise_sigio(struct MPT3SAS_ADAPTER *ioc,
@@ -106,7 +107,7 @@ _mpt3sas_raise_sigio(struct MPT3SAS_ADAPTER *ioc,
 /**
  * mpt3sas_process_trigger_data - process the event data for the trigger
  * @ioc: per adapter object
- * @event_data:
+ * @event_data: ?
  */
 void
 mpt3sas_process_trigger_data(struct MPT3SAS_ADAPTER *ioc,
@@ -208,8 +209,8 @@ mpt3sas_trigger_master(struct MPT3SAS_ADAPTER *ioc, u32 trigger_bitmask)
 /**
  * mpt3sas_trigger_event - Event trigger handler
  * @ioc: per adapter object
- * @event:
- * @log_entry_qualifier:
+ * @event: ?
+ * @log_entry_qualifier: ?
  *
  */
 void
@@ -287,9 +288,9 @@ mpt3sas_trigger_event(struct MPT3SAS_ADAPTER *ioc, u16 event,
 /**
  * mpt3sas_trigger_scsi - SCSI trigger handler
  * @ioc: per adapter object
- * @sense_key:
- * @asc:
- * @ascq:
+ * @sense_key: ?
+ * @asc: ?
+ * @ascq: ?
  *
  */
 void
@@ -363,8 +364,8 @@ mpt3sas_trigger_scsi(struct MPT3SAS_ADAPTER *ioc, u8 sense_key, u8 asc,
 /**
  * mpt3sas_trigger_mpi - MPI trigger handler
  * @ioc: per adapter object
- * @ioc_status:
- * @loginfo:
+ * @ioc_status: ?
+ * @loginfo: ?
  *
  */
 void

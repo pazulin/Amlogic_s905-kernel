@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _ASM_X86_UNISTD_H
 #define _ASM_X86_UNISTD_H 1
 
@@ -23,6 +24,10 @@
 #  include <asm/unistd_64.h>
 #  include <asm/unistd_64_x32.h>
 #  define __ARCH_WANT_COMPAT_SYS_TIME
+#  define __ARCH_WANT_COMPAT_SYS_PREADV64
+#  define __ARCH_WANT_COMPAT_SYS_PWRITEV64
+#  define __ARCH_WANT_COMPAT_SYS_PREADV64V2
+#  define __ARCH_WANT_COMPAT_SYS_PWRITEV64V2
 
 # endif
 
@@ -38,7 +43,6 @@
 # define __ARCH_WANT_SYS_OLD_GETRLIMIT
 # define __ARCH_WANT_SYS_OLD_UNAME
 # define __ARCH_WANT_SYS_PAUSE
-# define __ARCH_WANT_SYS_SGETMASK
 # define __ARCH_WANT_SYS_SIGNAL
 # define __ARCH_WANT_SYS_SIGPENDING
 # define __ARCH_WANT_SYS_SIGPROCMASK

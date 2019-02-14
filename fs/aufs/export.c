@@ -1,5 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (C) 2005-2015 Junjiro R. Okajima
+ * Copyright (C) 2005-2018 Junjiro R. Okajima
  *
  * This program, aufs is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,7 +26,6 @@
 #include <linux/nsproxy.h>
 #include <linux/random.h>
 #include <linux/writeback.h>
-#include "../fs/mount.h"
 #include "aufs.h"
 
 union conv {
@@ -182,7 +182,7 @@ out:
 	return err;
 }
 
-int au_xigen_set(struct super_block *sb, struct file *base)
+int au_xigen_set(struct super_block *sb, struct path *path)
 {
 	int err;
 	struct au_sbinfo *sbinfo;
@@ -191,7 +191,7 @@ int au_xigen_set(struct super_block *sb, struct file *base)
 	SiMustWriteLock(sb);
 
 	sbinfo = au_sbi(sb);
-	file = au_xino_create2(base, sbinfo->si_xigen);
+	file = au_xino_create2(sb, path, sbinfo->si_xigen);
 	err = PTR_ERR(file);
 	if (IS_ERR(file))
 		goto out;
@@ -201,6 +201,7 @@ int au_xigen_set(struct super_block *sb, struct file *base)
 	sbinfo->si_xigen = file;
 
 out:
+	AuTraceErr(err);
 	return err;
 }
 
@@ -233,7 +234,7 @@ static struct dentry *decode_by_ino(struct super_block *sb, ino_t ino,
 
 	dentry = ERR_PTR(-ESTALE);
 	sigen = au_sigen(sb);
-	if (unlikely(is_bad_inode(inode)
+	if (unlikely(au_is_bad_inode(inode)
 		     || IS_DEADDIR(inode)
 		     || sigen != au_iigen(inode, NULL)))
 		goto out_iput;
@@ -243,10 +244,10 @@ static struct dentry *decode_by_ino(struct super_block *sb, ino_t ino,
 		dentry = d_find_alias(inode);
 	else {
 		spin_lock(&inode->i_lock);
-		hlist_for_each_entry(d, &inode->i_dentry, d_alias) {
+		hlist_for_each_entry(d, &inode->i_dentry, d_u.d_alias) {
 			spin_lock(&d->d_lock);
 			if (!au_test_anon(d)
-			    && d->d_parent->d_inode->i_ino == dir_ino) {
+			    && d_inode(d->d_parent)->i_ino == dir_ino) {
 				dentry = dget_dlock(d);
 				spin_unlock(&d->d_lock);
 				break;
@@ -372,7 +373,7 @@ static struct dentry *au_lkup_by_ino(struct path *path, ino_t ino,
 	struct inode *dir;
 	struct find_name_by_ino arg = {
 		.ctx = {
-			.actor = au_diractor(find_name_by_ino)
+			.actor = find_name_by_ino
 		}
 	};
 	int err;
@@ -405,15 +406,13 @@ static struct dentry *au_lkup_by_ino(struct path *path, ino_t ino,
 		goto out_name;
 
 	/* do not call vfsub_lkup_one() */
-	dir = parent->d_inode;
-	mutex_lock(&dir->i_mutex);
-	dentry = vfsub_lookup_one_len(arg.name, parent, arg.namelen);
-	mutex_unlock(&dir->i_mutex);
+	dir = d_inode(parent);
+	dentry = vfsub_lookup_one_len_unlocked(arg.name, parent, arg.namelen);
 	AuTraceErrPtr(dentry);
 	if (IS_ERR(dentry))
 		goto out_name;
 	AuDebugOn(au_test_anon(dentry));
-	if (unlikely(!dentry->d_inode)) {
+	if (unlikely(d_really_is_negative(dentry))) {
 		dput(dentry);
 		dentry = ERR_PTR(-ENOENT);
 	}
@@ -515,9 +514,11 @@ struct dentry *decode_by_path(struct super_block *sb, ino_t ino, __u32 *fh,
 	h_mnt = au_br_mnt(br);
 	h_sb = h_mnt->mnt_sb;
 	/* todo: call lower fh_to_dentry()? fh_to_parent()? */
+	lockdep_off();
 	h_parent = exportfs_decode_fh(h_mnt, (void *)(fh + Fh_tail),
 				      fh_len - Fh_tail, fh[Fh_h_type],
 				      h_acceptable, /*context*/NULL);
+	lockdep_on();
 	dentry = h_parent;
 	if (unlikely(!h_parent || IS_ERR(h_parent))) {
 		AuWarn1("%s decode_fh failed, %ld\n",
@@ -554,10 +555,10 @@ struct dentry *decode_by_path(struct super_block *sb, ino_t ino, __u32 *fh,
 
 	dentry = ERR_PTR(-ENOENT);
 	AuDebugOn(au_test_anon(path.dentry));
-	if (unlikely(!path.dentry->d_inode))
+	if (unlikely(d_really_is_negative(path.dentry)))
 		goto out_path;
 
-	if (ino != path.dentry->d_inode->i_ino)
+	if (ino != d_inode(path.dentry)->i_ino)
 		dentry = au_lkup_by_ino(&path, ino, /*nsi_lock*/NULL);
 	else
 		dentry = dget(path.dentry);
@@ -610,7 +611,7 @@ aufs_fh_to_dentry(struct super_block *sb, struct fid *fid, int fh_len,
 	ino = decode_ino(fh + Fh_ino);
 	/* it should never happen */
 	if (unlikely(ino == AUFS_ROOT_INO))
-		goto out;
+		goto out_unlock;
 
 	dir_ino = decode_ino(fh + Fh_dir_ino);
 	dentry = decode_by_ino(sb, ino, dir_ino);
@@ -621,7 +622,7 @@ aufs_fh_to_dentry(struct super_block *sb, struct fid *fid, int fh_len,
 
 	/* is the parent dir cached? */
 	br = au_sbr(sb, nsi_lock.bindex);
-	atomic_inc(&br->br_count);
+	au_lcnt_inc(&br->br_nfiles);
 	dentry = decode_by_dir_ino(sb, ino, dir_ino, &nsi_lock);
 	if (IS_ERR(dentry))
 		goto out_unlock;
@@ -638,14 +639,14 @@ aufs_fh_to_dentry(struct super_block *sb, struct fid *fid, int fh_len,
 
 accept:
 	if (!au_digen_test(dentry, au_sigen(sb))
-	    && dentry->d_inode->i_generation == fh[Fh_igen])
+	    && d_inode(dentry)->i_generation == fh[Fh_igen])
 		goto out_unlock; /* success */
 
 	dput(dentry);
 	dentry = ERR_PTR(-ESTALE);
 out_unlock:
 	if (br)
-		atomic_dec(&br->br_count);
+		au_lcnt_dec(&br->br_nfiles);
 	si_read_unlock(sb);
 out:
 	AuTraceErrPtr(dentry);
@@ -712,7 +713,7 @@ static int aufs_encode_fh(struct inode *inode, __u32 *fh, int *max_len,
 	err = -EIO;
 	parent = NULL;
 	ii_read_lock_child(inode);
-	bindex = au_ibstart(inode);
+	bindex = au_ibtop(inode);
 	if (!dir) {
 		dentry = d_find_any_alias(inode);
 		if (unlikely(!dentry))
@@ -722,7 +723,8 @@ static int aufs_encode_fh(struct inode *inode, __u32 *fh, int *max_len,
 		dput(dentry);
 		if (unlikely(!parent))
 			goto out_unlock;
-		dir = parent->d_inode;
+		if (d_really_is_positive(parent))
+			dir = d_inode(parent);
 	}
 
 	ii_read_lock_parent(dir);
@@ -786,7 +788,7 @@ static int aufs_commit_metadata(struct inode *inode)
 	sb = inode->i_sb;
 	si_read_lock(sb, AuLock_FLUSH | AuLock_NOPLMW);
 	ii_write_lock_child(inode);
-	bindex = au_ibstart(inode);
+	bindex = au_ibtop(inode);
 	AuDebugOn(bindex < 0);
 	h_inode = au_h_iptr(inode, bindex);
 
@@ -821,6 +823,11 @@ void au_export_init(struct super_block *sb)
 {
 	struct au_sbinfo *sbinfo;
 	__u32 u;
+
+	BUILD_BUG_ON_MSG(IS_BUILTIN(CONFIG_AUFS_FS)
+			 && IS_MODULE(CONFIG_EXPORTFS),
+			 AUFS_NAME ": unsupported configuration "
+			 "CONFIG_EXPORTFS=m and CONFIG_AUFS_FS=y");
 
 	sb->s_export_op = &aufs_export_op;
 	sbinfo = au_sbi(sb);

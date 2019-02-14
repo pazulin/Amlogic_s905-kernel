@@ -46,6 +46,7 @@
 #include <linux/platform_device.h>
 #include <linux/thermal.h>
 #include <linux/acpi.h>
+#include <linux/dmi.h>
 #include <acpi/video.h>
 
 #include "asus-wmi.h"
@@ -54,9 +55,6 @@ MODULE_AUTHOR("Corentin Chary <corentin.chary@gmail.com>, "
 	      "Yong Wang <yong.y.wang@intel.com>");
 MODULE_DESCRIPTION("Asus Generic WMI Driver");
 MODULE_LICENSE("GPL");
-
-#define to_platform_driver(drv)					\
-	(container_of((drv), struct platform_driver, driver))
 
 #define to_asus_wmi_driver(pdrv)					\
 	(container_of((pdrv), struct asus_wmi_driver, platform_driver))
@@ -69,6 +67,7 @@ MODULE_LICENSE("GPL");
 #define NOTIFY_BRNDOWN_MAX		0x2e
 #define NOTIFY_KBD_BRTUP		0xc4
 #define NOTIFY_KBD_BRTDWN		0xc5
+#define NOTIFY_KBD_BRTTOGGLE		0xc7
 
 /* WMI Methods */
 #define ASUS_WMI_METHODID_SPEC	        0x43455053 /* BIOS SPECification */
@@ -77,6 +76,7 @@ MODULE_LICENSE("GPL");
 #define ASUS_WMI_METHODID_GPID		0x44495047 /* Get Panel ID?? (Resol) */
 #define ASUS_WMI_METHODID_QMOD		0x444F4D51 /* Quiet MODe */
 #define ASUS_WMI_METHODID_SPLV		0x4C425053 /* Set Panel Light Value */
+#define ASUS_WMI_METHODID_AGFN		0x4E464741 /* FaN? */
 #define ASUS_WMI_METHODID_SFUN		0x4E554653 /* FUNCtionalities */
 #define ASUS_WMI_METHODID_SDSP		0x50534453 /* Set DiSPlay output */
 #define ASUS_WMI_METHODID_GDSP		0x50534447 /* Get DiSPlay output */
@@ -115,10 +115,12 @@ MODULE_LICENSE("GPL");
 #define ASUS_WMI_DEVID_LED6		0x00020016
 
 /* Backlight and Brightness */
+#define ASUS_WMI_DEVID_ALS_ENABLE	0x00050001 /* Ambient Light Sensor */
 #define ASUS_WMI_DEVID_BACKLIGHT	0x00050011
 #define ASUS_WMI_DEVID_BRIGHTNESS	0x00050012
 #define ASUS_WMI_DEVID_KBD_BACKLIGHT	0x00050021
 #define ASUS_WMI_DEVID_LIGHT_SENSOR	0x00050022 /* ?? */
+#define ASUS_WMI_DEVID_LIGHTBAR		0x00050025
 
 /* Misc */
 #define ASUS_WMI_DEVID_CAMERA		0x00060013
@@ -148,10 +150,52 @@ MODULE_LICENSE("GPL");
 #define ASUS_WMI_DSTS_BIOS_BIT		0x00040000
 #define ASUS_WMI_DSTS_BRIGHTNESS_MASK	0x000000FF
 #define ASUS_WMI_DSTS_MAX_BRIGTH_MASK	0x0000FF00
+#define ASUS_WMI_DSTS_LIGHTBAR_MASK	0x0000000F
+
+#define ASUS_FAN_DESC			"cpu_fan"
+#define ASUS_FAN_MFUN			0x13
+#define ASUS_FAN_SFUN_READ		0x06
+#define ASUS_FAN_SFUN_WRITE		0x07
+#define ASUS_FAN_CTRL_MANUAL		1
+#define ASUS_FAN_CTRL_AUTO		2
+
+#define USB_INTEL_XUSB2PR		0xD0
+#define PCI_DEVICE_ID_INTEL_LYNXPOINT_LP_XHCI	0x9c31
+
+static const char * const ashs_ids[] = { "ATK4001", "ATK4002", NULL };
+
+static bool ashs_present(void)
+{
+	int i = 0;
+	while (ashs_ids[i]) {
+		if (acpi_dev_found(ashs_ids[i++]))
+			return true;
+	}
+	return false;
+}
 
 struct bios_args {
 	u32 arg0;
 	u32 arg1;
+} __packed;
+
+/*
+ * Struct that's used for all methods called via AGFN. Naming is
+ * identically to the AML code.
+ */
+struct agfn_args {
+	u16 mfun; /* probably "Multi-function" to be called */
+	u16 sfun; /* probably "Sub-function" to be called */
+	u16 len;  /* size of the hole struct, including subfunction fields */
+	u8 stas;  /* not used by now */
+	u8 err;   /* zero on success */
+} __packed;
+
+/* struct used for calling fan read and write methods */
+struct fan_args {
+	struct agfn_args agfn;	/* common fields */
+	u8 fan;			/* fan number: 0: set auto mode 1: 1st fan */
+	u32 speed;		/* read: RPM/100 - write: 0-255 */
 } __packed;
 
 /*
@@ -191,10 +235,13 @@ struct asus_wmi {
 	int tpd_led_wk;
 	struct led_classdev kbd_led;
 	int kbd_led_wk;
+	struct led_classdev lightbar_led;
+	int lightbar_led_wk;
 	struct workqueue_struct *led_workqueue;
 	struct work_struct tpd_led_work;
 	struct work_struct kbd_led_work;
 	struct work_struct wlan_led_work;
+	struct work_struct lightbar_led_work;
 
 	struct asus_rfkill wlan;
 	struct asus_rfkill bluetooth;
@@ -202,6 +249,10 @@ struct asus_wmi {
 	struct asus_rfkill wwan3g;
 	struct asus_rfkill gps;
 	struct asus_rfkill uwb;
+
+	bool asus_hwmon_fan_manual_mode;
+	int asus_hwmon_num_fans;
+	int asus_hwmon_pwm;
 
 	struct hotplug_slot *hotplug_slot;
 	struct mutex hotplug_lock;
@@ -234,12 +285,10 @@ static int asus_wmi_input_init(struct asus_wmi *asus)
 
 	err = input_register_device(asus->inputdev);
 	if (err)
-		goto err_free_keymap;
+		goto err_free_dev;
 
 	return 0;
 
-err_free_keymap:
-	sparse_keymap_free(asus->inputdev);
 err_free_dev:
 	input_free_device(asus->inputdev);
 	return err;
@@ -247,10 +296,8 @@ err_free_dev:
 
 static void asus_wmi_input_exit(struct asus_wmi *asus)
 {
-	if (asus->inputdev) {
-		sparse_keymap_free(asus->inputdev);
+	if (asus->inputdev)
 		input_unregister_device(asus->inputdev);
-	}
 
 	asus->inputdev = NULL;
 }
@@ -266,9 +313,9 @@ static int asus_wmi_evaluate_method(u32 method_id, u32 arg0, u32 arg1,
 	struct acpi_buffer output = { ACPI_ALLOCATE_BUFFER, NULL };
 	acpi_status status;
 	union acpi_object *obj;
-	u32 tmp;
+	u32 tmp = 0;
 
-	status = wmi_evaluate_method(ASUS_WMI_MGMT_GUID, 1, method_id,
+	status = wmi_evaluate_method(ASUS_WMI_MGMT_GUID, 0, method_id,
 				     &input, &output);
 
 	if (ACPI_FAILURE(status))
@@ -277,8 +324,6 @@ static int asus_wmi_evaluate_method(u32 method_id, u32 arg0, u32 arg1,
 	obj = (union acpi_object *)output.pointer;
 	if (obj && obj->type == ACPI_TYPE_INTEGER)
 		tmp = (u32) obj->integer.value;
-	else
-		tmp = 0;
 
 	if (retval)
 		*retval = tmp;
@@ -293,6 +338,36 @@ exit:
 		return -ENODEV;
 
 	return 0;
+}
+
+static int asus_wmi_evaluate_method_agfn(const struct acpi_buffer args)
+{
+	struct acpi_buffer input;
+	u64 phys_addr;
+	u32 retval;
+	u32 status = -1;
+
+	/*
+	 * Copy to dma capable address otherwise memory corruption occurs as
+	 * bios has to be able to access it.
+	 */
+	input.pointer = kzalloc(args.length, GFP_DMA | GFP_KERNEL);
+	input.length = args.length;
+	if (!input.pointer)
+		return -ENOMEM;
+	phys_addr = virt_to_phys(input.pointer);
+	memcpy(input.pointer, args.pointer, args.length);
+
+	status = asus_wmi_evaluate_method(ASUS_WMI_METHODID_AGFN,
+					phys_addr, 0, &retval);
+	if (!status)
+		memcpy(args.pointer, input.pointer, args.length);
+
+	kfree(input.pointer);
+	if (status)
+		return -ENXIO;
+
+	return retval;
 }
 
 static int asus_wmi_get_devstate(struct asus_wmi *asus, u32 dev_id, u32 *retval)
@@ -396,6 +471,7 @@ static void kbd_led_update(struct work_struct *work)
 		ctrl_param = 0x80 | (asus->kbd_led_wk & 0x7F);
 
 	asus_wmi_set_devstate(ASUS_WMI_DEVID_KBD_BACKLIGHT, ctrl_param, NULL);
+	led_classdev_notify_brightness_hw_changed(&asus->kbd_led, asus->kbd_led_wk);
 }
 
 static int kbd_led_read(struct asus_wmi *asus, int *level, int *env)
@@ -426,20 +502,27 @@ static int kbd_led_read(struct asus_wmi *asus, int *level, int *env)
 	return retval;
 }
 
-static void kbd_led_set(struct led_classdev *led_cdev,
-			enum led_brightness value)
+static void do_kbd_led_set(struct led_classdev *led_cdev, int value)
 {
 	struct asus_wmi *asus;
+	int max_level;
 
 	asus = container_of(led_cdev, struct asus_wmi, kbd_led);
+	max_level = asus->kbd_led.max_brightness;
 
-	if (value > asus->kbd_led.max_brightness)
-		value = asus->kbd_led.max_brightness;
+	if (value > max_level)
+		value = max_level;
 	else if (value < 0)
 		value = 0;
 
 	asus->kbd_led_wk = value;
 	queue_work(asus->led_workqueue, &asus->kbd_led_work);
+}
+
+static void kbd_led_set(struct led_classdev *led_cdev,
+			enum led_brightness value)
+{
+	do_kbd_led_set(led_cdev, value);
 }
 
 static enum led_brightness kbd_led_get(struct led_classdev *led_cdev)
@@ -508,6 +591,48 @@ static enum led_brightness wlan_led_get(struct led_classdev *led_cdev)
 	return result & ASUS_WMI_DSTS_BRIGHTNESS_MASK;
 }
 
+static void lightbar_led_update(struct work_struct *work)
+{
+	struct asus_wmi *asus;
+	int ctrl_param;
+
+	asus = container_of(work, struct asus_wmi, lightbar_led_work);
+
+	ctrl_param = asus->lightbar_led_wk;
+	asus_wmi_set_devstate(ASUS_WMI_DEVID_LIGHTBAR, ctrl_param, NULL);
+}
+
+static void lightbar_led_set(struct led_classdev *led_cdev,
+			     enum led_brightness value)
+{
+	struct asus_wmi *asus;
+
+	asus = container_of(led_cdev, struct asus_wmi, lightbar_led);
+
+	asus->lightbar_led_wk = !!value;
+	queue_work(asus->led_workqueue, &asus->lightbar_led_work);
+}
+
+static enum led_brightness lightbar_led_get(struct led_classdev *led_cdev)
+{
+	struct asus_wmi *asus;
+	u32 result;
+
+	asus = container_of(led_cdev, struct asus_wmi, lightbar_led);
+	asus_wmi_get_devstate(asus, ASUS_WMI_DEVID_LIGHTBAR, &result);
+
+	return result & ASUS_WMI_DSTS_LIGHTBAR_MASK;
+}
+
+static int lightbar_led_presence(struct asus_wmi *asus)
+{
+	u32 result;
+
+	asus_wmi_get_devstate(asus, ASUS_WMI_DEVID_LIGHTBAR, &result);
+
+	return result & ASUS_WMI_DSTS_PRESENCE_BIT;
+}
+
 static void asus_wmi_led_exit(struct asus_wmi *asus)
 {
 	if (!IS_ERR_OR_NULL(asus->kbd_led.dev))
@@ -516,13 +641,15 @@ static void asus_wmi_led_exit(struct asus_wmi *asus)
 		led_classdev_unregister(&asus->tpd_led);
 	if (!IS_ERR_OR_NULL(asus->wlan_led.dev))
 		led_classdev_unregister(&asus->wlan_led);
+	if (!IS_ERR_OR_NULL(asus->lightbar_led.dev))
+		led_classdev_unregister(&asus->lightbar_led);
 	if (asus->led_workqueue)
 		destroy_workqueue(asus->led_workqueue);
 }
 
 static int asus_wmi_led_init(struct asus_wmi *asus)
 {
-	int rv = 0;
+	int rv = 0, led_val;
 
 	asus->led_workqueue = create_singlethread_workqueue("led_workqueue");
 	if (!asus->led_workqueue)
@@ -542,10 +669,13 @@ static int asus_wmi_led_init(struct asus_wmi *asus)
 			goto error;
 	}
 
-	if (kbd_led_read(asus, NULL, NULL) >= 0) {
+	led_val = kbd_led_read(asus, NULL, NULL);
+	if (led_val >= 0) {
 		INIT_WORK(&asus->kbd_led_work, kbd_led_update);
 
+		asus->kbd_led_wk = led_val;
 		asus->kbd_led.name = "asus::kbd_backlight";
+		asus->kbd_led.flags = LED_BRIGHT_HW_CHANGED;
 		asus->kbd_led.brightness_set = kbd_led_set;
 		asus->kbd_led.brightness_get = kbd_led_get;
 		asus->kbd_led.max_brightness = 3;
@@ -556,7 +686,7 @@ static int asus_wmi_led_init(struct asus_wmi *asus)
 			goto error;
 	}
 
-	if (wlan_led_presence(asus) && (asus->driver->quirks->wapf == 4)) {
+	if (wlan_led_presence(asus) && (asus->driver->quirks->wapf > 0)) {
 		INIT_WORK(&asus->wlan_led_work, wlan_led_update);
 
 		asus->wlan_led.name = "asus::wlan";
@@ -569,6 +699,20 @@ static int asus_wmi_led_init(struct asus_wmi *asus)
 
 		rv = led_classdev_register(&asus->platform_device->dev,
 					   &asus->wlan_led);
+		if (rv)
+			goto error;
+	}
+
+	if (lightbar_led_presence(asus)) {
+		INIT_WORK(&asus->lightbar_led_work, lightbar_led_update);
+
+		asus->lightbar_led.name = "asus::lightbar";
+		asus->lightbar_led.brightness_set = lightbar_led_set;
+		asus->lightbar_led.brightness_get = lightbar_led_get;
+		asus->lightbar_led.max_brightness = 1;
+
+		rv = led_classdev_register(&asus->platform_device->dev,
+					   &asus->lightbar_led);
 	}
 
 error:
@@ -642,8 +786,7 @@ static void asus_rfkill_hotplug(struct asus_wmi *asus)
 			dev = pci_scan_single_device(bus, 0);
 			if (dev) {
 				pci_bus_assign_resources(bus);
-				if (pci_bus_add_device(dev))
-					pr_err("Unable to hotplug wifi\n");
+				pci_bus_add_device(dev);
 			}
 		} else {
 			dev = pci_get_slot(bus, 0);
@@ -725,12 +868,6 @@ static int asus_get_adapter_status(struct hotplug_slot *hotplug_slot,
 	return 0;
 }
 
-static void asus_cleanup_pci_hotplug(struct hotplug_slot *hotplug_slot)
-{
-	kfree(hotplug_slot->info);
-	kfree(hotplug_slot);
-}
-
 static struct hotplug_slot_ops asus_hotplug_slot_ops = {
 	.owner = THIS_MODULE,
 	.get_adapter_status = asus_get_adapter_status,
@@ -772,7 +909,6 @@ static int asus_setup_pci_hotplug(struct asus_wmi *asus)
 		goto error_info;
 
 	asus->hotplug_slot->private = asus;
-	asus->hotplug_slot->release = &asus_cleanup_pci_hotplug;
 	asus->hotplug_slot->ops = &asus_hotplug_slot_ops;
 	asus_get_adapter_status(asus->hotplug_slot,
 				&asus->hotplug_slot->info->adapter_status);
@@ -887,7 +1023,7 @@ static int asus_new_rfkill(struct asus_wmi *asus,
 		return -EINVAL;
 
 	if ((dev_id == ASUS_WMI_DEVID_WLAN) &&
-			(asus->driver->quirks->wapf == 4))
+			(asus->driver->quirks->wapf > 0))
 		rfkill_set_led_trigger_name(*rfkill, "asus-wlan");
 
 	rfkill_init_sw_state(*rfkill, !result);
@@ -902,6 +1038,9 @@ static int asus_new_rfkill(struct asus_wmi *asus,
 
 static void asus_wmi_rfkill_exit(struct asus_wmi *asus)
 {
+	if (asus->driver->wlan_ctrl_by_user && ashs_present())
+		return;
+
 	asus_unregister_rfkill_notifier(asus, "\\_SB.PCI0.P0P5");
 	asus_unregister_rfkill_notifier(asus, "\\_SB.PCI0.P0P6");
 	asus_unregister_rfkill_notifier(asus, "\\_SB.PCI0.P0P7");
@@ -915,8 +1054,11 @@ static void asus_wmi_rfkill_exit(struct asus_wmi *asus)
 	 * asus_unregister_rfkill_notifier()
 	 */
 	asus_rfkill_hotplug(asus);
-	if (asus->hotplug_slot)
+	if (asus->hotplug_slot) {
 		pci_hp_deregister(asus->hotplug_slot);
+		kfree(asus->hotplug_slot->info);
+		kfree(asus->hotplug_slot);
+	}
 	if (asus->hotplug_workqueue)
 		destroy_workqueue(asus->hotplug_workqueue);
 
@@ -1021,36 +1163,261 @@ exit:
 	return result;
 }
 
+static void asus_wmi_set_xusb2pr(struct asus_wmi *asus)
+{
+	struct pci_dev *xhci_pdev;
+	u32 orig_ports_available;
+	u32 ports_available = asus->driver->quirks->xusb2pr;
+
+	xhci_pdev = pci_get_device(PCI_VENDOR_ID_INTEL,
+			PCI_DEVICE_ID_INTEL_LYNXPOINT_LP_XHCI,
+			NULL);
+
+	if (!xhci_pdev)
+		return;
+
+	pci_read_config_dword(xhci_pdev, USB_INTEL_XUSB2PR,
+				&orig_ports_available);
+
+	pci_write_config_dword(xhci_pdev, USB_INTEL_XUSB2PR,
+				cpu_to_le32(ports_available));
+
+	pr_info("set USB_INTEL_XUSB2PR old: 0x%04x, new: 0x%04x\n",
+			orig_ports_available, ports_available);
+}
+
+/*
+ * Some devices dont support or have borcken get_als method
+ * but still support set method.
+ */
+static void asus_wmi_set_als(void)
+{
+	asus_wmi_set_devstate(ASUS_WMI_DEVID_ALS_ENABLE, 1, NULL);
+}
+
 /*
  * Hwmon device
  */
-static ssize_t asus_hwmon_pwm1(struct device *dev,
+static int asus_hwmon_agfn_fan_speed_read(struct asus_wmi *asus, int fan,
+					  int *speed)
+{
+	struct fan_args args = {
+		.agfn.len = sizeof(args),
+		.agfn.mfun = ASUS_FAN_MFUN,
+		.agfn.sfun = ASUS_FAN_SFUN_READ,
+		.fan = fan,
+		.speed = 0,
+	};
+	struct acpi_buffer input = { (acpi_size) sizeof(args), &args };
+	int status;
+
+	if (fan != 1)
+		return -EINVAL;
+
+	status = asus_wmi_evaluate_method_agfn(input);
+
+	if (status || args.agfn.err)
+		return -ENXIO;
+
+	if (speed)
+		*speed = args.speed;
+
+	return 0;
+}
+
+static int asus_hwmon_agfn_fan_speed_write(struct asus_wmi *asus, int fan,
+				     int *speed)
+{
+	struct fan_args args = {
+		.agfn.len = sizeof(args),
+		.agfn.mfun = ASUS_FAN_MFUN,
+		.agfn.sfun = ASUS_FAN_SFUN_WRITE,
+		.fan = fan,
+		.speed = speed ?  *speed : 0,
+	};
+	struct acpi_buffer input = { (acpi_size) sizeof(args), &args };
+	int status;
+
+	/* 1: for setting 1st fan's speed 0: setting auto mode */
+	if (fan != 1 && fan != 0)
+		return -EINVAL;
+
+	status = asus_wmi_evaluate_method_agfn(input);
+
+	if (status || args.agfn.err)
+		return -ENXIO;
+
+	if (speed && fan == 1)
+		asus->asus_hwmon_pwm = *speed;
+
+	return 0;
+}
+
+/*
+ * Check if we can read the speed of one fan. If true we assume we can also
+ * control it.
+ */
+static int asus_hwmon_get_fan_number(struct asus_wmi *asus, int *num_fans)
+{
+	int status;
+	int speed = 0;
+
+	*num_fans = 0;
+
+	status = asus_hwmon_agfn_fan_speed_read(asus, 1, &speed);
+	if (!status)
+		*num_fans = 1;
+
+	return 0;
+}
+
+static int asus_hwmon_fan_set_auto(struct asus_wmi *asus)
+{
+	int status;
+
+	status = asus_hwmon_agfn_fan_speed_write(asus, 0, NULL);
+	if (status)
+		return -ENXIO;
+
+	asus->asus_hwmon_fan_manual_mode = false;
+
+	return 0;
+}
+
+static int asus_hwmon_fan_rpm_show(struct device *dev, int fan)
+{
+	struct asus_wmi *asus = dev_get_drvdata(dev);
+	int value;
+	int ret;
+
+	/* no speed readable on manual mode */
+	if (asus->asus_hwmon_fan_manual_mode)
+		return -ENXIO;
+
+	ret = asus_hwmon_agfn_fan_speed_read(asus, fan+1, &value);
+	if (ret) {
+		pr_warn("reading fan speed failed: %d\n", ret);
+		return -ENXIO;
+	}
+
+	return value;
+}
+
+static void asus_hwmon_pwm_show(struct asus_wmi *asus, int fan, int *value)
+{
+	int err;
+
+	if (asus->asus_hwmon_pwm >= 0) {
+		*value = asus->asus_hwmon_pwm;
+		return;
+	}
+
+	err = asus_wmi_get_devstate(asus, ASUS_WMI_DEVID_FAN_CTRL, value);
+	if (err < 0)
+		return;
+
+	*value &= 0xFF;
+
+	if (*value == 1) /* Low Speed */
+		*value = 85;
+	else if (*value == 2)
+		*value = 170;
+	else if (*value == 3)
+		*value = 255;
+	else if (*value) {
+		pr_err("Unknown fan speed %#x\n", *value);
+		*value = -1;
+	}
+}
+
+static ssize_t pwm1_show(struct device *dev,
 			       struct device_attribute *attr,
 			       char *buf)
 {
 	struct asus_wmi *asus = dev_get_drvdata(dev);
-	u32 value;
-	int err;
+	int value;
 
-	err = asus_wmi_get_devstate(asus, ASUS_WMI_DEVID_FAN_CTRL, &value);
-
-	if (err < 0)
-		return err;
-
-	value &= 0xFF;
-
-	if (value == 1) /* Low Speed */
-		value = 85;
-	else if (value == 2)
-		value = 170;
-	else if (value == 3)
-		value = 255;
-	else if (value != 0) {
-		pr_err("Unknown fan speed %#x\n", value);
-		value = -1;
-	}
+	asus_hwmon_pwm_show(asus, 0, &value);
 
 	return sprintf(buf, "%d\n", value);
+}
+
+static ssize_t pwm1_store(struct device *dev,
+				     struct device_attribute *attr,
+				     const char *buf, size_t count) {
+	struct asus_wmi *asus = dev_get_drvdata(dev);
+	int value;
+	int state;
+	int ret;
+
+	ret = kstrtouint(buf, 10, &value);
+
+	if (ret)
+		return ret;
+
+	value = clamp(value, 0, 255);
+
+	state = asus_hwmon_agfn_fan_speed_write(asus, 1, &value);
+	if (state)
+		pr_warn("Setting fan speed failed: %d\n", state);
+	else
+		asus->asus_hwmon_fan_manual_mode = true;
+
+	return count;
+}
+
+static ssize_t fan1_input_show(struct device *dev,
+					struct device_attribute *attr,
+					char *buf)
+{
+	int value = asus_hwmon_fan_rpm_show(dev, 0);
+
+	return sprintf(buf, "%d\n", value < 0 ? -1 : value*100);
+
+}
+
+static ssize_t pwm1_enable_show(struct device *dev,
+						 struct device_attribute *attr,
+						 char *buf)
+{
+	struct asus_wmi *asus = dev_get_drvdata(dev);
+
+	if (asus->asus_hwmon_fan_manual_mode)
+		return sprintf(buf, "%d\n", ASUS_FAN_CTRL_MANUAL);
+
+	return sprintf(buf, "%d\n", ASUS_FAN_CTRL_AUTO);
+}
+
+static ssize_t pwm1_enable_store(struct device *dev,
+						  struct device_attribute *attr,
+						  const char *buf, size_t count)
+{
+	struct asus_wmi *asus = dev_get_drvdata(dev);
+	int status = 0;
+	int state;
+	int ret;
+
+	ret = kstrtouint(buf, 10, &state);
+
+	if (ret)
+		return ret;
+
+	if (state == ASUS_FAN_CTRL_MANUAL)
+		asus->asus_hwmon_fan_manual_mode = true;
+	else
+		status = asus_hwmon_fan_set_auto(asus);
+
+	if (status)
+		return status;
+
+	return count;
+}
+
+static ssize_t fan1_label_show(struct device *dev,
+					  struct device_attribute *attr,
+					  char *buf)
+{
+	return sprintf(buf, "%s\n", ASUS_FAN_DESC);
 }
 
 static ssize_t asus_hwmon_temp1(struct device *dev,
@@ -1066,16 +1433,26 @@ static ssize_t asus_hwmon_temp1(struct device *dev,
 	if (err < 0)
 		return err;
 
-	value = KELVIN_TO_CELSIUS((value & 0xFFFF)) * 1000;
+	value = DECI_KELVIN_TO_CELSIUS((value & 0xFFFF)) * 1000;
 
 	return sprintf(buf, "%d\n", value);
 }
 
-static DEVICE_ATTR(pwm1, S_IRUGO, asus_hwmon_pwm1, NULL);
+/* Fan1 */
+static DEVICE_ATTR_RW(pwm1);
+static DEVICE_ATTR_RW(pwm1_enable);
+static DEVICE_ATTR_RO(fan1_input);
+static DEVICE_ATTR_RO(fan1_label);
+
+/* Temperature */
 static DEVICE_ATTR(temp1_input, S_IRUGO, asus_hwmon_temp1, NULL);
 
 static struct attribute *hwmon_attributes[] = {
 	&dev_attr_pwm1.attr,
+	&dev_attr_pwm1_enable.attr,
+	&dev_attr_fan1_input.attr,
+	&dev_attr_fan1_label.attr,
+
 	&dev_attr_temp1_input.attr,
 	NULL
 };
@@ -1086,19 +1463,28 @@ static umode_t asus_hwmon_sysfs_is_visible(struct kobject *kobj,
 	struct device *dev = container_of(kobj, struct device, kobj);
 	struct platform_device *pdev = to_platform_device(dev->parent);
 	struct asus_wmi *asus = platform_get_drvdata(pdev);
-	bool ok = true;
 	int dev_id = -1;
+	int fan_attr = -1;
 	u32 value = ASUS_WMI_UNSUPPORTED_METHOD;
+	bool ok = true;
 
 	if (attr == &dev_attr_pwm1.attr)
 		dev_id = ASUS_WMI_DEVID_FAN_CTRL;
 	else if (attr == &dev_attr_temp1_input.attr)
 		dev_id = ASUS_WMI_DEVID_THERMAL_CTRL;
 
+
+	if (attr == &dev_attr_fan1_input.attr
+	    || attr == &dev_attr_fan1_label.attr
+	    || attr == &dev_attr_pwm1.attr
+	    || attr == &dev_attr_pwm1_enable.attr) {
+		fan_attr = 1;
+	}
+
 	if (dev_id != -1) {
 		int err = asus_wmi_get_devstate(asus, dev_id, &value);
 
-		if (err < 0)
+		if (err < 0 && fan_attr == -1)
 			return 0; /* can't return negative here */
 	}
 
@@ -1114,16 +1500,22 @@ static umode_t asus_hwmon_sysfs_is_visible(struct kobject *kobj,
 		if (value == ASUS_WMI_UNSUPPORTED_METHOD || value & 0xFFF80000
 		    || (!asus->sfun && !(value & ASUS_WMI_DSTS_PRESENCE_BIT)))
 			ok = false;
+		else
+			ok = fan_attr <= asus->asus_hwmon_num_fans;
 	} else if (dev_id == ASUS_WMI_DEVID_THERMAL_CTRL) {
 		/* If value is zero, something is clearly wrong */
-		if (value == 0)
+		if (!value)
 			ok = false;
+	} else if (fan_attr <= asus->asus_hwmon_num_fans && fan_attr != -1) {
+		ok = true;
+	} else {
+		ok = false;
 	}
 
 	return ok ? attr->mode : 0;
 }
 
-static struct attribute_group hwmon_attribute_group = {
+static const struct attribute_group hwmon_attribute_group = {
 	.is_visible = asus_hwmon_sysfs_is_visible,
 	.attrs = hwmon_attributes
 };
@@ -1273,10 +1665,7 @@ static int asus_wmi_backlight_init(struct asus_wmi *asus)
 	int power;
 
 	max = read_brightness_max(asus);
-
-	if (max == -ENODEV)
-		max = 0;
-	else if (max < 0)
+	if (max < 0)
 		return max;
 
 	power = read_backlight_power(asus);
@@ -1313,8 +1702,7 @@ static int asus_wmi_backlight_init(struct asus_wmi *asus)
 
 static void asus_wmi_backlight_exit(struct asus_wmi *asus)
 {
-	if (asus->backlight_device)
-		backlight_device_unregister(asus->backlight_device);
+	backlight_device_unregister(asus->backlight_device);
 
 	asus->backlight_device = NULL;
 }
@@ -1370,10 +1758,26 @@ static void asus_wmi_notify(u32 value, void *context)
 		code = ASUS_WMI_BRN_DOWN;
 
 	if (code == ASUS_WMI_BRN_DOWN || code == ASUS_WMI_BRN_UP) {
-		if (!acpi_video_backlight_support()) {
+		if (acpi_video_get_backlight_type() == acpi_backlight_vendor) {
 			asus_wmi_backlight_notify(asus, orig_code);
 			goto exit;
 		}
+	}
+
+	if (code == NOTIFY_KBD_BRTUP) {
+		do_kbd_led_set(&asus->kbd_led, asus->kbd_led_wk + 1);
+		goto exit;
+	}
+	if (code == NOTIFY_KBD_BRTDWN) {
+		do_kbd_led_set(&asus->kbd_led, asus->kbd_led_wk - 1);
+		goto exit;
+	}
+	if (code == NOTIFY_KBD_BRTTOGGLE) {
+		if (asus->kbd_led_wk == asus->kbd_led.max_brightness)
+			do_kbd_led_set(&asus->kbd_led, 0);
+		else
+			do_kbd_led_set(&asus->kbd_led, asus->kbd_led_wk + 1);
+		goto exit;
 	}
 
 	if (is_display_toggle(code) &&
@@ -1407,7 +1811,7 @@ static ssize_t store_sys_wmi(struct asus_wmi *asus, int devid,
 	int rv, err, value;
 
 	value = asus_wmi_get_devstate_simple(asus, devid);
-	if (value == -ENODEV)	/* Check device presence */
+	if (value < 0)
 		return value;
 
 	rv = parse_arg(buf, count, &value);
@@ -1458,8 +1862,9 @@ ASUS_WMI_CREATE_DEVICE_ATTR(touchpad, 0644, ASUS_WMI_DEVID_TOUCHPAD);
 ASUS_WMI_CREATE_DEVICE_ATTR(camera, 0644, ASUS_WMI_DEVID_CAMERA);
 ASUS_WMI_CREATE_DEVICE_ATTR(cardr, 0644, ASUS_WMI_DEVID_CARDREADER);
 ASUS_WMI_CREATE_DEVICE_ATTR(lid_resume, 0644, ASUS_WMI_DEVID_LID_RESUME);
+ASUS_WMI_CREATE_DEVICE_ATTR(als_enable, 0644, ASUS_WMI_DEVID_ALS_ENABLE);
 
-static ssize_t store_cpufv(struct device *dev, struct device_attribute *attr,
+static ssize_t cpufv_store(struct device *dev, struct device_attribute *attr,
 			   const char *buf, size_t count)
 {
 	int value, rv;
@@ -1476,7 +1881,7 @@ static ssize_t store_cpufv(struct device *dev, struct device_attribute *attr,
 	return count;
 }
 
-static DEVICE_ATTR(cpufv, S_IRUGO | S_IWUSR, NULL, store_cpufv);
+static DEVICE_ATTR_WO(cpufv);
 
 static struct attribute *platform_attributes[] = {
 	&dev_attr_cpufv.attr,
@@ -1484,6 +1889,7 @@ static struct attribute *platform_attributes[] = {
 	&dev_attr_cardr.attr,
 	&dev_attr_touchpad.attr,
 	&dev_attr_lid_resume.attr,
+	&dev_attr_als_enable.attr,
 	NULL
 };
 
@@ -1491,8 +1897,7 @@ static umode_t asus_sysfs_is_visible(struct kobject *kobj,
 				    struct attribute *attr, int idx)
 {
 	struct device *dev = container_of(kobj, struct device, kobj);
-	struct platform_device *pdev = to_platform_device(dev);
-	struct asus_wmi *asus = platform_get_drvdata(pdev);
+	struct asus_wmi *asus = dev_get_drvdata(dev);
 	bool ok = true;
 	int devid = -1;
 
@@ -1504,6 +1909,8 @@ static umode_t asus_sysfs_is_visible(struct kobject *kobj,
 		devid = ASUS_WMI_DEVID_TOUCHPAD;
 	else if (attr == &dev_attr_lid_resume.attr)
 		devid = ASUS_WMI_DEVID_LID_RESUME;
+	else if (attr == &dev_attr_als_enable.attr)
+		devid = ASUS_WMI_DEVID_ALS_ENABLE;
 
 	if (devid != -1)
 		ok = !(asus_wmi_get_devstate_simple(asus, devid) < 0);
@@ -1511,7 +1918,7 @@ static umode_t asus_sysfs_is_visible(struct kobject *kobj,
 	return ok ? attr->mode : 0;
 }
 
-static struct attribute_group platform_attribute_group = {
+static const struct attribute_group platform_attribute_group = {
 	.is_visible = asus_sysfs_is_visible,
 	.attrs = platform_attributes
 };
@@ -1636,7 +2043,7 @@ static int show_call(struct seq_file *m, void *data)
 	acpi_status status;
 
 	status = wmi_evaluate_method(ASUS_WMI_MGMT_GUID,
-				     1, asus->debug.method_id,
+				     0, asus->debug.method_id,
 				     &input, &output);
 
 	if (ACPI_FAILURE(status))
@@ -1729,6 +2136,25 @@ error_debugfs:
 	return -ENOMEM;
 }
 
+static int asus_wmi_fan_init(struct asus_wmi *asus)
+{
+	int status;
+
+	asus->asus_hwmon_pwm = -1;
+	asus->asus_hwmon_num_fans = -1;
+	asus->asus_hwmon_fan_manual_mode = false;
+
+	status = asus_hwmon_get_fan_number(asus, &asus->asus_hwmon_num_fans);
+	if (status) {
+		asus->asus_hwmon_num_fans = 0;
+		pr_warn("Could not determine number of fans: %d\n", status);
+		return -ENXIO;
+	}
+
+	pr_info("Number of fans: %d\n", asus->asus_hwmon_num_fans);
+	return 0;
+}
+
 /*
  * WMI Driver
  */
@@ -1737,6 +2163,7 @@ static int asus_wmi_add(struct platform_device *pdev)
 	struct platform_driver *pdrv = to_platform_driver(pdev->dev.driver);
 	struct asus_wmi_driver *wdrv = to_asus_wmi_driver(pdrv);
 	struct asus_wmi *asus;
+	const char *chassis_type;
 	acpi_status status;
 	int err;
 	u32 result;
@@ -1761,6 +2188,9 @@ static int asus_wmi_add(struct platform_device *pdev)
 	if (err)
 		goto fail_input;
 
+	err = asus_wmi_fan_init(asus); /* probably no problems on error */
+	asus_hwmon_fan_set_auto(asus);
+
 	err = asus_wmi_hwmon_init(asus);
 	if (err)
 		goto fail_hwmon;
@@ -1769,20 +2199,40 @@ static int asus_wmi_add(struct platform_device *pdev)
 	if (err)
 		goto fail_leds;
 
-	err = asus_wmi_rfkill_init(asus);
-	if (err)
-		goto fail_rfkill;
+	asus_wmi_get_devstate(asus, ASUS_WMI_DEVID_WLAN, &result);
+	if (result & (ASUS_WMI_DSTS_PRESENCE_BIT | ASUS_WMI_DSTS_USER_BIT))
+		asus->driver->wlan_ctrl_by_user = 1;
+
+	if (!(asus->driver->wlan_ctrl_by_user && ashs_present())) {
+		err = asus_wmi_rfkill_init(asus);
+		if (err)
+			goto fail_rfkill;
+	}
+
+	if (asus->driver->quirks->wmi_force_als_set)
+		asus_wmi_set_als();
+
+	/* Some Asus desktop boards export an acpi-video backlight interface,
+	   stop this from showing up */
+	chassis_type = dmi_get_system_info(DMI_CHASSIS_TYPE);
+	if (chassis_type && !strcmp(chassis_type, "3"))
+		acpi_video_set_dmi_backlight_type(acpi_backlight_vendor);
 
 	if (asus->driver->quirks->wmi_backlight_power)
-		acpi_video_dmi_promote_vendor();
-	if (!acpi_video_backlight_support()) {
-		pr_info("Disabling ACPI video driver\n");
-		acpi_video_unregister();
+		acpi_video_set_dmi_backlight_type(acpi_backlight_vendor);
+
+	if (asus->driver->quirks->wmi_backlight_native)
+		acpi_video_set_dmi_backlight_type(acpi_backlight_native);
+
+	if (asus->driver->quirks->xusb2pr)
+		asus_wmi_set_xusb2pr(asus);
+
+	if (acpi_video_get_backlight_type() == acpi_backlight_vendor) {
 		err = asus_wmi_backlight_init(asus);
 		if (err && err != -ENODEV)
 			goto fail_backlight;
 	} else
-		pr_info("Backlight controlled by ACPI video driver\n");
+		err = asus_wmi_set_devstate(ASUS_WMI_DEVID_BACKLIGHT, 2, NULL);
 
 	status = wmi_install_notify_handler(asus->driver->event_guid,
 					    asus_wmi_notify, asus);
@@ -1795,10 +2245,6 @@ static int asus_wmi_add(struct platform_device *pdev)
 	err = asus_wmi_debugfs_init(asus);
 	if (err)
 		goto fail_debugfs;
-
-	asus_wmi_get_devstate(asus, ASUS_WMI_DEVID_WLAN, &result);
-	if (result & (ASUS_WMI_DSTS_PRESENCE_BIT | ASUS_WMI_DSTS_USER_BIT))
-		asus->driver->wlan_ctrl_by_user = 1;
 
 	return 0;
 
@@ -1832,6 +2278,7 @@ static int asus_wmi_remove(struct platform_device *device)
 	asus_wmi_rfkill_exit(asus);
 	asus_wmi_debugfs_exit(asus);
 	asus_wmi_platform_exit(asus);
+	asus_hwmon_fan_set_auto(asus);
 
 	kfree(asus);
 	return 0;
@@ -1855,6 +2302,16 @@ static int asus_hotk_thaw(struct device *device)
 		wlan = asus_wmi_get_devstate_simple(asus, ASUS_WMI_DEVID_WLAN);
 		asus_wmi_set_devstate(ASUS_WMI_DEVID_WLAN, wlan, NULL);
 	}
+
+	return 0;
+}
+
+static int asus_hotk_resume(struct device *device)
+{
+	struct asus_wmi *asus = dev_get_drvdata(device);
+
+	if (!IS_ERR_OR_NULL(asus->kbd_led.dev))
+		queue_work(asus->led_workqueue, &asus->kbd_led_work);
 
 	return 0;
 }
@@ -1889,6 +2346,8 @@ static int asus_hotk_restore(struct device *device)
 		bl = !asus_wmi_get_devstate_simple(asus, ASUS_WMI_DEVID_UWB);
 		rfkill_set_sw_state(asus->uwb.rfkill, bl);
 	}
+	if (!IS_ERR_OR_NULL(asus->kbd_led.dev))
+		queue_work(asus->led_workqueue, &asus->kbd_led_work);
 
 	return 0;
 }
@@ -1896,6 +2355,7 @@ static int asus_hotk_restore(struct device *device)
 static const struct dev_pm_ops asus_pm_ops = {
 	.thaw = asus_hotk_thaw,
 	.restore = asus_hotk_restore,
+	.resume = asus_hotk_resume,
 };
 
 static int asus_wmi_probe(struct platform_device *pdev)

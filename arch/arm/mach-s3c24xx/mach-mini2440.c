@@ -1,17 +1,12 @@
-/* linux/arch/arm/mach-s3c2440/mach-mini2440.c
- *
- * Copyright (c) 2008 Ramax Lo <ramaxlo@gmail.com>
- *      Based on mach-anubis.c by Ben Dooks <ben@simtec.co.uk>
- *      and modifications by SBZ <sbz@spgui.org> and
- *      Weibing <http://weibing.blogbus.com> and
- *      Michel Pollet <buserror@gmail.com>
- *
- * For product information, visit http://code.google.com/p/mini2440/
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
-*/
+// SPDX-License-Identifier: GPL-2.0
+//
+// Copyright (c) 2008 Ramax Lo <ramaxlo@gmail.com>
+//      Based on mach-anubis.c by Ben Dooks <ben@simtec.co.uk>
+//      and modifications by SBZ <sbz@spgui.org> and
+//      Weibing <http://weibing.blogbus.com> and
+//      Michel Pollet <buserror@gmail.com>
+//
+// For product information, visit http://code.google.com/p/mini2440/
 
 #include <linux/kernel.h>
 #include <linux/types.h>
@@ -23,8 +18,9 @@
 #include <linux/input.h>
 #include <linux/io.h>
 #include <linux/serial_core.h>
+#include <linux/serial_s3c.h>
 #include <linux/dm9000.h>
-#include <linux/platform_data/at24.h>
+#include <linux/property.h>
 #include <linux/platform_device.h>
 #include <linux/gpio_keys.h>
 #include <linux/i2c.h>
@@ -37,7 +33,6 @@
 #include <mach/fb.h>
 #include <asm/mach-types.h>
 
-#include <plat/regs-serial.h>
 #include <mach/regs-gpio.h>
 #include <linux/platform_data/leds-s3c24xx.h>
 #include <mach/regs-lcd.h>
@@ -49,12 +44,11 @@
 #include <linux/platform_data/usb-s3c2410_udc.h>
 
 #include <linux/mtd/mtd.h>
-#include <linux/mtd/nand.h>
+#include <linux/mtd/rawnand.h>
 #include <linux/mtd/nand_ecc.h>
 #include <linux/mtd/partitions.h>
 
 #include <plat/gpio-cfg.h>
-#include <plat/clock.h>
 #include <plat/devs.h>
 #include <plat/cpu.h>
 #include <plat/samsung-time.h>
@@ -288,6 +282,7 @@ static struct s3c2410_platform_nand mini2440_nand_info __initdata = {
 	.nr_sets	= ARRAY_SIZE(mini2440_nand_sets),
 	.sets		= mini2440_nand_sets,
 	.ignore_unset_ecc = 1,
+	.ecc_mode       = NAND_ECC_HW,
 };
 
 /* DM9000AEP 10/100 ethernet controller */
@@ -486,21 +481,40 @@ static struct platform_device mini2440_audio = {
 /*
  * I2C devices
  */
-static struct at24_platform_data at24c08 = {
-	.byte_len	= SZ_8K / 8,
-	.page_size	= 16,
+static const struct property_entry mini2440_at24_properties[] = {
+	PROPERTY_ENTRY_U32("pagesize", 16),
+	{ }
 };
 
 static struct i2c_board_info mini2440_i2c_devs[] __initdata = {
 	{
 		I2C_BOARD_INFO("24c08", 0x50),
-		.platform_data = &at24c08,
+		.properties = mini2440_at24_properties,
 	},
+};
+
+static struct uda134x_platform_data s3c24xx_uda134x = {
+	.l3 = {
+		.gpio_clk = S3C2410_GPB(4),
+		.gpio_data = S3C2410_GPB(3),
+		.gpio_mode = S3C2410_GPB(2),
+		.use_gpios = 1,
+		.data_hold = 1,
+		.data_setup = 1,
+		.clock_high = 1,
+		.mode_hold = 1,
+		.mode = 1,
+		.mode_setup = 1,
+	},
+	.model = UDA134X_UDA1341,
 };
 
 static struct platform_device uda1340_codec = {
 		.name = "uda134x-codec",
 		.id = -1,
+		.dev = {
+			.platform_data	= &s3c24xx_uda134x,
+		},
 };
 
 static struct platform_device *mini2440_devices[] __initdata = {
@@ -517,6 +531,7 @@ static struct platform_device *mini2440_devices[] __initdata = {
 	&mini2440_button_device,
 	&s3c_device_nand,
 	&s3c_device_sdi,
+	&s3c2440_device_dma,
 	&s3c_device_iis,
 	&uda1340_codec,
 	&mini2440_audio,
@@ -525,9 +540,14 @@ static struct platform_device *mini2440_devices[] __initdata = {
 static void __init mini2440_map_io(void)
 {
 	s3c24xx_init_io(mini2440_iodesc, ARRAY_SIZE(mini2440_iodesc));
-	s3c24xx_init_clocks(12000000);
 	s3c24xx_init_uarts(mini2440_uartcfgs, ARRAY_SIZE(mini2440_uartcfgs));
 	samsung_set_timer_source(SAMSUNG_PWM3, SAMSUNG_PWM4);
+}
+
+static void __init mini2440_init_time(void)
+{
+	s3c2440_init_clocks(12000000);
+	samsung_timer_init();
 }
 
 /*
@@ -690,6 +710,5 @@ MACHINE_START(MINI2440, "MINI2440")
 	.map_io		= mini2440_map_io,
 	.init_machine	= mini2440_init,
 	.init_irq	= s3c2440_init_irq,
-	.init_time	= samsung_timer_init,
-	.restart	= s3c244x_restart,
+	.init_time	= mini2440_init_time,
 MACHINE_END

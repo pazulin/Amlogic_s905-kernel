@@ -62,7 +62,7 @@ static inline unsigned long long neff_sign_extend(unsigned long val)
 /* Entries per level */
 #define PTRS_PER_PTE	(PAGE_SIZE / (1 << PTE_MAGNITUDE))
 
-#define FIRST_USER_ADDRESS	0
+#define FIRST_USER_ADDRESS	0UL
 
 #define PHYS_ADDR_MASK29		0x1fffffff
 #define PHYS_ADDR_MASK32		0xffffffff
@@ -155,8 +155,6 @@ extern void page_table_range_init(unsigned long start, unsigned long end,
 /* arch/sh/mm/mmap.c */
 #define HAVE_ARCH_UNMAPPED_AREA
 #define HAVE_ARCH_UNMAPPED_AREA_TOPDOWN
-
-#define __HAVE_ARCH_PTE_SPECIAL
 
 #include <asm-generic/pgtable.h>
 

@@ -1,27 +1,12 @@
-/*
- * S3C2442 Machine Support for Openmoko GTA02 / FreeRunner.
- *
- * Copyright (C) 2006-2009 by Openmoko, Inc.
- * Authors: Harald Welte <laforge@openmoko.org>
- *          Andy Green <andy@openmoko.org>
- *          Werner Almesberger <werner@openmoko.org>
- * All rights reserved.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License as
- * published by the Free Software Foundation; either version 2 of
- * the License, or (at your option) any later version.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston,
- * MA 02111-1307 USA
- */
+// SPDX-License-Identifier: GPL-2.0+
+//
+// S3C2442 Machine Support for Openmoko GTA02 / FreeRunner.
+//
+// Copyright (C) 2006-2009 by Openmoko, Inc.
+// Authors: Harald Welte <laforge@openmoko.org>
+//          Andy Green <andy@openmoko.org>
+//          Werner Almesberger <werner@openmoko.org>
+// All rights reserved.
 
 #include <linux/kernel.h>
 #include <linux/types.h>
@@ -35,6 +20,7 @@
 #include <linux/workqueue.h>
 #include <linux/platform_device.h>
 #include <linux/serial_core.h>
+#include <linux/serial_s3c.h>
 #include <linux/input.h>
 #include <linux/io.h>
 #include <linux/i2c.h>
@@ -49,7 +35,7 @@
 #include <linux/mfd/pcf50633/pmic.h>
 
 #include <linux/mtd/mtd.h>
-#include <linux/mtd/nand.h>
+#include <linux/mtd/rawnand.h>
 #include <linux/mtd/nand_ecc.h>
 #include <linux/mtd/partitions.h>
 #include <linux/mtd/physmap.h>
@@ -81,7 +67,6 @@
 #include <plat/devs.h>
 #include <plat/gpio-cfg.h>
 #include <plat/pm.h>
-#include <plat/regs-serial.h>
 #include <plat/samsung-time.h>
 
 #include "common.h"
@@ -154,6 +139,7 @@ static struct s3c2410_uartcfg gta02_uartcfgs[] = {
 #define ADC_NOM_CHG_DETECT_1A 6
 #define ADC_NOM_CHG_DETECT_USB 43
 
+#ifdef CONFIG_PCF50633_ADC
 static void
 gta02_configure_pmu_for_charger(struct pcf50633 *pcf, void *unused, int res)
 {
@@ -174,6 +160,7 @@ gta02_configure_pmu_for_charger(struct pcf50633 *pcf, void *unused, int res)
 
 	pcf50633_mbc_usb_curlim_set(pcf, ma);
 }
+#endif
 
 static struct delayed_work gta02_charger_work;
 static int gta02_usb_vbus_draw;
@@ -196,7 +183,7 @@ static void gta02_charger_worker(struct work_struct *work)
 	 * If the PCF50633 ADC is disabled we fallback to a
 	 * 100mA limit for safety.
 	 */
-	pcf50633_mbc_usb_curlim_set(pcf, 100);
+	pcf50633_mbc_usb_curlim_set(gta02_pcf, 100);
 #endif
 }
 
@@ -441,6 +428,7 @@ static struct s3c2410_platform_nand __initdata gta02_nand_info = {
 	.twrph1		= 15,
 	.nr_sets	= ARRAY_SIZE(gta02_nand_sets),
 	.sets		= gta02_nand_sets,
+	.ecc_mode       = NAND_ECC_SOFT,
 };
 
 
@@ -501,7 +489,6 @@ static struct platform_device gta02_buttons_device = {
 static void __init gta02_map_io(void)
 {
 	s3c24xx_init_io(gta02_iodesc, ARRAY_SIZE(gta02_iodesc));
-	s3c24xx_init_clocks(12000000);
 	s3c24xx_init_uarts(gta02_uartcfgs, ARRAY_SIZE(gta02_uartcfgs));
 	samsung_set_timer_source(SAMSUNG_PWM3, SAMSUNG_PWM4);
 }
@@ -585,6 +572,11 @@ static void __init gta02_machine_init(void)
 	regulator_has_full_constraints();
 }
 
+static void __init gta02_init_time(void)
+{
+	s3c2442_init_clocks(12000000);
+	samsung_timer_init();
+}
 
 MACHINE_START(NEO1973_GTA02, "GTA02")
 	/* Maintainer: Nelson Castillo <arhuaco@freaks-unidos.net> */
@@ -592,6 +584,5 @@ MACHINE_START(NEO1973_GTA02, "GTA02")
 	.map_io		= gta02_map_io,
 	.init_irq	= s3c2442_init_irq,
 	.init_machine	= gta02_machine_init,
-	.init_time	= samsung_timer_init,
-	.restart	= s3c244x_restart,
+	.init_time	= gta02_init_time,
 MACHINE_END

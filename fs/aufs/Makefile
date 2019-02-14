@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0
 
 include ${src}/magic.mk
 ifeq (${CONFIG_AUFS_FS},m)
@@ -36,6 +37,7 @@ aufs-$(CONFIG_AUFS_HFSNOTIFY) += hfsnotify.o
 aufs-$(CONFIG_AUFS_EXPORT) += export.o
 aufs-$(CONFIG_AUFS_XATTR) += xattr.o
 aufs-$(CONFIG_FS_POSIX_ACL) += posix_acl.o
+aufs-$(CONFIG_AUFS_DIRREN) += dirren.o
 aufs-$(CONFIG_AUFS_FHSM) += fhsm.o
 aufs-$(CONFIG_AUFS_POLL) += poll.o
 aufs-$(CONFIG_AUFS_RDU) += rdu.o

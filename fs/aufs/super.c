@@ -1,5 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (C) 2005-2015 Junjiro R. Okajima
+ * Copyright (C) 2005-2018 Junjiro R. Okajima
  *
  * This program, aufs is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -35,7 +36,7 @@ static struct inode *aufs_alloc_inode(struct super_block *sb __maybe_unused)
 	c = au_cache_alloc_icntnr();
 	if (c) {
 		au_icntnr_init(c);
-		c->vfs_inode.i_version = 1; /* sigen(sb); */
+		inode_set_iversion(&c->vfs_inode, 1); /* sigen(sb); */
 		c->iinfo.ii_hinode = NULL;
 		return &c->vfs_inode;
 	}
@@ -46,13 +47,13 @@ static void aufs_destroy_inode_cb(struct rcu_head *head)
 {
 	struct inode *inode = container_of(head, struct inode, i_rcu);
 
-	INIT_HLIST_HEAD(&inode->i_dentry);
 	au_cache_free_icntnr(container_of(inode, struct au_icntnr, vfs_inode));
 }
 
 static void aufs_destroy_inode(struct inode *inode)
 {
-	au_iinfo_fin(inode);
+	if (!au_is_bad_inode(inode))
+		au_iinfo_fin(inode);
 	call_rcu(&inode->i_rcu, aufs_destroy_inode_cb);
 }
 
@@ -73,7 +74,7 @@ struct inode *au_iget_locked(struct super_block *sb, ino_t ino)
 	if (!err)
 		err = au_iinfo_init(inode);
 	if (!err)
-		inode->i_version++;
+		inode_inc_iversion(inode);
 	else {
 		iget_failed(inode);
 		inode = ERR_PTR(err);
@@ -90,42 +91,59 @@ out:
 static int au_show_brs(struct seq_file *seq, struct super_block *sb)
 {
 	int err;
-	aufs_bindex_t bindex, bend;
+	aufs_bindex_t bindex, bbot;
 	struct path path;
 	struct au_hdentry *hdp;
 	struct au_branch *br;
 	au_br_perm_str_t perm;
 
 	err = 0;
-	bend = au_sbend(sb);
-	hdp = au_di(sb->s_root)->di_hdentry;
-	for (bindex = 0; !err && bindex <= bend; bindex++) {
+	bbot = au_sbbot(sb);
+	bindex = 0;
+	hdp = au_hdentry(au_di(sb->s_root), bindex);
+	for (; !err && bindex <= bbot; bindex++, hdp++) {
 		br = au_sbr(sb, bindex);
 		path.mnt = au_br_mnt(br);
-		path.dentry = hdp[bindex].hd_dentry;
+		path.dentry = hdp->hd_dentry;
 		err = au_seq_path(seq, &path);
 		if (!err) {
 			au_optstr_br_perm(&perm, br->br_perm);
-			err = seq_printf(seq, "=%s", perm.a);
-			if (err == -1)
-				err = -E2BIG;
+			seq_printf(seq, "=%s", perm.a);
+			if (bindex != bbot)
+				seq_putc(seq, ':');
 		}
-		if (!err && bindex != bend)
-			err = seq_putc(seq, ':');
 	}
+	if (unlikely(err || seq_has_overflowed(seq)))
+		err = -E2BIG;
 
 	return err;
+}
+
+static void au_gen_fmt(char *fmt, int len __maybe_unused, const char *pat,
+		       const char *append)
+{
+	char *p;
+
+	p = fmt;
+	while (*pat != ':')
+		*p++ = *pat++;
+	*p++ = *pat++;
+	strcpy(p, append);
+	AuDebugOn(strlen(fmt) >= len);
 }
 
 static void au_show_wbr_create(struct seq_file *m, int v,
 			       struct au_sbinfo *sbinfo)
 {
 	const char *pat;
+	char fmt[32];
+	struct au_wbr_mfs *mfs;
 
 	AuRwMustAnyLock(&sbinfo->si_rwsem);
 
 	seq_puts(m, ",create=");
 	pat = au_optstr_wbr_create(v);
+	mfs = &sbinfo->si_wbr_mfs;
 	switch (v) {
 	case AuWbrCreate_TDP:
 	case AuWbrCreate_RR:
@@ -133,36 +151,28 @@ static void au_show_wbr_create(struct seq_file *m, int v,
 	case AuWbrCreate_PMFS:
 		seq_puts(m, pat);
 		break;
-	case AuWbrCreate_MFSV:
-		seq_printf(m, /*pat*/"mfs:%lu",
-			   jiffies_to_msecs(sbinfo->si_wbr_mfs.mfs_expire)
-			   / MSEC_PER_SEC);
-		break;
-	case AuWbrCreate_PMFSV:
-		seq_printf(m, /*pat*/"pmfs:%lu",
-			   jiffies_to_msecs(sbinfo->si_wbr_mfs.mfs_expire)
-			   / MSEC_PER_SEC);
-		break;
 	case AuWbrCreate_MFSRR:
-		seq_printf(m, /*pat*/"mfsrr:%llu",
-			   sbinfo->si_wbr_mfs.mfsrr_watermark);
+	case AuWbrCreate_TDMFS:
+	case AuWbrCreate_PMFSRR:
+		au_gen_fmt(fmt, sizeof(fmt), pat, "%llu");
+		seq_printf(m, fmt, mfs->mfsrr_watermark);
+		break;
+	case AuWbrCreate_MFSV:
+	case AuWbrCreate_PMFSV:
+		au_gen_fmt(fmt, sizeof(fmt), pat, "%lu");
+		seq_printf(m, fmt,
+			   jiffies_to_msecs(mfs->mfs_expire)
+			   / MSEC_PER_SEC);
 		break;
 	case AuWbrCreate_MFSRRV:
-		seq_printf(m, /*pat*/"mfsrr:%llu:%lu",
-			   sbinfo->si_wbr_mfs.mfsrr_watermark,
-			   jiffies_to_msecs(sbinfo->si_wbr_mfs.mfs_expire)
-			   / MSEC_PER_SEC);
-		break;
-	case AuWbrCreate_PMFSRR:
-		seq_printf(m, /*pat*/"pmfsrr:%llu",
-			   sbinfo->si_wbr_mfs.mfsrr_watermark);
-		break;
+	case AuWbrCreate_TDMFSV:
 	case AuWbrCreate_PMFSRRV:
-		seq_printf(m, /*pat*/"pmfsrr:%llu:%lu",
-			   sbinfo->si_wbr_mfs.mfsrr_watermark,
-			   jiffies_to_msecs(sbinfo->si_wbr_mfs.mfs_expire)
-			   / MSEC_PER_SEC);
+		au_gen_fmt(fmt, sizeof(fmt), pat, "%llu:%lu");
+		seq_printf(m, fmt, mfs->mfsrr_watermark,
+			   jiffies_to_msecs(mfs->mfs_expire) / MSEC_PER_SEC);
 		break;
+	default:
+		BUG();
 	}
 }
 
@@ -177,7 +187,7 @@ static int au_show_xino(struct seq_file *seq, struct super_block *sb)
 	struct qstr *name;
 	struct file *f;
 	struct dentry *d, *h_root;
-	struct au_hdentry *hdp;
+	struct au_branch *br;
 
 	AuRwMustAnyLock(&sbinfo->si_rwsem);
 
@@ -188,13 +198,13 @@ static int au_show_xino(struct seq_file *seq, struct super_block *sb)
 
 	/* stop printing the default xino path on the first writable branch */
 	h_root = NULL;
-	brid = au_xino_brid(sb);
-	if (brid >= 0) {
-		bindex = au_br_index(sb, brid);
-		hdp = au_di(sb->s_root)->di_hdentry;
-		h_root = hdp[0 + bindex].hd_dentry;
+	bindex = au_xi_root(sb, f->f_path.dentry);
+	if (bindex >= 0) {
+		br = au_sbr_sb(sb, bindex);
+		h_root = au_br_dentry(br);
 	}
-	d = f->f_dentry;
+
+	d = f->f_path.dentry;
 	name = &d->d_name;
 	/* safe ->d_parent because the file is unlinked */
 	if (d->d_parent == h_root
@@ -236,8 +246,12 @@ static int aufs_show_options(struct seq_file *m, struct dentry *dentry)
 } while (0)
 
 	sb = dentry->d_sb;
-	if (sb->s_flags & MS_POSIXACL)
+	if (sb->s_flags & SB_POSIXACL)
 		seq_puts(m, ",acl");
+#if 0
+	if (sb->s_flags & SB_I_VERSION)
+		seq_puts(m, ",i_version");
+#endif
 
 	/* lock free root dinfo */
 	si_noflush_read_lock(sb);
@@ -258,7 +272,6 @@ static int aufs_show_options(struct seq_file *m, struct dentry *dentry)
 	AuBool(PLINK, plink);
 	AuBool(DIO, dio);
 	AuBool(DIRPERM1, dirperm1);
-	/* AuBool(REFROF, refrof); */
 
 	v = sbinfo->si_wbr_create;
 	if (v != AuWbrCreate_Def)
@@ -282,6 +295,7 @@ static int aufs_show_options(struct seq_file *m, struct dentry *dentry)
 
 	au_fhsm_show(m, sbinfo);
 
+	AuBool(DIRREN, dirren);
 	AuBool(SUM, sum);
 	/* AuBool(SUM_W, wsum); */
 	AuBool(WARN_PERM, warn_perm);
@@ -332,7 +346,7 @@ static int au_statfs_sum(struct super_block *sb, struct kstatfs *buf)
 	int err;
 	long bsize, factor;
 	u64 blocks, bfree, bavail, files, ffree;
-	aufs_bindex_t bend, bindex, i;
+	aufs_bindex_t bbot, bindex, i;
 	unsigned char shared;
 	struct path h_path;
 	struct super_block *h_sb;
@@ -344,8 +358,8 @@ static int au_statfs_sum(struct super_block *sb, struct kstatfs *buf)
 	blocks = 0;
 	bfree = 0;
 	bavail = 0;
-	bend = au_sbend(sb);
-	for (bindex = 0; bindex <= bend; bindex++) {
+	bbot = au_sbbot(sb);
+	for (bindex = 0; bindex <= bbot; bindex++) {
 		h_path.mnt = au_sbr_mnt(sb, bindex);
 		h_sb = h_path.mnt->mnt_sb;
 		shared = 0;
@@ -428,25 +442,23 @@ static int aufs_statfs(struct dentry *dentry, struct kstatfs *buf)
 static int aufs_sync_fs(struct super_block *sb, int wait)
 {
 	int err, e;
-	aufs_bindex_t bend, bindex;
+	aufs_bindex_t bbot, bindex;
 	struct au_branch *br;
 	struct super_block *h_sb;
 
 	err = 0;
 	si_noflush_read_lock(sb);
-	bend = au_sbend(sb);
-	for (bindex = 0; bindex <= bend; bindex++) {
+	bbot = au_sbbot(sb);
+	for (bindex = 0; bindex <= bbot; bindex++) {
 		br = au_sbr(sb, bindex);
 		if (!au_br_writable(br->br_perm))
 			continue;
 
 		h_sb = au_sbr_sb(sb, bindex);
-		if (h_sb->s_op->sync_fs) {
-			e = h_sb->s_op->sync_fs(h_sb, wait);
-			if (unlikely(e && !err))
-				err = e;
-			/* go on even if an error happens */
-		}
+		e = vfsub_sync_filesystem(h_sb, wait);
+		if (unlikely(e && !err))
+			err = e;
+		/* go on even if an error happens */
 	}
 	si_read_unlock(sb);
 
@@ -461,26 +473,14 @@ static void aufs_put_super(struct super_block *sb)
 	struct au_sbinfo *sbinfo;
 
 	sbinfo = au_sbi(sb);
-	if (!sbinfo)
-		return;
-
-	dbgaufs_si_fin(sbinfo);
-	kobject_put(&sbinfo->si_kobj);
+	if (sbinfo)
+		kobject_put(&sbinfo->si_kobj);
 }
 
 /* ---------------------------------------------------------------------- */
 
-void au_array_free(void *array)
-{
-	if (array) {
-		if (!is_vmalloc_addr(array))
-			kfree(array);
-		else
-			vfree(array);
-	}
-}
-
-void *au_array_alloc(unsigned long long *hint, au_arraycb_t cb, void *arg)
+void *au_array_alloc(unsigned long long *hint, au_arraycb_t cb,
+		     struct super_block *sb, void *arg)
 {
 	void *array;
 	unsigned long long n, sz;
@@ -505,7 +505,7 @@ void *au_array_alloc(unsigned long long *hint, au_arraycb_t cb, void *arg)
 		goto out;
 	}
 
-	n = cb(array, *hint, arg);
+	n = cb(sb, array, *hint, arg);
 	AuDebugOn(n > *hint);
 
 out:
@@ -513,7 +513,7 @@ out:
 	return array;
 }
 
-static unsigned long long au_iarray_cb(void *a,
+static unsigned long long au_iarray_cb(struct super_block *sb, void *a,
 				       unsigned long long max __maybe_unused,
 				       void *arg)
 {
@@ -524,10 +524,10 @@ static unsigned long long au_iarray_cb(void *a,
 	n = 0;
 	p = a;
 	head = arg;
-	spin_lock(&inode_sb_list_lock);
+	spin_lock(&sb->s_inode_list_lock);
 	list_for_each_entry(inode, head, i_sb_list) {
-		if (!is_bad_inode(inode)
-		    && au_ii(inode)->ii_bstart >= 0) {
+		if (!au_is_bad_inode(inode)
+		    && au_ii(inode)->ii_btop >= 0) {
 			spin_lock(&inode->i_lock);
 			if (atomic_read(&inode->i_count)) {
 				au_igrab(inode);
@@ -538,15 +538,18 @@ static unsigned long long au_iarray_cb(void *a,
 			spin_unlock(&inode->i_lock);
 		}
 	}
-	spin_unlock(&inode_sb_list_lock);
+	spin_unlock(&sb->s_inode_list_lock);
 
 	return n;
 }
 
 struct inode **au_iarray_alloc(struct super_block *sb, unsigned long long *max)
 {
-	*max = atomic_long_read(&au_sbi(sb)->si_ninodes);
-	return au_array_alloc(max, au_iarray_cb, &sb->s_inodes);
+	struct au_sbinfo *sbi;
+
+	sbi = au_sbi(sb);
+	*max = au_lcnt_read(&sbi->si_ninodes, /*do_rev*/1);
+	return au_array_alloc(max, au_iarray_cb, sb, &sb->s_inodes);
 }
 
 void au_iarray_free(struct inode **a, unsigned long long max)
@@ -555,7 +558,7 @@ void au_iarray_free(struct inode **a, unsigned long long max)
 
 	for (ull = 0; ull < max; ull++)
 		iput(a[ull]);
-	au_array_free(a);
+	kvfree(a);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -573,7 +576,7 @@ static int au_do_refresh(struct dentry *dentry, unsigned int dir_flags,
 	di_read_lock_parent(parent, AuLock_IR);
 	err = au_refresh_dentry(dentry, parent);
 	if (!err && dir_flags)
-		au_hn_reset(dentry->d_inode, dir_flags);
+		au_hn_reset(d_inode(dentry), dir_flags);
 	di_read_unlock(parent, AuLock_IR);
 	di_write_unlock(dentry);
 
@@ -582,18 +585,16 @@ static int au_do_refresh(struct dentry *dentry, unsigned int dir_flags,
 
 static int au_do_refresh_d(struct dentry *dentry, unsigned int sigen,
 			   struct au_sbinfo *sbinfo,
-			   const unsigned int dir_flags)
+			   const unsigned int dir_flags, unsigned int do_idop)
 {
 	int err;
 	struct dentry *parent;
-	struct inode *inode;
 
 	err = 0;
 	parent = dget_parent(dentry);
 	if (!au_digen_test(parent, sigen) && au_digen_test(dentry, sigen)) {
-		inode = dentry->d_inode;
-		if (inode) {
-			if (!S_ISDIR(inode->i_mode))
+		if (d_really_is_positive(dentry)) {
+			if (!d_is_dir(dentry))
 				err = au_do_refresh(dentry, /*dir_flags*/0,
 						 parent);
 			else {
@@ -607,11 +608,17 @@ static int au_do_refresh_d(struct dentry *dentry, unsigned int sigen,
 	}
 	dput(parent);
 
+	if (!err) {
+		if (do_idop)
+			au_refresh_dop(dentry, /*force_reval*/0);
+	} else
+		au_refresh_dop(dentry, /*force_reval*/1);
+
 	AuTraceErr(err);
 	return err;
 }
 
-static int au_refresh_d(struct super_block *sb)
+static int au_refresh_d(struct super_block *sb, unsigned int do_idop)
 {
 	int err, i, j, ndentry, e;
 	unsigned int sigen;
@@ -620,7 +627,10 @@ static int au_refresh_d(struct super_block *sb)
 	struct dentry **dentries, *d;
 	struct au_sbinfo *sbinfo;
 	struct dentry *root = sb->s_root;
-	const unsigned int dir_flags = au_hi_flags(root->d_inode, /*isdir*/1);
+	const unsigned int dir_flags = au_hi_flags(d_inode(root), /*isdir*/1);
+
+	if (do_idop)
+		au_refresh_dop(root, /*force_reval*/0);
 
 	err = au_dpages_init(&dpages, GFP_NOFS);
 	if (unlikely(err))
@@ -637,7 +647,8 @@ static int au_refresh_d(struct super_block *sb)
 		ndentry = dpage->ndentry;
 		for (j = 0; j < ndentry; j++) {
 			d = dentries[j];
-			e = au_do_refresh_d(d, sigen, sbinfo, dir_flags);
+			e = au_do_refresh_d(d, sigen, sbinfo, dir_flags,
+					    do_idop);
 			if (unlikely(e && !err))
 				err = e;
 			/* go on even err */
@@ -650,7 +661,7 @@ out:
 	return err;
 }
 
-static int au_refresh_i(struct super_block *sb)
+static int au_refresh_i(struct super_block *sb, unsigned int do_idop)
 {
 	int err, e;
 	unsigned int sigen;
@@ -668,17 +679,22 @@ static int au_refresh_i(struct super_block *sb)
 		inode = array[ull];
 		if (unlikely(!inode))
 			break;
+
+		e = 0;
+		ii_write_lock_child(inode);
 		if (au_iigen(inode, NULL) != sigen) {
-			ii_write_lock_child(inode);
 			e = au_refresh_hinode_self(inode);
-			ii_write_unlock(inode);
 			if (unlikely(e)) {
+				au_refresh_iop(inode, /*force_getattr*/1);
 				pr_err("error %d, i%lu\n", e, inode->i_ino);
 				if (!err)
 					err = e;
 				/* go on even if err */
 			}
 		}
+		if (!e && do_idop)
+			au_refresh_iop(inode, /*force_getattr*/0);
+		ii_write_unlock(inode);
 	}
 
 	au_iarray_free(array, max);
@@ -687,26 +703,28 @@ out:
 	return err;
 }
 
-static void au_remount_refresh(struct super_block *sb)
+static void au_remount_refresh(struct super_block *sb, unsigned int do_idop)
 {
 	int err, e;
 	unsigned int udba;
-	aufs_bindex_t bindex, bend;
+	aufs_bindex_t bindex, bbot;
 	struct dentry *root;
 	struct inode *inode;
 	struct au_branch *br;
+	struct au_sbinfo *sbi;
 
 	au_sigen_inc(sb);
-	au_fclr_si(au_sbi(sb), FAILED_REFRESH_DIR);
+	sbi = au_sbi(sb);
+	au_fclr_si(sbi, FAILED_REFRESH_DIR);
 
 	root = sb->s_root;
 	DiMustNoWaiters(root);
-	inode = root->d_inode;
+	inode = d_inode(root);
 	IiMustNoWaiters(inode);
 
 	udba = au_opt_udba(sb);
-	bend = au_sbend(sb);
-	for (bindex = 0; bindex <= bend; bindex++) {
+	bbot = au_sbbot(sb);
+	for (bindex = 0; bindex <= bbot; bindex++) {
 		br = au_sbr(sb, bindex);
 		err = au_hnotify_reset_br(udba, br, br->br_perm);
 		if (unlikely(err))
@@ -716,9 +734,25 @@ static void au_remount_refresh(struct super_block *sb)
 	}
 	au_hn_reset(inode, au_hi_flags(inode, /*isdir*/1));
 
+	if (do_idop) {
+		if (au_ftest_si(sbi, NO_DREVAL)) {
+			AuDebugOn(sb->s_d_op == &aufs_dop_noreval);
+			sb->s_d_op = &aufs_dop_noreval;
+			AuDebugOn(sbi->si_iop_array == aufs_iop_nogetattr);
+			sbi->si_iop_array = aufs_iop_nogetattr;
+		} else {
+			AuDebugOn(sb->s_d_op == &aufs_dop);
+			sb->s_d_op = &aufs_dop;
+			AuDebugOn(sbi->si_iop_array == aufs_iop);
+			sbi->si_iop_array = aufs_iop;
+		}
+		pr_info("reset to %ps and %ps\n",
+			sb->s_d_op, sbi->si_iop_array);
+	}
+
 	di_write_unlock(root);
-	err = au_refresh_d(sb);
-	e = au_refresh_i(sb);
+	err = au_refresh_d(sb, do_idop);
+	e = au_refresh_i(sb, do_idop);
 	if (unlikely(e && !err))
 		err = e;
 	/* aufs_write_lock() calls ..._child() */
@@ -749,7 +783,9 @@ static int aufs_remount_fs(struct super_block *sb, int *flags, char *data)
 {
 	int err, do_dx;
 	unsigned int mntflags;
-	struct au_opts opts;
+	struct au_opts opts = {
+		.opt = NULL
+	};
 	struct dentry *root;
 	struct inode *inode;
 	struct au_sbinfo *sbinfo;
@@ -767,7 +803,6 @@ static int aufs_remount_fs(struct super_block *sb, int *flags, char *data)
 	}
 
 	err = -ENOMEM;
-	memset(&opts, 0, sizeof(opts));
 	opts.opt = (void *)__get_free_page(GFP_NOFS);
 	if (unlikely(!opts.opt))
 		goto out;
@@ -781,8 +816,8 @@ static int aufs_remount_fs(struct super_block *sb, int *flags, char *data)
 		goto out_opts;
 
 	sbinfo = au_sbi(sb);
-	inode = root->d_inode;
-	mutex_lock(&inode->i_mutex);
+	inode = d_inode(root);
+	inode_lock(inode);
 	err = si_write_lock(sb, AuLock_FLUSH | AuLock_NOPLM);
 	if (unlikely(err))
 		goto out_mtx;
@@ -793,7 +828,7 @@ static int aufs_remount_fs(struct super_block *sb, int *flags, char *data)
 	au_opts_free(&opts);
 
 	if (au_ftest_opts(opts.flags, REFRESH))
-		au_remount_refresh(sb);
+		au_remount_refresh(sb, au_ftest_opts(opts.flags, REFRESH_IDOP));
 
 	if (au_ftest_opts(opts.flags, REFRESH_DYAOP)) {
 		mntflags = au_mntflags(sb);
@@ -805,7 +840,7 @@ static int aufs_remount_fs(struct super_block *sb, int *flags, char *data)
 	aufs_write_unlock(root);
 
 out_mtx:
-	mutex_unlock(&inode->i_mutex);
+	inode_unlock(inode);
 out_opts:
 	free_page((unsigned long)opts.opt);
 out:
@@ -840,7 +875,7 @@ static int alloc_root(struct super_block *sb)
 	if (IS_ERR(inode))
 		goto out;
 
-	inode->i_op = &aufs_dir_iop;
+	inode->i_op = aufs_iop + AuIop_DIR; /* with getattr by default */
 	inode->i_fop = &aufs_dir_fop;
 	inode->i_mode = S_IFDIR;
 	set_nlink(inode, 2);
@@ -868,7 +903,10 @@ static int aufs_fill_super(struct super_block *sb, void *raw_data,
 			   int silent __maybe_unused)
 {
 	int err;
-	struct au_opts opts;
+	struct au_opts opts = {
+		.opt = NULL
+	};
+	struct au_sbinfo *sbinfo;
 	struct dentry *root;
 	struct inode *inode;
 	char *arg = raw_data;
@@ -880,7 +918,6 @@ static int aufs_fill_super(struct super_block *sb, void *raw_data,
 	}
 
 	err = -ENOMEM;
-	memset(&opts, 0, sizeof(opts));
 	opts.opt = (void *)__get_free_page(GFP_NOFS);
 	if (unlikely(!opts.opt))
 		goto out;
@@ -890,15 +927,18 @@ static int aufs_fill_super(struct super_block *sb, void *raw_data,
 	err = au_si_alloc(sb);
 	if (unlikely(err))
 		goto out_opts;
+	sbinfo = au_sbi(sb);
 
 	/* all timestamps always follow the ones on the branch */
-	sb->s_flags |= MS_NOATIME | MS_NODIRATIME;
+	sb->s_flags |= SB_NOATIME | SB_NODIRATIME;
+	sb->s_flags |= SB_I_VERSION; /* do we really need this? */
 	sb->s_op = &aufs_sop;
 	sb->s_d_op = &aufs_dop;
 	sb->s_magic = AUFS_SUPER_MAGIC;
 	sb->s_maxbytes = 0;
+	sb->s_stack_depth = 1;
 	au_export_init(sb);
-	/* au_xattr_init(sb); */
+	au_xattr_init(sb);
 
 	err = alloc_root(sb);
 	if (unlikely(err)) {
@@ -906,7 +946,7 @@ static int aufs_fill_super(struct super_block *sb, void *raw_data,
 		goto out_info;
 	}
 	root = sb->s_root;
-	inode = root->d_inode;
+	inode = d_inode(root);
 
 	/*
 	 * actually we can parse options regardless aufs lock here.
@@ -920,12 +960,19 @@ static int aufs_fill_super(struct super_block *sb, void *raw_data,
 		goto out_root;
 
 	/* lock vfs_inode first, then aufs. */
-	mutex_lock(&inode->i_mutex);
+	inode_lock(inode);
 	aufs_write_lock(root);
 	err = au_opts_mount(sb, &opts);
 	au_opts_free(&opts);
+	if (!err && au_ftest_si(sbinfo, NO_DREVAL)) {
+		sb->s_d_op = &aufs_dop_noreval;
+		pr_info("%ps\n", sb->s_d_op);
+		au_refresh_dop(root, /*force_reval*/0);
+		sbinfo->si_iop_array = aufs_iop_nogetattr;
+		au_refresh_iop(inode, /*force_getattr*/0);
+	}
 	aufs_write_unlock(root);
-	mutex_unlock(&inode->i_mutex);
+	inode_unlock(inode);
 	if (!err)
 		goto out_opts; /* success */
 
@@ -933,8 +980,7 @@ out_root:
 	dput(root);
 	sb->s_root = NULL;
 out_info:
-	dbgaufs_si_fin(au_sbi(sb));
-	kobject_put(&au_sbi(sb)->si_kobj);
+	kobject_put(&sbinfo->si_kobj);
 	sb->s_fs_info = NULL;
 out_opts:
 	free_page((unsigned long)opts.opt);
@@ -952,7 +998,6 @@ static struct dentry *aufs_mount(struct file_system_type *fs_type, int flags,
 				 void *raw_data)
 {
 	struct dentry *root;
-	struct super_block *sb;
 
 	/* all timestamps always follow the ones on the branch */
 	/* mnt->mnt_flags |= MNT_NOATIME | MNT_NODIRATIME; */
@@ -960,11 +1005,7 @@ static struct dentry *aufs_mount(struct file_system_type *fs_type, int flags,
 	if (IS_ERR(root))
 		goto out;
 
-	sb = root->d_sb;
-	si_write_lock(sb, !AuLock_FLUSH);
-	sysaufs_brs_add(sb, 0);
-	si_write_unlock(sb);
-	au_sbilist_add(sb);
+	au_sbilist_add(root->d_sb);
 
 out:
 	return root;
@@ -983,11 +1024,12 @@ static void aufs_kill_sb(struct super_block *sb)
 			sbinfo->si_wbr_create_ops->fin(sb);
 		if (au_opt_test(sbinfo->si_mntflags, UDBA_HNOTIFY)) {
 			au_opt_set_udba(sbinfo->si_mntflags, UDBA_NONE);
-			au_remount_refresh(sb);
+			au_remount_refresh(sb, /*do_idop*/0);
 		}
 		if (au_opt_test(sbinfo->si_mntflags, PLINK))
 			au_plink_put(sb, /*verbose*/1);
 		au_xino_clr(sb);
+		au_dr_opt_flush(sb);
 		sbinfo->si_sb = NULL;
 		aufs_write_unlock(sb->s_root);
 		au_nwt_flush(&sbinfo->si_nowait);

@@ -39,11 +39,12 @@ static void *spu_syscall_table[] = {
 #define PPC_SYS(func)		sys_ni_syscall,
 #define OLDSYS(func)		sys_ni_syscall,
 #define SYS32ONLY(func)		sys_ni_syscall,
+#define PPC64ONLY(func)		sys_ni_syscall,
 #define SYSX(f, f3264, f32)	sys_ni_syscall,
 
 #define SYSCALL_SPU(func)	sys_##func,
 #define COMPAT_SYS_SPU(func)	sys_##func,
-#define PPC_SYS_SPU(func)	ppc_##func,
+#define COMPAT_SPU_NEW(func)	sys_##func,
 #define SYSX_SPU(f, f3264, f32)	f,
 
 #include <asm/systbl.h>

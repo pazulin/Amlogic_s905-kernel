@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * Request reply cache. This was heavily inspired by the
  * implementation in 4.3BSD/4.4BSD.
@@ -18,7 +19,6 @@
  * is much larger than a sockaddr_in6.
  */
 struct svc_cacherep {
-	struct hlist_node	c_hash;
 	struct list_head	c_lru;
 
 	unsigned char		c_state,	/* unused, inprog, done */
@@ -66,11 +66,6 @@ enum {
 	RC_REPLSTAT,
 	RC_REPLBUFF,
 };
-
-/*
- * If requests are retransmitted within this interval, they're dropped.
- */
-#define RC_DELAY		(HZ/5)
 
 /* Cache entries expire after this time period */
 #define RC_EXPIRE		(120 * HZ)

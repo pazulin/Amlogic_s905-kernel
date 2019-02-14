@@ -1,7 +1,7 @@
 /*
  * shmob_drm_kms.h  --  SH Mobile DRM Mode Setting
  *
- * Copyright (C) 2012 Renesas Corporation
+ * Copyright (C) 2012 Renesas Electronics Corporation
  *
  * Laurent Pinchart (laurent.pinchart@ideasonboard.com)
  *
@@ -24,7 +24,6 @@ struct shmob_drm_format_info {
 	unsigned int bpp;
 	bool yuv;
 	u32 lddfr;
-	unsigned int meram;
 };
 
 const struct shmob_drm_format_info *shmob_drm_format_info(u32 fourcc);

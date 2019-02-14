@@ -103,8 +103,8 @@ static void print_buttons(WINDOW * dialog, int height, int width, int selected)
 	int x = width / 2 - 11;
 	int y = height - 2;
 
-	print_button(dialog, gettext("Select"), y, x, selected == 0);
-	print_button(dialog, gettext(" Help "), y, x + 14, selected == 1);
+	print_button(dialog, "Select", y, x, selected == 0);
+	print_button(dialog, " Help ", y, x + 14, selected == 1);
 
 	wmove(dialog, y, x + 1 + 14 * selected);
 	wrefresh(dialog);
@@ -168,13 +168,13 @@ do_resize:
 
 	/* create new window for the list */
 	list = subwin(dialog, list_height, list_width, y + box_y + 1,
-	              x + box_x + 1);
+		      x + box_x + 1);
 
 	keypad(list, TRUE);
 
 	/* draw a box around the list items */
 	draw_box(dialog, box_y, box_x, list_height + 2, list_width + 2,
-	         dlg.menubox_border.atr, dlg.menubox.atr);
+		 dlg.menubox_border.atr, dlg.menubox.atr);
 
 	/* Find length of longest item in order to center checklist */
 	check_x = 0;

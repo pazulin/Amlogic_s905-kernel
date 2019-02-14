@@ -1,5 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (C) 2014-2015 Junjiro R. Okajima
+ * Copyright (C) 2014-2018 Junjiro R. Okajima
  *
  * This program, aufs is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -20,7 +21,6 @@
  */
 
 #include <linux/fs.h>
-#include <linux/posix_acl.h>
 #include "aufs.h"
 
 struct posix_acl *aufs_get_acl(struct inode *inode, int type)
@@ -35,10 +35,10 @@ struct posix_acl *aufs_get_acl(struct inode *inode, int type)
 	sb = inode->i_sb;
 	si_read_lock(sb, AuLock_FLUSH);
 	ii_read_lock_child(inode);
-	if (!(sb->s_flags & MS_POSIXACL))
+	if (!(sb->s_flags & SB_POSIXACL))
 		goto out;
 
-	bindex = au_ibstart(inode);
+	bindex = au_ibtop(inode);
 	h_inode = au_h_iptr(inode, bindex);
 	if (unlikely(!h_inode
 		     || ((h_inode->i_mode & S_IFMT)
@@ -50,6 +50,8 @@ struct posix_acl *aufs_get_acl(struct inode *inode, int type)
 
 	/* always topmost only */
 	acl = get_acl(h_inode, type);
+	if (!IS_ERR_OR_NULL(acl))
+		set_cached_acl(inode, type, acl);
 
 out:
 	ii_read_unlock(inode);
@@ -64,7 +66,7 @@ int aufs_set_acl(struct inode *inode, struct posix_acl *acl, int type)
 	int err;
 	ssize_t ssz;
 	struct dentry *dentry;
-	struct au_srxattr arg = {
+	struct au_sxattr arg = {
 		.type = AU_ACL_SET,
 		.u.acl_set = {
 			.acl	= acl,
@@ -72,7 +74,8 @@ int aufs_set_acl(struct inode *inode, struct posix_acl *acl, int type)
 		},
 	};
 
-	mutex_lock(&inode->i_mutex);
+	IMustLock(inode);
+
 	if (inode->i_ino == AUFS_ROOT_INO)
 		dentry = dget(inode->i_sb->s_root);
 	else {
@@ -87,13 +90,14 @@ int aufs_set_acl(struct inode *inode, struct posix_acl *acl, int type)
 		}
 	}
 
-	ssz = au_srxattr(dentry, &arg);
+	ssz = au_sxattr(dentry, inode, &arg);
 	dput(dentry);
 	err = ssz;
-	if (ssz >= 0)
+	if (ssz >= 0) {
 		err = 0;
+		set_cached_acl(inode, type, acl);
+	}
 
 out:
-	mutex_unlock(&inode->i_mutex);
 	return err;
 }

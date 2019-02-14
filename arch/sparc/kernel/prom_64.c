@@ -15,11 +15,12 @@
  *      2 of the License, or (at your option) any later version.
  */
 
-#include <linux/kernel.h>
-#include <linux/types.h>
-#include <linux/string.h>
-#include <linux/mm.h>
 #include <linux/memblock.h>
+#include <linux/kernel.h>
+#include <linux/string.h>
+#include <linux/types.h>
+#include <linux/cpu.h>
+#include <linux/mm.h>
 #include <linux/of.h>
 
 #include <asm/prom.h>
@@ -380,7 +381,7 @@ bool arch_find_n_match_cpu_physical_id(struct device_node *cpun,
 	int this_cpu_id;
 
 	/* On hypervisor based platforms we interrogate the 'reg'
-	 * property.  On everything else we look for a 'upa-portis',
+	 * property.  On everything else we look for a 'upa-portid',
 	 * 'portid', or 'cpuid' property.
 	 */
 
@@ -555,9 +556,6 @@ static void *fill_in_one_cpu(struct device_node *dp, int cpuid, int arg)
 
 		cpu_data(cpuid).core_id = portid + 1;
 		cpu_data(cpuid).proc_id = portid;
-#ifdef CONFIG_SMP
-		sparc64_multi_core = 1;
-#endif
 	} else {
 		cpu_data(cpuid).dcache_size =
 			of_getintprop_default(dp, "dcache-size", 16 * 1024);

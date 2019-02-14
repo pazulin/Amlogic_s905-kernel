@@ -1,5 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (C) 2011-2015 Junjiro R. Okajima
+ * Copyright (C) 2011-2018 Junjiro R. Okajima
  *
  * This program, aufs is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -66,29 +67,29 @@ struct au_mvd_args {
 static int find_lower_writable(struct au_mvd_args *a)
 {
 	struct super_block *sb;
-	aufs_bindex_t bindex, bend;
+	aufs_bindex_t bindex, bbot;
 	struct au_branch *br;
 
 	sb = a->sb;
 	bindex = a->mvd_bsrc;
-	bend = au_sbend(sb);
+	bbot = au_sbbot(sb);
 	if (a->mvdown.flags & AUFS_MVDOWN_FHSM_LOWER)
-		for (bindex++; bindex <= bend; bindex++) {
+		for (bindex++; bindex <= bbot; bindex++) {
 			br = au_sbr(sb, bindex);
 			if (au_br_fhsm(br->br_perm)
-			    && (!(au_br_sb(br)->s_flags & MS_RDONLY)))
+			    && !sb_rdonly(au_br_sb(br)))
 				return bindex;
 		}
 	else if (!(a->mvdown.flags & AUFS_MVDOWN_ROLOWER))
-		for (bindex++; bindex <= bend; bindex++) {
+		for (bindex++; bindex <= bbot; bindex++) {
 			br = au_sbr(sb, bindex);
 			if (!au_br_rdonly(br))
 				return bindex;
 		}
 	else
-		for (bindex++; bindex <= bend; bindex++) {
+		for (bindex++; bindex <= bbot; bindex++) {
 			br = au_sbr(sb, bindex);
-			if (!(au_br_sb(br)->s_flags & MS_RDONLY)) {
+			if (!sb_rdonly(au_br_sb(br))) {
 				if (au_br_rdonly(br))
 					a->mvdown.flags
 						|= AUFS_MVDOWN_ROLOWER_R;
@@ -109,7 +110,7 @@ static int au_do_mkdir(const unsigned char dmsg, struct au_mvd_args *a)
 	a->mvd_hdir_dst = au_hi(a->dir, a->mvd_bdst);
 	a->mvd_h_src_parent = au_h_dptr(a->parent, a->mvd_bsrc);
 	a->mvd_h_dst_parent = NULL;
-	if (au_dbend(a->parent) >= a->mvd_bdst)
+	if (au_dbbot(a->parent) >= a->mvd_bdst)
 		a->mvd_h_dst_parent = au_h_dptr(a->parent, a->mvd_bdst);
 	if (!a->mvd_h_dst_parent) {
 		err = au_cpdown_dirs(a->dentry, a->mvd_bdst);
@@ -150,7 +151,7 @@ static int au_do_lock(const unsigned char dmsg, struct au_mvd_args *a)
 			    AuPin_MNT_WRITE | AuPin_DI_LOCKED);
 		err = au_do_pin(&a->mvd_pin_src);
 		AuTraceErr(err);
-		a->mvd_h_src_dir = a->mvd_h_src_parent->d_inode;
+		a->mvd_h_src_dir = d_inode(a->mvd_h_src_parent);
 		if (unlikely(err)) {
 			AU_MVD_PR(dmsg, "pin_src failed\n");
 			goto out_dst;
@@ -164,7 +165,7 @@ static int au_do_lock(const unsigned char dmsg, struct au_mvd_args *a)
 		     au_opt_udba(a->sb),
 		     AuPin_MNT_WRITE | AuPin_DI_LOCKED);
 	AuTraceErr(err);
-	a->mvd_h_src_dir = a->mvd_h_src_parent->d_inode;
+	a->mvd_h_src_dir = d_inode(a->mvd_h_src_parent);
 	if (unlikely(err)) {
 		AU_MVD_PR(dmsg, "pin_src failed\n");
 		au_pin_hdir_lock(&a->mvd_pin_dst);
@@ -258,10 +259,10 @@ static int au_do_unlink_wh(const unsigned char dmsg, struct au_mvd_args *a)
 	}
 
 	err = 0;
-	if (h_path.dentry->d_inode) {
+	if (d_is_positive(h_path.dentry)) {
 		h_path.mnt = au_br_mnt(br);
 		delegated = NULL;
-		err = vfsub_unlink(a->mvd_h_dst_parent->d_inode, &h_path,
+		err = vfsub_unlink(d_inode(a->mvd_h_dst_parent), &h_path,
 				   &delegated, /*force*/0);
 		if (unlikely(err == -EWOULDBLOCK)) {
 			pr_warn("cannot retry for NFSv4 delegation"
@@ -363,14 +364,20 @@ static int au_do_mvdown(const unsigned char dmsg, struct au_mvd_args *a)
 	/* maintain internal array */
 	if (!(a->mvdown.flags & AUFS_MVDOWN_KUPPER)) {
 		au_set_h_dptr(a->dentry, a->mvd_bsrc, NULL);
-		au_set_dbstart(a->dentry, a->mvd_bdst);
+		au_set_dbtop(a->dentry, a->mvd_bdst);
 		au_set_h_iptr(a->inode, a->mvd_bsrc, NULL, /*flags*/0);
-		au_set_ibstart(a->inode, a->mvd_bdst);
+		au_set_ibtop(a->inode, a->mvd_bdst);
+	} else {
+		/* hide the lower */
+		au_set_h_dptr(a->dentry, a->mvd_bdst, NULL);
+		au_set_dbbot(a->dentry, a->mvd_bsrc);
+		au_set_h_iptr(a->inode, a->mvd_bdst, NULL, /*flags*/0);
+		au_set_ibbot(a->inode, a->mvd_bsrc);
 	}
-	if (au_dbend(a->dentry) < a->mvd_bdst)
-		au_set_dbend(a->dentry, a->mvd_bdst);
-	if (au_ibend(a->inode) < a->mvd_bdst)
-		au_set_ibend(a->inode, a->mvd_bdst);
+	if (au_dbbot(a->dentry) < a->mvd_bdst)
+		au_set_dbbot(a->dentry, a->mvd_bdst);
+	if (au_ibbot(a->inode) < a->mvd_bdst)
+		au_set_ibbot(a->inode, a->mvd_bdst);
 
 out_unlock:
 	au_do_unlock(dmsg, a);
@@ -388,7 +395,7 @@ static int au_mvd_args_busy(const unsigned char dmsg, struct au_mvd_args *a)
 
 	err = 0;
 	plinked = !!au_opt_test(au_mntflags(a->sb), PLINK);
-	if (au_dbstart(a->dentry) == a->mvd_bsrc
+	if (au_dbtop(a->dentry) == a->mvd_bsrc
 	    && au_dcount(a->dentry) == 1
 	    && atomic_read(&a->inode->i_count) == 1
 	    /* && a->mvd_h_src_inode->i_nlink == 1 */
@@ -399,7 +406,7 @@ static int au_mvd_args_busy(const unsigned char dmsg, struct au_mvd_args *a)
 	err = -EBUSY;
 	AU_MVD_PR(dmsg,
 		  "b%d, d{b%d, c%d?}, i{c%d?, l%u}, hi{l%u}, p{%d, %d}\n",
-		  a->mvd_bsrc, au_dbstart(a->dentry), au_dcount(a->dentry),
+		  a->mvd_bsrc, au_dbtop(a->dentry), au_dcount(a->dentry),
 		  atomic_read(&a->inode->i_count), a->inode->i_nlink,
 		  a->mvd_h_src_inode->i_nlink,
 		  plinked, plinked ? au_plink_test(a->inode) : 0);
@@ -458,11 +465,12 @@ static int au_mvd_args_intermediate(const unsigned char dmsg,
 	au_di_swap(tmp, dinfo);
 
 	/* returns the number of positive dentries */
-	err = au_lkup_dentry(a->dentry, a->mvd_bsrc + 1, /*type*/0);
+	err = au_lkup_dentry(a->dentry, a->mvd_bsrc + 1,
+			     /* AuLkup_IGNORE_PERM */ 0);
 	if (!err)
 		a->bwh = au_dbwh(a->dentry);
 	else if (err > 0)
-		a->bfound = au_dbstart(a->dentry);
+		a->bfound = au_dbtop(a->dentry);
 
 	au_di_swap(tmp, dinfo);
 	au_rw_write_unlock(&tmp->di_rwsem);
@@ -549,22 +557,22 @@ static int au_mvd_args(const unsigned char dmsg, struct au_mvd_args *a)
 
 	err = -EINVAL;
 	if (!(a->mvdown.flags & AUFS_MVDOWN_BRID_UPPER))
-		a->mvd_bsrc = au_ibstart(a->inode);
+		a->mvd_bsrc = au_ibtop(a->inode);
 	else {
 		a->mvd_bsrc = au_br_index(a->sb, a->mvd_src_brid);
 		if (unlikely(a->mvd_bsrc < 0
-			     || (a->mvd_bsrc < au_dbstart(a->dentry)
-				 || au_dbend(a->dentry) < a->mvd_bsrc
+			     || (a->mvd_bsrc < au_dbtop(a->dentry)
+				 || au_dbbot(a->dentry) < a->mvd_bsrc
 				 || !au_h_dptr(a->dentry, a->mvd_bsrc))
-			     || (a->mvd_bsrc < au_ibstart(a->inode)
-				 || au_ibend(a->inode) < a->mvd_bsrc
+			     || (a->mvd_bsrc < au_ibtop(a->inode)
+				 || au_ibbot(a->inode) < a->mvd_bsrc
 				 || !au_h_iptr(a->inode, a->mvd_bsrc)))) {
 			a->mvd_errno = EAU_MVDOWN_NOUPPER;
 			AU_MVD_PR(dmsg, "no upper\n");
 			goto out;
 		}
 	}
-	if (unlikely(a->mvd_bsrc == au_sbend(a->sb))) {
+	if (unlikely(a->mvd_bsrc == au_sbbot(a->sb))) {
 		a->mvd_errno = EAU_MVDOWN_BOTTOM;
 		AU_MVD_PR(dmsg, "on the bottom\n");
 		goto out;
@@ -594,7 +602,7 @@ static int au_mvd_args(const unsigned char dmsg, struct au_mvd_args *a)
 	} else {
 		a->mvd_bdst = au_br_index(a->sb, a->mvd_dst_brid);
 		if (unlikely(a->mvd_bdst < 0
-			     || au_sbend(a->sb) < a->mvd_bdst)) {
+			     || au_sbbot(a->sb) < a->mvd_bdst)) {
 			a->mvd_errno = EAU_MVDOWN_NOLOWERBR;
 			AU_MVD_PR(dmsg, "no lower brid\n");
 			goto out;
@@ -621,7 +629,9 @@ int au_mvdown(struct dentry *dentry, struct aufs_mvdown __user *uarg)
 	int err, e;
 	unsigned char dmsg;
 	struct au_mvd_args *args;
+	struct inode *inode;
 
+	inode = d_inode(dentry);
 	err = -EPERM;
 	if (unlikely(!capable(CAP_SYS_ADMIN)))
 		goto out;
@@ -643,22 +653,22 @@ int au_mvdown(struct dentry *dentry, struct aufs_mvdown __user *uarg)
 	args->mvdown.flags &= ~(AUFS_MVDOWN_ROLOWER_R | AUFS_MVDOWN_ROUPPER_R);
 	args->mvdown.au_errno = 0;
 	args->dentry = dentry;
-	args->inode = dentry->d_inode;
+	args->inode = inode;
 	args->sb = dentry->d_sb;
 
 	err = -ENOENT;
 	dmsg = !!(args->mvdown.flags & AUFS_MVDOWN_DMSG);
 	args->parent = dget_parent(dentry);
-	args->dir = args->parent->d_inode;
-	mutex_lock_nested(&args->dir->i_mutex, I_MUTEX_PARENT);
+	args->dir = d_inode(args->parent);
+	inode_lock_nested(args->dir, I_MUTEX_PARENT);
 	dput(args->parent);
 	if (unlikely(args->parent != dentry->d_parent)) {
 		AU_MVD_PR(dmsg, "parent dir is moved\n");
 		goto out_dir;
 	}
 
-	mutex_lock_nested(&args->inode->i_mutex, I_MUTEX_CHILD);
-	err = aufs_read_lock(dentry, AuLock_DW | AuLock_FLUSH);
+	inode_lock_nested(inode, I_MUTEX_CHILD);
+	err = aufs_read_lock(dentry, AuLock_DW | AuLock_FLUSH | AuLock_NOPLMW);
 	if (unlikely(err))
 		goto out_inode;
 
@@ -672,17 +682,18 @@ int au_mvdown(struct dentry *dentry, struct aufs_mvdown __user *uarg)
 		goto out_parent;
 
 	au_cpup_attr_timesizes(args->dir);
-	au_cpup_attr_timesizes(args->inode);
-	au_cpup_igen(args->inode, au_h_iptr(args->inode, args->mvd_bdst));
+	au_cpup_attr_timesizes(inode);
+	if (!(args->mvdown.flags & AUFS_MVDOWN_KUPPER))
+		au_cpup_igen(inode, au_h_iptr(inode, args->mvd_bdst));
 	/* au_digen_dec(dentry); */
 
 out_parent:
 	di_write_unlock(args->parent);
 	aufs_read_unlock(dentry, AuLock_DW);
 out_inode:
-	mutex_unlock(&args->inode->i_mutex);
+	inode_unlock(inode);
 out_dir:
-	mutex_unlock(&args->dir->i_mutex);
+	inode_unlock(args->dir);
 out_free:
 	e = copy_to_user(uarg, &args->mvdown, sizeof(args->mvdown));
 	if (unlikely(e))

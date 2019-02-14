@@ -1,5 +1,5 @@
 
-Aufs3 -- advanced multi layered unification filesystem version 3.x
+Aufs4 -- advanced multi layered unification filesystem version 4.x
 http://aufs.sf.net
 Junjiro R. Okajima
 
@@ -15,7 +15,7 @@ approaches to aufs1's.
 Unionfs is being developed by Professor Erez Zadok at Stony Brook
 University and his team.
 
-Aufs3 supports linux-3.0 and later.
+Aufs4 supports linux-4.0 and later, and for linux-3.x series try aufs3.
 If you want older kernel version support, try aufs2-2.6.git or
 aufs2-standalone.git repository, aufs1 from CVS on SourceForge.
 
@@ -77,7 +77,7 @@ Also there are many enhancements in aufs, such as:
 - userspace wrapper for pathconf(3)/fpathconf(3) with _PC_LINK_MAX.
 - and more...
 
-Currently these features are dropped temporary from aufs3.
+Currently these features are dropped temporary from aufs4.
 See design/08plan.txt in detail.
 - nested mount, i.e. aufs as readonly no-whiteout branch of another aufs
   (robr)
@@ -95,65 +95,64 @@ Features or just an idea in the future (see also design/*.txt),
 
 2. Download
 ----------------------------------------
-There were three GIT trees for aufs3, aufs3-linux.git,
-aufs3-standalone.git, and aufs-util.git. Note that there is no "3" in
+There are three GIT trees for aufs4, aufs4-linux.git,
+aufs4-standalone.git, and aufs-util.git. Note that there is no "4" in
 "aufs-util.git."
-While the aufs-util is always necessary, you need either of aufs3-linux
-or aufs3-standalone.
+While the aufs-util is always necessary, you need either of aufs4-linux
+or aufs4-standalone.
 
-The aufs3-linux tree includes the whole linux mainline GIT tree,
+The aufs4-linux tree includes the whole linux mainline GIT tree,
 git://git.kernel.org/.../torvalds/linux.git.
 And you cannot select CONFIG_AUFS_FS=m for this version, eg. you cannot
-build aufs3 as an external kernel module.
+build aufs4 as an external kernel module.
 Several extra patches are not included in this tree. Only
-aufs3-standalong tree contains them. They are describe in the later
+aufs4-standalone tree contains them. They are described in the later
 section "Configuration and Compilation."
 
-On the other hand, the aufs3-standalone tree has only aufs source files
+On the other hand, the aufs4-standalone tree has only aufs source files
 and necessary patches, and you can select CONFIG_AUFS_FS=m.
 But you need to apply all aufs patches manually.
 
-You will find GIT branches whose name is in form of "aufs3.x" where "x"
-represents the linux kernel version, "linux-3.x". For instance,
-"aufs3.0" is for linux-3.0. For latest "linux-3.x-rcN", use
-"aufs3.x-rcN" branch.
+You will find GIT branches whose name is in form of "aufs4.x" where "x"
+represents the linux kernel version, "linux-4.x". For instance,
+"aufs4.0" is for linux-4.0. For latest "linux-4.x-rcN", use
+"aufs4.x-rcN" branch.
 
-o aufs3-linux tree
+o aufs4-linux tree
 $ git clone --reference /your/linux/git/tree \
-	git://git.code.sf.net/p/aufs/aufs3-linux aufs3-linux.git
+	git://github.com/sfjro/aufs4-linux.git aufs4-linux.git
 - if you don't have linux GIT tree, then remove "--reference ..."
-$ cd aufs3-linux.git
-$ git checkout origin/aufs3.0
+$ cd aufs4-linux.git
+$ git checkout origin/aufs4.0
 
 Or You may want to directly git-pull aufs into your linux GIT tree, and
 leave the patch-work to GIT.
 $ cd /your/linux/git/tree
-$ git remote add aufs3 https://github.com/sfjro/aufs3-linux.git
-- aufs3-linux.git tree also exists on github.
-$ git fetch aufs3
-$ git checkout -b my3.14 v3.14
-$ (add your change...)
-$ git pull aufs3 aufs3.14
-- now you have v3.14 + your_changes + aufs3.14 in you my3.14 branch.
+$ git remote add aufs4 git://github.com/sfjro/aufs4-linux.git
+$ git fetch aufs4
+$ git checkout -b my4.0 v4.0
+$ (add your local change...)
+$ git pull aufs4 aufs4.0
+- now you have v4.0 + your_changes + aufs4.0 in you my4.0 branch.
 - you may need to solve some conflicts between your_changes and
-  aufs3.14. in this case, git-rerere is recommended so that you can
-  solve the similar confilicts automatically when you upgrade to 3.15 or
+  aufs4.0. in this case, git-rerere is recommended so that you can
+  solve the similar conflicts automatically when you upgrade to 4.1 or
   later in the future.
 
-o aufs3-standalone tree
-$ git clone git://git.code.sf.net/p/aufs/aufs3-standalone \
-	aufs3-standalone.git
-$ cd aufs3-standalone.git
-$ git checkout origin/aufs3.0
+o aufs4-standalone tree
+$ git clone git://github.com/sfjro/aufs4-standalone.git aufs4-standalone.git
+$ cd aufs4-standalone.git
+$ git checkout origin/aufs4.0
 
 o aufs-util tree
-$ git clone git://git.code.sf.net/p/aufs/aufs-util \
-	aufs-util.git
+$ git clone git://git.code.sf.net/p/aufs/aufs-util aufs-util.git
+- note that the public aufs-util.git is on SourceForge instead of
+  GitHUB.
 $ cd aufs-util.git
-$ git checkout origin/aufs3.0
+$ git checkout origin/aufs4.0
 
-Note: The 3.x-rcN branch is to be used with `rc' kernel versions ONLY.
-The minor version number, 'x' in '3.x', of aufs may not always
+Note: The 4.x-rcN branch is to be used with `rc' kernel versions ONLY.
+The minor version number, 'x' in '4.x', of aufs may not always
 follow the minor version number of the kernel.
 Because changes in the kernel that cause the use of a new
 minor version number do not always require changes to aufs-util.
@@ -165,8 +164,8 @@ In this case, you should git-checkout the branch for the
 nearest lower number.
 
 For (an unreleased) example:
-If you are using "linux-3.10" and the "aufs3.10" branch
-does not exist in aufs-util repository, then "aufs3.9", "aufs3.8"
+If you are using "linux-4.10" and the "aufs4.10" branch
+does not exist in aufs-util repository, then "aufs4.9", "aufs4.8"
 or something numerically smaller is the branch for your kernel.
 
 Also you can view all branches by
@@ -177,19 +176,19 @@ Also you can view all branches by
 ----------------------------------------
 Make sure you have git-checkout'ed the correct branch.
 
-For aufs3-linux tree,
+For aufs4-linux tree,
 - enable CONFIG_AUFS_FS.
 - set other aufs configurations if necessary.
 
-For aufs3-standalone tree,
+For aufs4-standalone tree,
 There are several ways to build.
 
 1.
-- apply ./aufs3-kbuild.patch to your kernel source files.
-- apply ./aufs3-base.patch too.
-- apply ./aufs3-mmap.patch too.
-- apply ./aufs3-standalone.patch too, if you have a plan to set
-  CONFIG_AUFS_FS=m. otherwise you don't need ./aufs3-standalone.patch.
+- apply ./aufs4-kbuild.patch to your kernel source files.
+- apply ./aufs4-base.patch too.
+- apply ./aufs4-mmap.patch too.
+- apply ./aufs4-standalone.patch too, if you have a plan to set
+  CONFIG_AUFS_FS=m. otherwise you don't need ./aufs4-standalone.patch.
 - copy ./{Documentation,fs,include/uapi/linux/aufs_type.h} files to your
   kernel source tree. Never copy $PWD/include/uapi/linux/Kbuild.
 - enable CONFIG_AUFS_FS, you can select either
@@ -206,9 +205,9 @@ There are several ways to build.
 
 2.
 - module only (CONFIG_AUFS_FS=m).
-- apply ./aufs3-base.patch to your kernel source files.
-- apply ./aufs3-mmap.patch too.
-- apply ./aufs3-standalone.patch too.
+- apply ./aufs4-base.patch to your kernel source files.
+- apply ./aufs4-mmap.patch too.
+- apply ./aufs4-standalone.patch too.
 - build your kernel, don't forget "make headers_install", and reboot.
 - edit ./config.mk and set other aufs configurations if necessary.
   Note: You should read $PWD/fs/aufs/Kconfig carefully which describes
@@ -227,7 +226,7 @@ There are several ways to build.
     available in aufs standalone version's Makefile only), or copy
     $PWD/usr/include/linux/aufs_type.h to /usr/include/linux or wherever
     you like manually. By default, the target directory is $PWD/usr.
-- no need to apply aufs3-kbuild.patch, nor copying source files to your
+- no need to apply aufs4-kbuild.patch, nor copying source files to your
   kernel source tree.
 
 Note: The header file aufs_type.h is necessary to build aufs-util
@@ -247,9 +246,9 @@ And then,
   then run "make install_ulib" too. And refer to the aufs manual in
   detail.
 
-There several other patches in aufs3-standalone.git. They are all
+There several other patches in aufs4-standalone.git. They are all
 optional. When you meet some problems, they will help you.
-- aufs3-loopback.patch
+- aufs4-loopback.patch
   Supports a nested loopback mount in a branch-fs. This patch is
   unnecessary until aufs produces a message like "you may want to try
   another patch for loopback file".
@@ -263,6 +262,13 @@ optional. When you meet some problems, they will help you.
   duplication of inode number, which is important for backup tools and
   other utilities. When you find aufs XINO files for tmpfs branch
   growing too much, try this patch.
+- lockdep-debug.patch
+  Because aufs is not only an ordinary filesystem (callee of VFS), but
+  also a caller of VFS functions for branch filesystems, subclassing of
+  the internal locks for LOCKDEP is necessary. LOCKDEP is a debugging
+  feature of linux kernel. If you enable CONFIG_LOCKDEP, then you will
+  need to apply this debug patch to expand several constant values.
+  If don't know what LOCKDEP, then you don't have apply this patch.
 
 
 4. Usage
@@ -365,6 +371,10 @@ Nikolay Pertsev made a donation (2014/5).
 James B made a donation (2014/7 and 2015/7).
 Stefano Di Biase made a donation (2014/8).
 Daniel Epellei made a donation (2015/1).
+OmegaPhil made a donation (2016/1, 2018/4).
+Tomasz Szewczyk made a donation (2016/4).
+James Burry made a donation (2016/12).
+Carsten Rose made a donation (2018/9).
 
 Thank you very much.
 Donations are always, including future donations, very important and

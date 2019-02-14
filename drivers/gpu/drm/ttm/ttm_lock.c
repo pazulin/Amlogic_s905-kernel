@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 OR MIT */
 /**************************************************************************
  *
  * Copyright (c) 2007-2009 VMware, Inc., Palo Alto, CA., USA
@@ -33,7 +34,7 @@
 #include <linux/atomic.h>
 #include <linux/errno.h>
 #include <linux/wait.h>
-#include <linux/sched.h>
+#include <linux/sched/signal.h>
 #include <linux/module.h>
 
 #define TTM_WRITE_LOCK_PENDING    (1 << 0)
@@ -180,7 +181,7 @@ int ttm_write_lock(struct ttm_lock *lock, bool interruptible)
 			spin_unlock(&lock->lock);
 		}
 	} else
-		wait_event(lock->queue, __ttm_read_lock(lock));
+		wait_event(lock->queue, __ttm_write_lock(lock));
 
 	return ret;
 }

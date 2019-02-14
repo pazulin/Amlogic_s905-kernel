@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /* pci_schizo.c: SCHIZO/TOMATILLO specific PCI controller support.
  *
  * Copyright (C) 2001, 2002, 2003, 2007, 2008 David S. Miller (davem@davemloft.net)
@@ -1495,7 +1496,6 @@ static const struct of_device_id schizo_match[] = {
 static struct platform_driver schizo_driver = {
 	.driver = {
 		.name = DRIVER_NAME,
-		.owner = THIS_MODULE,
 		.of_match_table = schizo_match,
 	},
 	.probe		= schizo_probe,

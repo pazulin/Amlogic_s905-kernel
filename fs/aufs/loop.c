@@ -1,5 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (C) 2005-2015 Junjiro R. Okajima
+ * Copyright (C) 2005-2018 Junjiro R. Okajima
  *
  * This program, aufs is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -45,7 +46,7 @@ int au_test_loopback_overlap(struct super_block *sb, struct dentry *h_adding)
 	if (!backing_file)
 		return 0;
 
-	h_adding = backing_file->f_dentry;
+	h_adding = backing_file->f_path.dentry;
 	/*
 	 * h_adding can be local NFS.
 	 * in this case aufs cannot detect the loop.
@@ -104,7 +105,8 @@ void au_warn_loopback(struct super_block *h_sb)
 	new_nelem = au_warn_loopback_nelem + au_warn_loopback_step;
 	a = au_kzrealloc(au_warn_loopback_array,
 			 au_warn_loopback_nelem * sizeof(unsigned long),
-			 new_nelem * sizeof(unsigned long), GFP_ATOMIC);
+			 new_nelem * sizeof(unsigned long), GFP_ATOMIC,
+			 /*may_shrink*/0);
 	if (a) {
 		au_warn_loopback_nelem = new_nelem;
 		au_warn_loopback_array = a;
@@ -127,7 +129,7 @@ int au_loopback_init(void)
 	int err;
 	struct super_block *sb __maybe_unused;
 
-	AuDebugOn(sizeof(sb->s_magic) != sizeof(unsigned long));
+	BUILD_BUG_ON(sizeof(sb->s_magic) != sizeof(unsigned long));
 
 	err = 0;
 	au_warn_loopback_array = kcalloc(au_warn_loopback_step,
@@ -140,6 +142,7 @@ int au_loopback_init(void)
 
 void au_loopback_fin(void)
 {
-	symbol_put(loop_backing_file);
+	if (backing_file_func)
+		symbol_put(loop_backing_file);
 	kfree(au_warn_loopback_array);
 }

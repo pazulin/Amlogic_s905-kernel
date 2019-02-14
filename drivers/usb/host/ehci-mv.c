@@ -1,12 +1,8 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Copyright (C) 2011 Marvell International Ltd. All rights reserved.
  * Author: Chao Xie <chao.xie@marvell.com>
  *        Neil Zhang <zhangwm@marvell.com>
- *
- * This program is free software; you can redistribute  it and/or modify it
- * under  the terms of  the GNU General  Public License as published by the
- * Free Software Foundation;  either version 2 of the  License, or (at your
- * option) any later version.
  */
 
 #include <linux/kernel.h>
@@ -153,7 +149,6 @@ static int mv_ehci_probe(struct platform_device *pdev)
 
 	ehci_mv = devm_kzalloc(&pdev->dev, sizeof(*ehci_mv), GFP_KERNEL);
 	if (ehci_mv == NULL) {
-		dev_err(&pdev->dev, "cannot allocate ehci_hcd_mv\n");
 		retval = -ENOMEM;
 		goto err_put_hcd;
 	}
@@ -170,32 +165,16 @@ static int mv_ehci_probe(struct platform_device *pdev)
 	}
 
 	r = platform_get_resource_byname(pdev, IORESOURCE_MEM, "phyregs");
-	if (r == NULL) {
-		dev_err(&pdev->dev, "no phy I/O memory resource defined\n");
-		retval = -ENODEV;
-		goto err_put_hcd;
-	}
-
-	ehci_mv->phy_regs = devm_ioremap(&pdev->dev, r->start,
-					 resource_size(r));
-	if (!ehci_mv->phy_regs) {
-		dev_err(&pdev->dev, "failed to map phy I/O memory\n");
-		retval = -EFAULT;
+	ehci_mv->phy_regs = devm_ioremap_resource(&pdev->dev, r);
+	if (IS_ERR(ehci_mv->phy_regs)) {
+		retval = PTR_ERR(ehci_mv->phy_regs);
 		goto err_put_hcd;
 	}
 
 	r = platform_get_resource_byname(pdev, IORESOURCE_MEM, "capregs");
-	if (!r) {
-		dev_err(&pdev->dev, "no I/O memory resource defined\n");
-		retval = -ENODEV;
-		goto err_put_hcd;
-	}
-
-	ehci_mv->cap_regs = devm_ioremap(&pdev->dev, r->start,
-					 resource_size(r));
-	if (ehci_mv->cap_regs == NULL) {
-		dev_err(&pdev->dev, "failed to map I/O memory\n");
-		retval = -EFAULT;
+	ehci_mv->cap_regs = devm_ioremap_resource(&pdev->dev, r);
+	if (IS_ERR(ehci_mv->cap_regs)) {
+		retval = PTR_ERR(ehci_mv->cap_regs);
 		goto err_put_hcd;
 	}
 

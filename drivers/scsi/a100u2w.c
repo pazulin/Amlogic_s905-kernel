@@ -143,7 +143,7 @@ static u8 wait_chip_ready(struct orc_host * host)
 	for (i = 0; i < 10; i++) {	/* Wait 1 second for report timeout     */
 		if (inb(host->base + ORC_HCTRL) & HOSTSTOP)	/* Wait HOSTSTOP set */
 			return 1;
-		mdelay(100);
+		msleep(100);
 	}
 	return 0;
 }
@@ -155,7 +155,7 @@ static u8 wait_firmware_ready(struct orc_host * host)
 	for (i = 0; i < 10; i++) {	/* Wait 1 second for report timeout     */
 		if (inb(host->base + ORC_HSTUS) & RREADY)		/* Wait READY set */
 			return 1;
-		mdelay(100);	/* wait 100ms before try again  */
+		msleep(100);	/* wait 100ms before try again  */
 	}
 	return 0;
 }
@@ -888,10 +888,10 @@ static int inia100_build_scb(struct orc_host * host, struct orc_scb * scb, struc
 	scb->sense_len = SENSE_SIZE;
 	scb->cdb_len = cmd->cmd_len;
 	if (scb->cdb_len >= IMAX_CDB) {
-		printk("max cdb length= %x\b", cmd->cmd_len);
+		printk("max cdb length= %x\n", cmd->cmd_len);
 		scb->cdb_len = IMAX_CDB;
 	}
-	scb->ident = cmd->device->lun | DISC_ALLOW;
+	scb->ident = (u8)(cmd->device->lun & 0xff) | DISC_ALLOW;
 	if (cmd->device->tagged_supported) {	/* Tag Support                  */
 		scb->tag_msg = SIMPLE_QUEUE_TAG;	/* Do simple tag only   */
 	} else {
@@ -1078,7 +1078,6 @@ static struct scsi_host_template inia100_template = {
 	.can_queue		= 1,
 	.this_id		= 1,
 	.sg_tablesize		= SG_ALL,
-	.cmd_per_lun 		= 1,
 	.use_clustering		= ENABLE_CLUSTERING,
 };
 
@@ -1125,23 +1124,19 @@ static int inia100_probe_one(struct pci_dev *pdev,
 
 	/* Get total memory needed for SCB */
 	sz = ORC_MAXQUEUE * sizeof(struct orc_scb);
-	host->scb_virt = pci_alloc_consistent(pdev, sz,
-			&host->scb_phys);
+	host->scb_virt = pci_zalloc_consistent(pdev, sz, &host->scb_phys);
 	if (!host->scb_virt) {
 		printk("inia100: SCB memory allocation error\n");
 		goto out_host_put;
 	}
-	memset(host->scb_virt, 0, sz);
 
 	/* Get total memory needed for ESCB */
 	sz = ORC_MAXQUEUE * sizeof(struct orc_extended_scb);
-	host->escb_virt = pci_alloc_consistent(pdev, sz,
-			&host->escb_phys);
+	host->escb_virt = pci_zalloc_consistent(pdev, sz, &host->escb_phys);
 	if (!host->escb_virt) {
 		printk("inia100: ESCB memory allocation error\n");
 		goto out_free_scb_array;
 	}
-	memset(host->escb_virt, 0, sz);
 
 	biosaddr = host->BIOScfg;
 	biosaddr = (biosaddr << 4);
@@ -1227,19 +1222,8 @@ static struct pci_driver inia100_pci_driver = {
 	.remove		= inia100_remove_one,
 };
 
-static int __init inia100_init(void)
-{
-	return pci_register_driver(&inia100_pci_driver);
-}
-
-static void __exit inia100_exit(void)
-{
-	pci_unregister_driver(&inia100_pci_driver);
-}
+module_pci_driver(inia100_pci_driver);
 
 MODULE_DESCRIPTION("Initio A100U2W SCSI driver");
 MODULE_AUTHOR("Initio Corporation");
 MODULE_LICENSE("Dual BSD/GPL");
-
-module_init(inia100_init);
-module_exit(inia100_exit);

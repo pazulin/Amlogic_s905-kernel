@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -9,6 +10,7 @@
 #include "../libslang.h"
 
 char ui_helpline__last_msg[1024];
+bool tui_helpline__set;
 
 static void tui_helpline__pop(void)
 {
@@ -34,6 +36,8 @@ static int tui_helpline__show(const char *format, va_list ap)
 	ret = vscnprintf(ui_helpline__last_msg + backlog,
 			sizeof(ui_helpline__last_msg) - backlog, format, ap);
 	backlog += ret;
+
+	tui_helpline__set = true;
 
 	if (ui_helpline__last_msg[backlog - 1] == '\n') {
 		ui_helpline__puts(ui_helpline__last_msg);

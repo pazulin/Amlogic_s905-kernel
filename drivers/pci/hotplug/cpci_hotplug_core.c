@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * CompactPCI Hot Plug Driver
  *
@@ -7,26 +8,12 @@
  *
  * All rights reserved.
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation; either version 2 of the License, or (at
- * your option) any later version.
- *
- * This program is distributed in the hope that it will be useful, but
- * WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY OR FITNESS FOR A PARTICULAR PURPOSE, GOOD TITLE or
- * NON INFRINGEMENT.  See the GNU General Public License for more
- * details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
- *
  * Send feedback to <scottm@somanetworks.com>
  */
 
 #include <linux/module.h>
 #include <linux/kernel.h>
+#include <linux/sched/signal.h>
 #include <linux/slab.h>
 #include <linux/pci.h>
 #include <linux/pci_hotplug.h>
@@ -45,12 +32,12 @@
 #define dbg(format, arg...)					\
 	do {							\
 		if (cpci_debug)					\
-			printk (KERN_DEBUG "%s: " format "\n",	\
-				MY_NAME , ## arg);		\
+			printk(KERN_DEBUG "%s: " format "\n",	\
+				MY_NAME, ## arg);		\
 	} while (0)
-#define err(format, arg...) printk(KERN_ERR "%s: " format "\n", MY_NAME , ## arg)
-#define info(format, arg...) printk(KERN_INFO "%s: " format "\n", MY_NAME , ## arg)
-#define warn(format, arg...) printk(KERN_WARNING "%s: " format "\n", MY_NAME , ## arg)
+#define err(format, arg...) printk(KERN_ERR "%s: " format "\n", MY_NAME, ## arg)
+#define info(format, arg...) printk(KERN_INFO "%s: " format "\n", MY_NAME, ## arg)
+#define warn(format, arg...) printk(KERN_WARNING "%s: " format "\n", MY_NAME, ## arg)
 
 /* local variables */
 static DECLARE_RWSEM(list_rwsem);
@@ -65,10 +52,10 @@ static int thread_finished;
 static int enable_slot(struct hotplug_slot *slot);
 static int disable_slot(struct hotplug_slot *slot);
 static int set_attention_status(struct hotplug_slot *slot, u8 value);
-static int get_power_status(struct hotplug_slot *slot, u8 * value);
-static int get_attention_status(struct hotplug_slot *slot, u8 * value);
-static int get_adapter_status(struct hotplug_slot *slot, u8 * value);
-static int get_latch_status(struct hotplug_slot *slot, u8 * value);
+static int get_power_status(struct hotplug_slot *slot, u8 *value);
+static int get_attention_status(struct hotplug_slot *slot, u8 *value);
+static int get_adapter_status(struct hotplug_slot *slot, u8 *value);
+static int get_latch_status(struct hotplug_slot *slot, u8 *value);
 
 static struct hotplug_slot_ops cpci_hotplug_slot_ops = {
 	.enable_slot = enable_slot,
@@ -125,7 +112,8 @@ disable_slot(struct hotplug_slot *hotplug_slot)
 
 	/* Unconfigure device */
 	dbg("%s - unconfiguring slot %s", __func__, slot_name(slot));
-	if ((retval = cpci_unconfigure_slot(slot))) {
+	retval = cpci_unconfigure_slot(slot);
+	if (retval) {
 		err("%s - could not unconfigure slot %s",
 		    __func__, slot_name(slot));
 		goto disable_error;
@@ -141,9 +129,11 @@ disable_slot(struct hotplug_slot *hotplug_slot)
 	}
 	cpci_led_on(slot);
 
-	if (controller->ops->set_power)
-		if ((retval = controller->ops->set_power(slot, 0)))
+	if (controller->ops->set_power) {
+		retval = controller->ops->set_power(slot, 0);
+		if (retval)
 			goto disable_error;
+	}
 
 	if (update_adapter_status(slot->hotplug_slot, 0))
 		warn("failure to update adapter file");
@@ -168,7 +158,7 @@ cpci_get_power_status(struct slot *slot)
 }
 
 static int
-get_power_status(struct hotplug_slot *hotplug_slot, u8 * value)
+get_power_status(struct hotplug_slot *hotplug_slot, u8 *value)
 {
 	struct slot *slot = hotplug_slot->private;
 
@@ -177,7 +167,7 @@ get_power_status(struct hotplug_slot *hotplug_slot, u8 * value)
 }
 
 static int
-get_attention_status(struct hotplug_slot *hotplug_slot, u8 * value)
+get_attention_status(struct hotplug_slot *hotplug_slot, u8 *value)
 {
 	struct slot *slot = hotplug_slot->private;
 
@@ -192,27 +182,24 @@ set_attention_status(struct hotplug_slot *hotplug_slot, u8 status)
 }
 
 static int
-get_adapter_status(struct hotplug_slot *hotplug_slot, u8 * value)
+get_adapter_status(struct hotplug_slot *hotplug_slot, u8 *value)
 {
 	*value = hotplug_slot->info->adapter_status;
 	return 0;
 }
 
 static int
-get_latch_status(struct hotplug_slot *hotplug_slot, u8 * value)
+get_latch_status(struct hotplug_slot *hotplug_slot, u8 *value)
 {
 	*value = hotplug_slot->info->latch_status;
 	return 0;
 }
 
-static void release_slot(struct hotplug_slot *hotplug_slot)
+static void release_slot(struct slot *slot)
 {
-	struct slot *slot = hotplug_slot->private;
-
 	kfree(slot->hotplug_slot->info);
 	kfree(slot->hotplug_slot);
-	if (slot->dev)
-		pci_dev_put(slot->dev);
+	pci_dev_put(slot->dev);
 	kfree(slot);
 }
 
@@ -236,21 +223,21 @@ cpci_hp_register_bus(struct pci_bus *bus, u8 first, u8 last)
 	 * with the pci_hotplug subsystem.
 	 */
 	for (i = first; i <= last; ++i) {
-		slot = kzalloc(sizeof (struct slot), GFP_KERNEL);
+		slot = kzalloc(sizeof(struct slot), GFP_KERNEL);
 		if (!slot) {
 			status = -ENOMEM;
 			goto error;
 		}
 
 		hotplug_slot =
-			kzalloc(sizeof (struct hotplug_slot), GFP_KERNEL);
+			kzalloc(sizeof(struct hotplug_slot), GFP_KERNEL);
 		if (!hotplug_slot) {
 			status = -ENOMEM;
 			goto error_slot;
 		}
 		slot->hotplug_slot = hotplug_slot;
 
-		info = kzalloc(sizeof (struct hotplug_slot_info), GFP_KERNEL);
+		info = kzalloc(sizeof(struct hotplug_slot_info), GFP_KERNEL);
 		if (!info) {
 			status = -ENOMEM;
 			goto error_hpslot;
@@ -264,7 +251,6 @@ cpci_hp_register_bus(struct pci_bus *bus, u8 first, u8 last)
 		snprintf(name, SLOT_NAME_SIZE, "%02x:%02x", bus->number, i);
 
 		hotplug_slot->private = slot;
-		hotplug_slot->release = &release_slot;
 		hotplug_slot->ops = &cpci_hotplug_slot_ops;
 
 		/*
@@ -299,6 +285,7 @@ error_slot:
 error:
 	return status;
 }
+EXPORT_SYMBOL_GPL(cpci_hp_register_bus);
 
 int
 cpci_hp_unregister_bus(struct pci_bus *bus)
@@ -318,17 +305,14 @@ cpci_hp_unregister_bus(struct pci_bus *bus)
 			slots--;
 
 			dbg("deregistering slot %s", slot_name(slot));
-			status = pci_hp_deregister(slot->hotplug_slot);
-			if (status) {
-				err("pci_hp_deregister failed with error %d",
-				    status);
-				break;
-			}
+			pci_hp_deregister(slot->hotplug_slot);
+			release_slot(slot);
 		}
 	}
 	up_write(&list_rwsem);
 	return status;
 }
+EXPORT_SYMBOL_GPL(cpci_hp_unregister_bus);
 
 /* This is the interrupt mode interrupt handler */
 static irqreturn_t
@@ -360,7 +344,7 @@ static int
 init_slots(int clear_ins)
 {
 	struct slot *slot;
-	struct pci_dev* dev;
+	struct pci_dev *dev;
 
 	dbg("%s - enter", __func__);
 	down_read(&list_rwsem);
@@ -465,9 +449,9 @@ check_slots(void)
 			    __func__, slot_name(slot), hs_csr);
 
 			if (!slot->extracting) {
-				if (update_latch_status(slot->hotplug_slot, 0)) {
+				if (update_latch_status(slot->hotplug_slot, 0))
 					warn("failure to update latch file");
-				}
+
 				slot->extracting = 1;
 				atomic_inc(&extracting);
 			}
@@ -614,6 +598,7 @@ cpci_hp_register_controller(struct cpci_hp_controller *new_controller)
 		controller = new_controller;
 	return status;
 }
+EXPORT_SYMBOL_GPL(cpci_hp_register_controller);
 
 static void
 cleanup_slots(void)
@@ -631,6 +616,7 @@ cleanup_slots(void)
 	list_for_each_entry_safe(slot, tmp, &slot_list, slot_list) {
 		list_del(&slot->slot_list);
 		pci_hp_deregister(slot->hotplug_slot);
+		release_slot(slot);
 	}
 cleanup_null:
 	up_write(&list_rwsem);
@@ -653,6 +639,7 @@ cpci_hp_unregister_controller(struct cpci_hp_controller *old_controller)
 		status = -ENODEV;
 	return status;
 }
+EXPORT_SYMBOL_GPL(cpci_hp_unregister_controller);
 
 int
 cpci_hp_start(void)
@@ -690,6 +677,7 @@ cpci_hp_start(void)
 	dbg("%s - exit", __func__);
 	return 0;
 }
+EXPORT_SYMBOL_GPL(cpci_hp_start);
 
 int
 cpci_hp_stop(void)
@@ -704,6 +692,7 @@ cpci_hp_stop(void)
 	cpci_stop_thread();
 	return 0;
 }
+EXPORT_SYMBOL_GPL(cpci_hp_stop);
 
 int __init
 cpci_hotplug_init(int debug)
@@ -711,20 +700,3 @@ cpci_hotplug_init(int debug)
 	cpci_debug = debug;
 	return 0;
 }
-
-void __exit
-cpci_hotplug_exit(void)
-{
-	/*
-	 * Clean everything up.
-	 */
-	cpci_hp_stop();
-	cpci_hp_unregister_controller(controller);
-}
-
-EXPORT_SYMBOL_GPL(cpci_hp_register_controller);
-EXPORT_SYMBOL_GPL(cpci_hp_unregister_controller);
-EXPORT_SYMBOL_GPL(cpci_hp_register_bus);
-EXPORT_SYMBOL_GPL(cpci_hp_unregister_bus);
-EXPORT_SYMBOL_GPL(cpci_hp_start);
-EXPORT_SYMBOL_GPL(cpci_hp_stop);

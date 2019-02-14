@@ -1,5 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Copyright (C) 2005-2015 Junjiro R. Okajima
+ * Copyright (C) 2005-2018 Junjiro R. Okajima
  *
  * This program, aufs is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -25,6 +26,8 @@
 
 #ifdef __KERNEL__
 
+#include <linux/wait.h>
+
 struct super_block;
 
 /* ---------------------------------------------------------------------- */
@@ -49,11 +52,6 @@ typedef void (*au_wkq_func_t)(void *args);
 	do { (flags) |= AuWkq_##name; } while (0)
 #define au_fclr_wkq(flags, name) \
 	do { (flags) &= ~AuWkq_##name; } while (0)
-
-#ifndef CONFIG_AUFS_HNOTIFY
-#undef AuWkq_NEST
-#define AuWkq_NEST	0
-#endif
 
 /* wkq.c */
 int au_wkq_do_wait(unsigned int flags, au_wkq_func_t func, void *args);

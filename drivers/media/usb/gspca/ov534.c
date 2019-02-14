@@ -12,6 +12,8 @@
  * PS3 Eye camera enhanced by Richard Kaswy http://kaswy.free.fr
  * PS3 Eye camera - brightness, contrast, awb, agc, aec controls
  *                  added by Max Thrun <bear24rw@gmail.com>
+ * PS3 Eye camera - FPS range extended by Joseph Howse
+ *                  <josephhowse@nummist.com> http://nummist.com
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -22,10 +24,6 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
  * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA 02111-1307 USA
  */
 
 #define pr_fmt(fmt) KBUILD_MODNAME ": " fmt
@@ -49,6 +47,7 @@
 #define OV534_OP_READ_2		0xf9
 
 #define CTRL_TIMEOUT 500
+#define DEFAULT_FRAME_RATE 30
 
 MODULE_AUTHOR("Antonio Ospite <ospite@studenti.unina.it>");
 MODULE_DESCRIPTION("GSPCA/OV534 USB Camera Driver");
@@ -116,7 +115,7 @@ static const struct v4l2_pix_format ov767x_mode[] = {
 		.colorspace = V4L2_COLORSPACE_JPEG},
 };
 
-static const u8 qvga_rates[] = {125, 100, 75, 60, 50, 40, 30};
+static const u8 qvga_rates[] = {187, 150, 137, 125, 100, 75, 60, 50, 37, 30};
 static const u8 vga_rates[] = {60, 50, 40, 30, 15};
 
 static const struct framerates ov772x_framerates[] = {
@@ -613,7 +612,7 @@ static void ov534_reg_write(struct gspca_dev *gspca_dev, u16 reg, u8 val)
 	if (gspca_dev->usb_err < 0)
 		return;
 
-	PDEBUG(D_USBO, "SET 01 0000 %04x %02x", reg, val);
+	gspca_dbg(gspca_dev, D_USBO, "SET 01 0000 %04x %02x\n", reg, val);
 	gspca_dev->usb_buf[0] = val;
 	ret = usb_control_msg(udev,
 			      usb_sndctrlpipe(udev, 0),
@@ -638,7 +637,8 @@ static u8 ov534_reg_read(struct gspca_dev *gspca_dev, u16 reg)
 			      0x01,
 			      USB_DIR_IN | USB_TYPE_VENDOR | USB_RECIP_DEVICE,
 			      0x00, reg, gspca_dev->usb_buf, 1, CTRL_TIMEOUT);
-	PDEBUG(D_USBI, "GET 01 0000 %04x %02x", reg, gspca_dev->usb_buf[0]);
+	gspca_dbg(gspca_dev, D_USBI, "GET 01 0000 %04x %02x\n",
+		  reg, gspca_dev->usb_buf[0]);
 	if (ret < 0) {
 		pr_err("read failed %d\n", ret);
 		gspca_dev->usb_err = ret;
@@ -652,7 +652,7 @@ static void ov534_set_led(struct gspca_dev *gspca_dev, int status)
 {
 	u8 data;
 
-	PDEBUG(D_CONF, "led status: %d", status);
+	gspca_dbg(gspca_dev, D_CONF, "led status: %d\n", status);
 
 	data = ov534_reg_read(gspca_dev, 0x21);
 	data |= 0x80;
@@ -690,8 +690,8 @@ static int sccb_check_status(struct gspca_dev *gspca_dev)
 		case 0x03:
 			break;
 		default:
-			PERR("sccb status 0x%02x, attempt %d/5",
-			       data, i + 1);
+			gspca_err(gspca_dev, "sccb status 0x%02x, attempt %d/5\n",
+				  data, i + 1);
 		}
 	}
 	return 0;
@@ -699,7 +699,7 @@ static int sccb_check_status(struct gspca_dev *gspca_dev)
 
 static void sccb_reg_write(struct gspca_dev *gspca_dev, u8 reg, u8 val)
 {
-	PDEBUG(D_USBO, "sccb write: %02x %02x", reg, val);
+	gspca_dbg(gspca_dev, D_USBO, "sccb write: %02x %02x\n", reg, val);
 	ov534_reg_write(gspca_dev, OV534_REG_SUBADDR, reg);
 	ov534_reg_write(gspca_dev, OV534_REG_WRITE, val);
 	ov534_reg_write(gspca_dev, OV534_REG_OPERATION, OV534_OP_WRITE_3);
@@ -769,12 +769,16 @@ static void set_frame_rate(struct gspca_dev *gspca_dev)
 		{15, 0x03, 0x41, 0x04},
 	};
 	static const struct rate_s rate_1[] = {	/* 320x240 */
+/*		{205, 0x01, 0xc1, 0x02},  * 205 FPS: video is partly corrupt */
+		{187, 0x01, 0x81, 0x02}, /* 187 FPS or below: video is valid */
+		{150, 0x01, 0xc1, 0x04},
+		{137, 0x02, 0xc1, 0x02},
 		{125, 0x02, 0x81, 0x02},
 		{100, 0x02, 0xc1, 0x04},
 		{75, 0x03, 0xc1, 0x04},
 		{60, 0x04, 0xc1, 0x04},
 		{50, 0x02, 0x41, 0x04},
-		{40, 0x03, 0x41, 0x04},
+		{37, 0x03, 0x41, 0x04},
 		{30, 0x04, 0x41, 0x04},
 	};
 
@@ -797,7 +801,7 @@ static void set_frame_rate(struct gspca_dev *gspca_dev)
 	sccb_reg_write(gspca_dev, 0x0d, r->r0d);
 	ov534_reg_write(gspca_dev, 0xe5, r->re5);
 
-	PDEBUG(D_PROBE, "frame_rate: %d", r->fps);
+	gspca_dbg(gspca_dev, D_PROBE, "frame_rate: %d\n", r->fps);
 }
 
 static void sethue(struct gspca_dev *gspca_dev, s32 val)
@@ -810,21 +814,16 @@ static void sethue(struct gspca_dev *gspca_dev, s32 val)
 		s16 huesin;
 		s16 huecos;
 
-		/* fixp_sin and fixp_cos accept only positive values, while
-		 * our val is between -90 and 90
-		 */
-		val += 360;
-
 		/* According to the datasheet the registers expect HUESIN and
 		 * HUECOS to be the result of the trigonometric functions,
 		 * scaled by 0x80.
 		 *
-		 * The 0x100 here represents the maximun absolute value
+		 * The 0x7fff here represents the maximum absolute value
 		 * returned byt fixp_sin and fixp_cos, so the scaling will
 		 * consider the result like in the interval [-1.0, 1.0].
 		 */
-		huesin = fixp_sin(val) * 0x80 / 0x100;
-		huecos = fixp_cos(val) * 0x80 / 0x100;
+		huesin = fixp_sin16(val) * 0x80 / 0x7fff;
+		huecos = fixp_cos16(val) * 0x80 / 0x7fff;
 
 		if (huesin < 0) {
 			sccb_reg_write(gspca_dev, 0xab,
@@ -1060,7 +1059,7 @@ static int sd_config(struct gspca_dev *gspca_dev,
 	cam->cam_mode = ov772x_mode;
 	cam->nmodes = ARRAY_SIZE(ov772x_mode);
 
-	sd->frame_rate = 30;
+	sd->frame_rate = DEFAULT_FRAME_RATE;
 
 	return 0;
 }
@@ -1285,7 +1284,7 @@ static int sd_init(struct gspca_dev *gspca_dev)
 	sensor_id = sccb_reg_read(gspca_dev, 0x0a) << 8;
 	sccb_reg_read(gspca_dev, 0x0b);
 	sensor_id |= sccb_reg_read(gspca_dev, 0x0b);
-	PDEBUG(D_PROBE, "Sensor ID: %04x", sensor_id);
+	gspca_dbg(gspca_dev, D_PROBE, "Sensor ID: %04x\n", sensor_id);
 
 	if ((sensor_id & 0xfff0) == 0x7670) {
 		sd->sensor = SENSOR_OV767x;
@@ -1409,19 +1408,19 @@ static void sd_pkt_scan(struct gspca_dev *gspca_dev,
 
 		/* Verify UVC header.  Header length is always 12 */
 		if (data[0] != 12 || len < 12) {
-			PDEBUG(D_PACK, "bad header");
+			gspca_dbg(gspca_dev, D_PACK, "bad header\n");
 			goto discard;
 		}
 
 		/* Check errors */
 		if (data[1] & UVC_STREAM_ERR) {
-			PDEBUG(D_PACK, "payload error");
+			gspca_dbg(gspca_dev, D_PACK, "payload error\n");
 			goto discard;
 		}
 
 		/* Extract PTS and FID */
 		if (!(data[1] & UVC_STREAM_PTS)) {
-			PDEBUG(D_PACK, "PTS not present");
+			gspca_dbg(gspca_dev, D_PACK, "PTS not present\n");
 			goto discard;
 		}
 		this_pts = (data[5] << 24) | (data[4] << 16)
@@ -1444,7 +1443,7 @@ static void sd_pkt_scan(struct gspca_dev *gspca_dev,
 			 && gspca_dev->image_len + len - 12 !=
 				   gspca_dev->pixfmt.width *
 					gspca_dev->pixfmt.height * 2) {
-				PDEBUG(D_PACK, "wrong sized frame");
+				gspca_dbg(gspca_dev, D_PACK, "wrong sized frame\n");
 				goto discard;
 			}
 			gspca_frame_add(gspca_dev, LAST_PACKET,
@@ -1477,7 +1476,6 @@ static void sd_get_streamparm(struct gspca_dev *gspca_dev,
 	struct v4l2_fract *tpf = &cp->timeperframe;
 	struct sd *sd = (struct sd *) gspca_dev;
 
-	cp->capability |= V4L2_CAP_TIMEPERFRAME;
 	tpf->numerator = 1;
 	tpf->denominator = sd->frame_rate;
 }
@@ -1490,8 +1488,11 @@ static void sd_set_streamparm(struct gspca_dev *gspca_dev,
 	struct v4l2_fract *tpf = &cp->timeperframe;
 	struct sd *sd = (struct sd *) gspca_dev;
 
-	/* Set requested framerate */
-	sd->frame_rate = tpf->denominator / tpf->numerator;
+	if (tpf->numerator == 0 || tpf->denominator == 0)
+		sd->frame_rate = DEFAULT_FRAME_RATE;
+	else
+		sd->frame_rate = tpf->denominator / tpf->numerator;
+
 	if (gspca_dev->streaming)
 		set_frame_rate(gspca_dev);
 

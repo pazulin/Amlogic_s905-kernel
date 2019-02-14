@@ -1,5 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (C) 2010-2015 Junjiro R. Okajima
+ * Copyright (C) 2010-2018 Junjiro R. Okajima
  *
  * This program, aufs is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -49,6 +50,7 @@ static int au_procfs_plm_write_si(struct file *file, unsigned long id)
 	int err;
 	struct super_block *sb;
 	struct au_sbinfo *sbinfo;
+	struct hlist_bl_node *pos;
 
 	err = -EBUSY;
 	if (unlikely(file->private_data))
@@ -56,14 +58,14 @@ static int au_procfs_plm_write_si(struct file *file, unsigned long id)
 
 	sb = NULL;
 	/* don't use au_sbilist_lock() here */
-	spin_lock(&au_sbilist.spin);
-	list_for_each_entry(sbinfo, &au_sbilist.head, si_list)
+	hlist_bl_lock(&au_sbilist);
+	hlist_bl_for_each_entry(sbinfo, pos, &au_sbilist, si_list)
 		if (id == sysaufs_si_id(sbinfo)) {
 			kobject_get(&sbinfo->si_kobj);
 			sb = sbinfo->si_sb;
 			break;
 		}
-	spin_unlock(&au_sbilist.spin);
+	hlist_bl_unlock(&au_sbilist);
 
 	err = -EINVAL;
 	if (unlikely(!sb))
@@ -153,7 +155,7 @@ int __init au_procfs_init(void)
 	if (unlikely(!au_procfs_dir))
 		goto out;
 
-	entry = proc_create(AUFS_PLINK_MAINT_NAME, S_IFREG | S_IWUSR,
+	entry = proc_create(AUFS_PLINK_MAINT_NAME, S_IFREG | 0200,
 			    au_procfs_dir, &au_procfs_plm_fop);
 	if (unlikely(!entry))
 		goto out_dir;

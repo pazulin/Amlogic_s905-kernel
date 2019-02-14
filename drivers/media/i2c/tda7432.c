@@ -8,7 +8,7 @@
  * Muting and tone control by Jonathan Isom <jisom@ematic.com>
  *
  * Copyright (c) 2000 Eric Sandeen <eric_sandeen@bigfoot.com>
- * Copyright (c) 2006 Mauro Carvalho Chehab <mchehab@infradead.org>
+ * Copyright (c) 2006 Mauro Carvalho Chehab <mchehab@kernel.org>
  * This code is placed under the terms of the GNU General Public License
  * Based on tda9855.c by Steve VanDeBogart (vandebo@uclink.berkeley.edu)
  * Which was based on tda8425.c by Greg Alexander (c) 1998
@@ -36,7 +36,6 @@
 #include <media/v4l2-device.h>
 #include <media/v4l2-ioctl.h>
 #include <media/v4l2-ctrls.h>
-#include <media/i2c-addr.h>
 
 #ifndef VIDEO_AUDIO_BALANCE
 # define VIDEO_AUDIO_BALANCE 32
@@ -331,13 +330,6 @@ static const struct v4l2_ctrl_ops tda7432_ctrl_ops = {
 
 static const struct v4l2_subdev_core_ops tda7432_core_ops = {
 	.log_status = tda7432_log_status,
-	.g_ext_ctrls = v4l2_subdev_g_ext_ctrls,
-	.try_ext_ctrls = v4l2_subdev_try_ext_ctrls,
-	.s_ext_ctrls = v4l2_subdev_s_ext_ctrls,
-	.g_ctrl = v4l2_subdev_g_ctrl,
-	.s_ctrl = v4l2_subdev_s_ctrl,
-	.queryctrl = v4l2_subdev_queryctrl,
-	.querymenu = v4l2_subdev_querymenu,
 };
 
 static const struct v4l2_subdev_ops tda7432_ops = {
@@ -416,7 +408,6 @@ MODULE_DEVICE_TABLE(i2c, tda7432_id);
 
 static struct i2c_driver tda7432_driver = {
 	.driver = {
-		.owner	= THIS_MODULE,
 		.name	= "tda7432",
 	},
 	.probe		= tda7432_probe,

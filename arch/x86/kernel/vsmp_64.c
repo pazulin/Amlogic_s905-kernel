@@ -33,7 +33,7 @@
  * and vice versa.
  */
 
-asmlinkage unsigned long vsmp_save_fl(void)
+asmlinkage __visible unsigned long vsmp_save_fl(void)
 {
 	unsigned long flags = native_save_fl();
 
@@ -53,7 +53,7 @@ __visible void vsmp_restore_fl(unsigned long flags)
 }
 PV_CALLEE_SAVE_REGS_THUNK(vsmp_restore_fl);
 
-asmlinkage void vsmp_irq_disable(void)
+asmlinkage __visible void vsmp_irq_disable(void)
 {
 	unsigned long flags = native_save_fl();
 
@@ -61,7 +61,7 @@ asmlinkage void vsmp_irq_disable(void)
 }
 PV_CALLEE_SAVE_REGS_THUNK(vsmp_irq_disable);
 
-asmlinkage void vsmp_irq_enable(void)
+asmlinkage __visible void vsmp_irq_enable(void)
 {
 	unsigned long flags = native_save_fl();
 
@@ -69,7 +69,7 @@ asmlinkage void vsmp_irq_enable(void)
 }
 PV_CALLEE_SAVE_REGS_THUNK(vsmp_irq_enable);
 
-static unsigned __init_or_module vsmp_patch(u8 type, u16 clobbers, void *ibuf,
+static unsigned __init vsmp_patch(u8 type, u16 clobbers, void *ibuf,
 				  unsigned long addr, unsigned len)
 {
 	switch (type) {
@@ -101,6 +101,7 @@ static void __init set_vsmp_pv_ops(void)
 #ifdef CONFIG_SMP
 	if (cap & ctl & BIT(8)) {
 		ctl &= ~BIT(8);
+
 #ifdef CONFIG_PROC_FS
 		/* Don't let users change irq affinity via procfs */
 		no_irq_affinity = 1;
@@ -145,7 +146,7 @@ static void __init detect_vsmp_box(void)
 		is_vsmp = 1;
 }
 
-int is_vsmp_box(void)
+static int is_vsmp_box(void)
 {
 	if (is_vsmp != -1)
 		return is_vsmp;
@@ -159,7 +160,7 @@ int is_vsmp_box(void)
 static void __init detect_vsmp_box(void)
 {
 }
-int is_vsmp_box(void)
+static int is_vsmp_box(void)
 {
 	return 0;
 }
@@ -204,21 +205,10 @@ static int apicid_phys_pkg_id(int initial_apic_id, int index_msb)
 	return hard_smp_processor_id() >> index_msb;
 }
 
-/*
- * In vSMP, all cpus should be capable of handling interrupts, regardless of
- * the APIC used.
- */
-static void fill_vector_allocation_domain(int cpu, struct cpumask *retmask,
-					  const struct cpumask *mask)
-{
-	cpumask_setall(retmask);
-}
-
 static void vsmp_apic_post_init(void)
 {
 	/* need to update phys_pkg_id */
 	apic->phys_pkg_id = apicid_phys_pkg_id;
-	apic->vector_allocation_domain = fill_vector_allocation_domain;
 }
 
 void __init vsmp_init(void)

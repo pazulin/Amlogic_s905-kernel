@@ -29,7 +29,6 @@
 #include <linux/pm_qos.h>
 #include <linux/slab.h>
 #include <linux/types.h>
-#include <linux/platform_data/st1232_pdata.h>
 
 #define ST1232_TS_NAME	"st1232-ts"
 
@@ -134,7 +133,8 @@ static irqreturn_t st1232_ts_irq_handler(int irq, void *dev_id)
 	} else if (!ts->low_latency_req.dev) {
 		/* First contact, request 100 us latency. */
 		dev_pm_qos_add_ancestor_request(&ts->client->dev,
-						&ts->low_latency_req, 100);
+						&ts->low_latency_req,
+						DEV_PM_QOS_RESUME_LATENCY, 100);
 	}
 
 	/* SYN_REPORT */
@@ -151,10 +151,9 @@ static void st1232_ts_power(struct st1232_ts_data *ts, bool poweron)
 }
 
 static int st1232_ts_probe(struct i2c_client *client,
-					const struct i2c_device_id *id)
+			   const struct i2c_device_id *id)
 {
 	struct st1232_ts_data *ts;
-	struct st1232_pdata *pdata = dev_get_platdata(&client->dev);
 	struct input_dev *input_dev;
 	int error;
 
@@ -179,13 +178,7 @@ static int st1232_ts_probe(struct i2c_client *client,
 	ts->client = client;
 	ts->input_dev = input_dev;
 
-	if (pdata)
-		ts->reset_gpio = pdata->reset_gpio;
-	else if (client->dev.of_node)
-		ts->reset_gpio = of_get_gpio(client->dev.of_node, 0);
-	else
-		ts->reset_gpio = -ENODEV;
-
+	ts->reset_gpio = of_get_gpio(client->dev.of_node, 0);
 	if (gpio_is_valid(ts->reset_gpio)) {
 		error = devm_gpio_request(&client->dev, ts->reset_gpio, NULL);
 		if (error) {
@@ -236,14 +229,12 @@ static int st1232_ts_remove(struct i2c_client *client)
 {
 	struct st1232_ts_data *ts = i2c_get_clientdata(client);
 
-	device_init_wakeup(&client->dev, 0);
 	st1232_ts_power(ts, false);
 
 	return 0;
 }
 
-#ifdef CONFIG_PM_SLEEP
-static int st1232_ts_suspend(struct device *dev)
+static int __maybe_unused st1232_ts_suspend(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
 	struct st1232_ts_data *ts = i2c_get_clientdata(client);
@@ -258,7 +249,7 @@ static int st1232_ts_suspend(struct device *dev)
 	return 0;
 }
 
-static int st1232_ts_resume(struct device *dev)
+static int __maybe_unused st1232_ts_resume(struct device *dev)
 {
 	struct i2c_client *client = to_i2c_client(dev);
 	struct st1232_ts_data *ts = i2c_get_clientdata(client);
@@ -273,8 +264,6 @@ static int st1232_ts_resume(struct device *dev)
 	return 0;
 }
 
-#endif
-
 static SIMPLE_DEV_PM_OPS(st1232_ts_pm_ops,
 			 st1232_ts_suspend, st1232_ts_resume);
 
@@ -284,13 +273,11 @@ static const struct i2c_device_id st1232_ts_id[] = {
 };
 MODULE_DEVICE_TABLE(i2c, st1232_ts_id);
 
-#ifdef CONFIG_OF
 static const struct of_device_id st1232_ts_dt_ids[] = {
 	{ .compatible = "sitronix,st1232", },
 	{ }
 };
 MODULE_DEVICE_TABLE(of, st1232_ts_dt_ids);
-#endif
 
 static struct i2c_driver st1232_ts_driver = {
 	.probe		= st1232_ts_probe,
@@ -298,8 +285,7 @@ static struct i2c_driver st1232_ts_driver = {
 	.id_table	= st1232_ts_id,
 	.driver = {
 		.name	= ST1232_TS_NAME,
-		.owner	= THIS_MODULE,
-		.of_match_table = of_match_ptr(st1232_ts_dt_ids),
+		.of_match_table = st1232_ts_dt_ids,
 		.pm	= &st1232_ts_pm_ops,
 	},
 };

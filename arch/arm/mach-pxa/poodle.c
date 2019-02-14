@@ -24,11 +24,13 @@
 #include <linux/mtd/physmap.h>
 #include <linux/gpio.h>
 #include <linux/i2c.h>
-#include <linux/i2c/pxa-i2c.h>
+#include <linux/platform_data/i2c-pxa.h>
+#include <linux/regulator/machine.h>
 #include <linux/spi/spi.h>
 #include <linux/spi/ads7846.h>
 #include <linux/spi/pxa2xx_spi.h>
 #include <linux/mtd/sharpsl.h>
+#include <linux/memblock.h>
 
 #include <mach/hardware.h>
 #include <asm/mach-types.h>
@@ -39,9 +41,9 @@
 #include <asm/mach/map.h>
 #include <asm/mach/irq.h>
 
-#include <mach/pxa25x.h>
+#include "pxa25x.h"
 #include <linux/platform_data/mmc-pxamci.h>
-#include <mach/udc.h>
+#include "udc.h"
 #include <linux/platform_data/irda-pxaficp.h>
 #include <mach/poodle.h>
 #include <linux/platform_data/video-pxafb.h>
@@ -331,24 +333,6 @@ static struct pxafb_mach_info poodle_fb_info = {
 	.lcd_conn	= LCD_COLOR_TFT_16BPP,
 };
 
-static struct mtd_partition sharpsl_nand_partitions[] = {
-	{
-		.name = "System Area",
-		.offset = 0,
-		.size = 7 * 1024 * 1024,
-	},
-	{
-		.name = "Root Filesystem",
-		.offset = 7 * 1024 * 1024,
-		.size = 22 * 1024 * 1024,
-	},
-	{
-		.name = "Home Filesystem",
-		.offset = MTDPART_OFS_APPEND,
-		.size = MTDPART_SIZ_FULL,
-	},
-};
-
 static uint8_t scan_ff_pattern[] = { 0xff, 0xff };
 
 static struct nand_bbt_descr sharpsl_bbt = {
@@ -358,10 +342,16 @@ static struct nand_bbt_descr sharpsl_bbt = {
 	.pattern = scan_ff_pattern
 };
 
+static const char * const probes[] = {
+	"cmdlinepart",
+	"ofpart",
+	"sharpslpart",
+	NULL,
+};
+
 static struct sharpsl_nand_platform_data sharpsl_nand_platform_data = {
 	.badblock_pattern	= &sharpsl_bbt,
-	.partitions		= sharpsl_nand_partitions,
-	.nr_partitions		= ARRAY_SIZE(sharpsl_nand_partitions),
+	.part_parsers		= probes,
 };
 
 static struct resource sharpsl_nand_resources[] = {
@@ -445,7 +435,7 @@ static void __init poodle_init(void)
 
 	ret = platform_add_devices(devices, ARRAY_SIZE(devices));
 	if (ret)
-		pr_warning("poodle: Unable to register LoCoMo device\n");
+		pr_warn("poodle: Unable to register LoCoMo device\n");
 
 	pxa_set_fb_info(&poodle_locomo_device.dev, &poodle_fb_info);
 	pxa_set_udc_info(&udc_info);
@@ -454,15 +444,13 @@ static void __init poodle_init(void)
 	pxa_set_i2c_info(NULL);
 	i2c_register_board_info(0, ARRAY_AND_SIZE(poodle_i2c_devices));
 	poodle_init_spi();
+	regulator_has_full_constraints();
 }
 
-static void __init fixup_poodle(struct tag *tags, char **cmdline,
-				struct meminfo *mi)
+static void __init fixup_poodle(struct tag *tags, char **cmdline)
 {
 	sharpsl_save_param();
-	mi->nr_banks=1;
-	mi->bank[0].start = 0xa0000000;
-	mi->bank[0].size = (32*1024*1024);
+	memblock_add(0xa0000000, SZ_32M);
 }
 
 MACHINE_START(POODLE, "SHARP Poodle")

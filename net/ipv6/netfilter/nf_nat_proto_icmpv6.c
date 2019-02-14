@@ -32,7 +32,7 @@ icmpv6_in_range(const struct nf_conntrack_tuple *tuple,
 static void
 icmpv6_unique_tuple(const struct nf_nat_l3proto *l3proto,
 		    struct nf_conntrack_tuple *tuple,
-		    const struct nf_nat_range *range,
+		    const struct nf_nat_range2 *range,
 		    enum nf_nat_manip_type maniptype,
 		    const struct nf_conn *ct)
 {
@@ -73,7 +73,7 @@ icmpv6_manip_pkt(struct sk_buff *skb,
 	    hdr->icmp6_type == ICMPV6_ECHO_REPLY) {
 		inet_proto_csum_replace2(&hdr->icmp6_cksum, skb,
 					 hdr->icmp6_identifier,
-					 tuple->src.u.icmp.id, 0);
+					 tuple->src.u.icmp.id, false);
 		hdr->icmp6_identifier = tuple->src.u.icmp.id;
 	}
 	return true;

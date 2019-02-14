@@ -155,7 +155,7 @@ static unsigned int nf_nat_sip(struct sk_buff *skb, unsigned int protoff,
 	int request, in_header;
 
 	/* Basic rules: requests and responses. */
-	if (strnicmp(*dptr, "SIP/2.0", strlen("SIP/2.0")) != 0) {
+	if (strncasecmp(*dptr, "SIP/2.0", strlen("SIP/2.0")) != 0) {
 		if (ct_sip_parse_request(ct, *dptr, *datalen,
 					 &matchoff, &matchlen,
 					 &addr, &port) > 0 &&
@@ -316,7 +316,7 @@ static void nf_nat_sip_seq_adjust(struct sk_buff *skb, unsigned int protoff,
 static void nf_nat_sip_expected(struct nf_conn *ct,
 				struct nf_conntrack_expect *exp)
 {
-	struct nf_nat_range range;
+	struct nf_nat_range2 range;
 
 	/* This must be a fresh one. */
 	BUG_ON(ct->status & IPS_NAT_DONE_MASK);

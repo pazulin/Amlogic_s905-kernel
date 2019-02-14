@@ -1,7 +1,7 @@
 /*
  * shmob_drm.h  --  SH Mobile DRM driver
  *
- * Copyright (C) 2012 Renesas Corporation
+ * Copyright (C) 2012 Renesas Electronics Corporation
  *
  * Laurent Pinchart (laurent.pinchart@ideasonboard.com)
  *
@@ -23,7 +23,6 @@
 struct clk;
 struct device;
 struct drm_device;
-struct sh_mobile_meram_info;
 
 struct shmob_drm_device {
 	struct device *dev;
@@ -31,7 +30,6 @@ struct shmob_drm_device {
 
 	void __iomem *mmio;
 	struct clk *clock;
-	struct sh_mobile_meram_info *meram;
 	u32 lddckr;
 	u32 ldmt1r;
 

@@ -1,5 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Copyright (C) 2005-2015 Junjiro R. Okajima
+ * Copyright (C) 2005-2018 Junjiro R. Okajima
  *
  * This program, aufs is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -186,9 +187,6 @@ int __init au_debug_init(void);
 } while (0)
 #else
 AuStubVoid(au_dbg_verify_dinode, struct dentry *dentry)
-AuStubVoid(au_dbg_verify_dir_parent, struct dentry *dentry, unsigned int sigen)
-AuStubVoid(au_dbg_verify_nondir_parent, struct dentry *dentry,
-	   unsigned int sigen)
 AuStubVoid(au_dbg_verify_gen, struct dentry *parent, unsigned int sigen)
 AuStubVoid(au_dbg_verify_kthread, void)
 AuStubInt0(__init au_debug_init, void)

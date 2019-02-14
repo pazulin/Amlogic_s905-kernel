@@ -57,6 +57,7 @@ static int bnep_sock_ioctl(struct socket *sock, unsigned int cmd, unsigned long 
 	struct bnep_conninfo ci;
 	struct socket *nsock;
 	void __user *argp = (void __user *)arg;
+	__u32 supp_feat = BIT(BNEP_SETUP_RESPONSE);
 	int err;
 
 	BT_DBG("cmd %x arg %lx", cmd, arg);
@@ -120,6 +121,12 @@ static int bnep_sock_ioctl(struct socket *sock, unsigned int cmd, unsigned long 
 
 		return err;
 
+	case BNEPGETSUPPFEAT:
+		if (copy_to_user(argp, &supp_feat, sizeof(supp_feat)))
+			return -EFAULT;
+
+		return 0;
+
 	default:
 		return -EINVAL;
 	}
@@ -168,7 +175,6 @@ static const struct proto_ops bnep_sock_ops = {
 	.getname	= sock_no_getname,
 	.sendmsg	= sock_no_sendmsg,
 	.recvmsg	= sock_no_recvmsg,
-	.poll		= sock_no_poll,
 	.listen		= sock_no_listen,
 	.shutdown	= sock_no_shutdown,
 	.setsockopt	= sock_no_setsockopt,
@@ -195,7 +201,7 @@ static int bnep_sock_create(struct net *net, struct socket *sock, int protocol,
 	if (sock->type != SOCK_RAW)
 		return -ESOCKTNOSUPPORT;
 
-	sk = sk_alloc(net, PF_BLUETOOTH, GFP_ATOMIC, &bnep_proto);
+	sk = sk_alloc(net, PF_BLUETOOTH, GFP_ATOMIC, &bnep_proto, kern);
 	if (!sk)
 		return -ENOMEM;
 

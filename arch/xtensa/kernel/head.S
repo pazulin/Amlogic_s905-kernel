@@ -88,9 +88,12 @@ _SetupMMU:
 	initialize_mmu
 #if defined(CONFIG_MMU) && XCHAL_HAVE_PTP_MMU && XCHAL_HAVE_SPANNING_WAY
 	rsr	a2, excsave1
-	movi	a3, 0x08000000
+	movi	a3, XCHAL_KSEG_PADDR
+	bltu	a2, a3, 1f
+	sub	a2, a2, a3
+	movi	a3, XCHAL_KSEG_SIZE
 	bgeu	a2, a3, 1f
-	movi	a3, 0xd0000000
+	movi	a3, XCHAL_KSEG_CACHED_VADDR
 	add	a2, a2, a3
 	wsr	a2, excsave1
 1:
@@ -112,6 +115,11 @@ ENTRY(_startup)
 
 	movi	a0, 0
 
+#if XCHAL_HAVE_VECBASE
+	movi    a2, VECBASE_VADDR
+	wsr	a2, vecbase
+#endif
+
 	/* Clear debugging registers. */
 
 #if XCHAL_HAVE_DEBUG
@@ -123,7 +131,7 @@ ENTRY(_startup)
 	wsr	a0, icountlevel
 
 	.set	_index, 0
-	.rept	XCHAL_NUM_DBREAK - 1
+	.rept	XCHAL_NUM_DBREAK
 	wsr	a0, SREG_DBREAKC + _index
 	.set	_index, _index + 1
 	.endr
@@ -176,6 +184,8 @@ ENTRY(_startup)
 
 	isync
 
+	initialize_cacheattr
+
 #ifdef CONFIG_HAVE_SMP
 	movi	a2, CCON	# MX External Register to Configure Cache
 	movi	a3, 1
@@ -191,11 +201,6 @@ ENTRY(_startup)
 					# WOE=1, INTLEVEL=LOCKLEVEL, UM=0
 	wsr	a2, ps			# (enable reg-windows; progmode stack)
 	rsync
-
-	/* Set up EXCSAVE[DEBUGLEVEL] to point to the Debug Exception Handler.*/
-
-	movi	a2, debug_exception
-	wsr	a2, SREG_EXCSAVE + XCHAL_DEBUGLEVEL
 
 #ifdef CONFIG_SMP
 	/*
@@ -244,7 +249,7 @@ ENTRY(_startup)
 
 	__loopt	a2, a3, a4, 2
 	s32i	a0, a2, 0
-	__endla	a2, a4, 4
+	__endla	a2, a3, 4
 
 #if XCHAL_DCACHE_IS_WRITEBACK
 
@@ -264,11 +269,8 @@ ENTRY(_startup)
 
 	/* init_arch kick-starts the linux kernel */
 
-	movi	a4, init_arch
-	callx4	a4
-
-	movi	a4, start_kernel
-	callx4	a4
+	call4	init_arch
+	call4	start_kernel
 
 should_never_return:
 	j	should_never_return
@@ -294,8 +296,7 @@ should_never_return:
 	movi	a6, 0
 	wsr	a6, excsave1
 
-	movi	a4, secondary_start_kernel
-	callx4	a4
+	call4	secondary_start_kernel
 	j	should_never_return
 
 #endif  /* CONFIG_SMP */

@@ -1,5 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Copyright (C) 2005-2015 Junjiro R. Okajima
+ * Copyright (C) 2005-2018 Junjiro R. Okajima
  *
  * This program, aufs is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -35,7 +36,7 @@ struct au_hnotify {
 	/* never use fsnotify_add_vfsmount_mark() */
 	struct fsnotify_mark		hn_mark;
 #endif
-	struct inode			*hn_aufs_inode;	/* no get/put */
+	struct inode		*hn_aufs_inode;	/* no get/put */
 #endif
 } ____cacheline_aligned_in_smp;
 
@@ -59,17 +60,17 @@ struct au_hinode {
 	do { (flags) &= ~AuIG_##name; } while (0)
 
 struct au_iigen {
+	spinlock_t	ig_spin;
 	__u32		ig_generation, ig_flags;
 };
 
 struct au_vdir;
 struct au_iinfo {
-	spinlock_t		ii_genspin;
 	struct au_iigen		ii_generation;
 	struct super_block	*ii_hsb1;	/* no get/put */
 
 	struct au_rwsem		ii_rwsem;
-	aufs_bindex_t		ii_bstart, ii_bend;
+	aufs_bindex_t		ii_btop, ii_bbot;
 	__u32			ii_higen;
 	struct au_hinode	*ii_hinode;
 	struct au_vdir		*ii_vdir;
@@ -78,6 +79,7 @@ struct au_iinfo {
 struct au_icntnr {
 	struct au_iinfo iinfo;
 	struct inode vfs_inode;
+	struct hlist_bl_node plink;
 } ____cacheline_aligned_in_smp;
 
 /* au_pin flags */
@@ -110,7 +112,6 @@ struct au_pin {
 void au_pin_hdir_unlock(struct au_pin *p);
 int au_pin_hdir_lock(struct au_pin *p);
 int au_pin_hdir_relock(struct au_pin *p);
-void au_pin_hdir_set_owner(struct au_pin *p, struct task_struct *task);
 void au_pin_hdir_acquire_nest(struct au_pin *p);
 void au_pin_hdir_release(struct au_pin *p);
 
@@ -118,18 +119,15 @@ void au_pin_hdir_release(struct au_pin *p);
 
 static inline struct au_iinfo *au_ii(struct inode *inode)
 {
-	struct au_iinfo *iinfo;
-
-	iinfo = &(container_of(inode, struct au_icntnr, vfs_inode)->iinfo);
-	if (iinfo->ii_hinode)
-		return iinfo;
-	return NULL; /* debugging bad_inode case */
+	BUG_ON(is_bad_inode(inode));
+	return &(container_of(inode, struct au_icntnr, vfs_inode)->iinfo);
 }
 
 /* ---------------------------------------------------------------------- */
 
 /* inode.c */
 struct inode *au_igrab(struct inode *inode);
+void au_refresh_iop(struct inode *inode, int force_getattr);
 int au_refresh_hinode_self(struct inode *inode);
 int au_refresh_hinode(struct inode *inode, struct dentry *dentry);
 int au_ino(struct super_block *sb, aufs_bindex_t bindex, ino_t h_ino,
@@ -151,7 +149,14 @@ static inline int au_wh_ino(struct super_block *sb, aufs_bindex_t bindex,
 }
 
 /* i_op.c */
-extern struct inode_operations aufs_iop, aufs_symlink_iop, aufs_dir_iop;
+enum {
+	AuIop_SYMLINK,
+	AuIop_DIR,
+	AuIop_OTHER,
+	AuIop_Last
+};
+extern struct inode_operations aufs_iop[AuIop_Last],
+	aufs_iop_nogetattr[AuIop_Last];
 
 /* au_wr_dir flags */
 #define AuWrDir_ADD_ENTRY	1
@@ -200,7 +205,8 @@ struct au_icpup_args {
 int au_pin_and_icpup(struct dentry *dentry, struct iattr *ia,
 		     struct au_icpup_args *a);
 
-int au_h_path_getattr(struct dentry *dentry, int force, struct path *h_path);
+int au_h_path_getattr(struct dentry *dentry, int force, struct path *h_path,
+		      int locked);
 
 /* i_op_add.c */
 int au_may_add(struct dentry *dentry, aufs_bindex_t bindex,
@@ -228,7 +234,8 @@ int aufs_rmdir(struct inode *dir, struct dentry *dentry);
 /* i_op_ren.c */
 int au_wbr(struct dentry *dentry, aufs_bindex_t btgt);
 int aufs_rename(struct inode *src_dir, struct dentry *src_dentry,
-		struct inode *dir, struct dentry *dentry);
+		struct inode *dir, struct dentry *dentry,
+		unsigned int flags);
 
 /* iinfo.c */
 struct inode *au_h_iptr(struct inode *inode, aufs_bindex_t bindex);
@@ -258,9 +265,10 @@ void au_update_iigen(struct inode *inode, int half);
 void au_update_ibrange(struct inode *inode, int do_put_zero);
 
 void au_icntnr_init_once(void *_c);
+void au_hinode_init(struct au_hinode *hinode);
 int au_iinfo_init(struct inode *inode);
 void au_iinfo_fin(struct inode *inode);
-int au_ii_realloc(struct au_iinfo *iinfo, int nbr);
+int au_hinode_realloc(struct au_iinfo *iinfo, int nbr, int may_shrink);
 
 #ifdef CONFIG_PROC_FS
 /* plink.c */
@@ -300,17 +308,11 @@ AuStubVoid(au_plink_half_refresh, struct super_block *sb, aufs_bindex_t br_id);
 int au_cpup_xattr(struct dentry *h_dst, struct dentry *h_src, int ignore_flags,
 		  unsigned int verbose);
 ssize_t aufs_listxattr(struct dentry *dentry, char *list, size_t size);
-ssize_t aufs_getxattr(struct dentry *dentry, const char *name, void *value,
-		      size_t size);
-int aufs_setxattr(struct dentry *dentry, const char *name, const void *value,
-		  size_t size, int flags);
-int aufs_removexattr(struct dentry *dentry, const char *name);
-
-/* void au_xattr_init(struct super_block *sb); */
+void au_xattr_init(struct super_block *sb);
 #else
 AuStubInt0(au_cpup_xattr, struct dentry *h_dst, struct dentry *h_src,
 	   int ignore_flags, unsigned int verbose);
-/* AuStubVoid(au_xattr_init, struct super_block *sb); */
+AuStubVoid(au_xattr_init, struct super_block *sb);
 #endif
 
 #ifdef CONFIG_FS_POSIX_ACL
@@ -321,11 +323,10 @@ int aufs_set_acl(struct inode *inode, struct posix_acl *acl, int type);
 #if IS_ENABLED(CONFIG_AUFS_XATTR) || IS_ENABLED(CONFIG_FS_POSIX_ACL)
 enum {
 	AU_XATTR_SET,
-	AU_XATTR_REMOVE,
 	AU_ACL_SET
 };
 
-struct au_srxattr {
+struct au_sxattr {
 	int type;
 	union {
 		struct {
@@ -335,15 +336,13 @@ struct au_srxattr {
 			int		flags;
 		} set;
 		struct {
-			const char	*name;
-		} remove;
-		struct {
 			struct posix_acl *acl;
 			int		type;
 		} acl_set;
 	} u;
 };
-ssize_t au_srxattr(struct dentry *dentry, struct au_srxattr *arg);
+ssize_t au_sxattr(struct dentry *dentry, struct inode *inode,
+		  struct au_sxattr *arg);
 #endif
 
 /* ---------------------------------------------------------------------- */
@@ -396,10 +395,9 @@ AuRWLockFuncs(new_child, NEW_CHILD);
 #undef AuWriteLockFunc
 #undef AuRWLockFuncs
 
-/*
- * ii_read_unlock, ii_write_unlock, ii_downgrade_lock
- */
-AuSimpleUnlockRwsemFuncs(ii, struct inode *i, &au_ii(i)->ii_rwsem);
+#define ii_read_unlock(i)	au_rw_read_unlock(&au_ii(i)->ii_rwsem)
+#define ii_write_unlock(i)	au_rw_write_unlock(&au_ii(i)->ii_rwsem)
+#define ii_downgrade_lock(i)	au_rw_dgrade_lock(&au_ii(i)->ii_rwsem)
 
 #define IiMustNoWaiters(i)	AuRwMustNoWaiters(&au_ii(i)->ii_rwsem)
 #define IiMustAnyLock(i)	AuRwMustAnyLock(&au_ii(i)->ii_rwsem)
@@ -414,17 +412,19 @@ static inline void au_icntnr_init(struct au_icntnr *c)
 #endif
 }
 
-static inline unsigned int au_iigen(struct inode *inode, struct au_iigen *iigen)
+static inline unsigned int au_iigen(struct inode *inode, unsigned int *igflags)
 {
 	unsigned int gen;
 	struct au_iinfo *iinfo;
+	struct au_iigen *iigen;
 
 	iinfo = au_ii(inode);
-	spin_lock(&iinfo->ii_genspin);
-	if (iigen)
-		*iigen = iinfo->ii_generation;
-	gen = iinfo->ii_generation.ig_generation;
-	spin_unlock(&iinfo->ii_genspin);
+	iigen = &iinfo->ii_generation;
+	spin_lock(&iigen->ig_spin);
+	if (igflags)
+		*igflags = iigen->ig_flags;
+	gen = iigen->ig_generation;
+	spin_unlock(&iigen->ig_spin);
 
 	return gen;
 }
@@ -444,11 +444,13 @@ static inline int au_test_higen(struct inode *inode, struct inode *h_inode)
 static inline void au_iigen_dec(struct inode *inode)
 {
 	struct au_iinfo *iinfo;
+	struct au_iigen *iigen;
 
 	iinfo = au_ii(inode);
-	spin_lock(&iinfo->ii_genspin);
-	iinfo->ii_generation.ig_generation--;
-	spin_unlock(&iinfo->ii_genspin);
+	iigen = &iinfo->ii_generation;
+	spin_lock(&iigen->ig_spin);
+	iigen->ig_generation--;
+	spin_unlock(&iigen->ig_spin);
 }
 
 static inline int au_iigen_test(struct inode *inode, unsigned int sigen)
@@ -464,23 +466,34 @@ static inline int au_iigen_test(struct inode *inode, unsigned int sigen)
 
 /* ---------------------------------------------------------------------- */
 
+static inline struct au_hinode *au_hinode(struct au_iinfo *iinfo,
+					  aufs_bindex_t bindex)
+{
+	return iinfo->ii_hinode + bindex;
+}
+
+static inline int au_is_bad_inode(struct inode *inode)
+{
+	return !!(is_bad_inode(inode) || !au_hinode(au_ii(inode), 0));
+}
+
 static inline aufs_bindex_t au_ii_br_id(struct inode *inode,
 					aufs_bindex_t bindex)
 {
 	IiMustAnyLock(inode);
-	return au_ii(inode)->ii_hinode[0 + bindex].hi_id;
+	return au_hinode(au_ii(inode), bindex)->hi_id;
 }
 
-static inline aufs_bindex_t au_ibstart(struct inode *inode)
+static inline aufs_bindex_t au_ibtop(struct inode *inode)
 {
 	IiMustAnyLock(inode);
-	return au_ii(inode)->ii_bstart;
+	return au_ii(inode)->ii_btop;
 }
 
-static inline aufs_bindex_t au_ibend(struct inode *inode)
+static inline aufs_bindex_t au_ibbot(struct inode *inode)
 {
 	IiMustAnyLock(inode);
-	return au_ii(inode)->ii_bend;
+	return au_ii(inode)->ii_bbot;
 }
 
 static inline struct au_vdir *au_ivdir(struct inode *inode)
@@ -492,19 +505,19 @@ static inline struct au_vdir *au_ivdir(struct inode *inode)
 static inline struct dentry *au_hi_wh(struct inode *inode, aufs_bindex_t bindex)
 {
 	IiMustAnyLock(inode);
-	return au_ii(inode)->ii_hinode[0 + bindex].hi_whdentry;
+	return au_hinode(au_ii(inode), bindex)->hi_whdentry;
 }
 
-static inline void au_set_ibstart(struct inode *inode, aufs_bindex_t bindex)
+static inline void au_set_ibtop(struct inode *inode, aufs_bindex_t bindex)
 {
 	IiMustWriteLock(inode);
-	au_ii(inode)->ii_bstart = bindex;
+	au_ii(inode)->ii_btop = bindex;
 }
 
-static inline void au_set_ibend(struct inode *inode, aufs_bindex_t bindex)
+static inline void au_set_ibbot(struct inode *inode, aufs_bindex_t bindex)
 {
 	IiMustWriteLock(inode);
-	au_ii(inode)->ii_bend = bindex;
+	au_ii(inode)->ii_bbot = bindex;
 }
 
 static inline void au_set_ivdir(struct inode *inode, struct au_vdir *vdir)
@@ -516,7 +529,7 @@ static inline void au_set_ivdir(struct inode *inode, struct au_vdir *vdir)
 static inline struct au_hinode *au_hi(struct inode *inode, aufs_bindex_t bindex)
 {
 	IiMustAnyLock(inode);
-	return au_ii(inode)->ii_hinode + bindex;
+	return au_hinode(au_ii(inode), bindex);
 }
 
 /* ---------------------------------------------------------------------- */
@@ -650,23 +663,33 @@ static inline void au_hn_resume(struct au_hinode *hdir)
 	au_hn_ctl(hdir, /*do_set*/1);
 }
 
-static inline void au_hn_imtx_lock(struct au_hinode *hdir)
+static inline void au_hn_inode_lock(struct au_hinode *hdir)
 {
-	mutex_lock(&hdir->hi_inode->i_mutex);
+	inode_lock(hdir->hi_inode);
 	au_hn_suspend(hdir);
 }
 
-static inline void au_hn_imtx_lock_nested(struct au_hinode *hdir,
+static inline void au_hn_inode_lock_nested(struct au_hinode *hdir,
 					  unsigned int sc __maybe_unused)
 {
-	mutex_lock_nested(&hdir->hi_inode->i_mutex, sc);
+	inode_lock_nested(hdir->hi_inode, sc);
 	au_hn_suspend(hdir);
 }
 
-static inline void au_hn_imtx_unlock(struct au_hinode *hdir)
+#if 0 /* unused */
+#include "vfsub.h"
+static inline void au_hn_inode_lock_shared_nested(struct au_hinode *hdir,
+						  unsigned int sc)
+{
+	inode_lock_shared_nested(hdir->hi_inode, sc);
+	au_hn_suspend(hdir);
+}
+#endif
+
+static inline void au_hn_inode_unlock(struct au_hinode *hdir)
 {
 	au_hn_resume(hdir);
-	mutex_unlock(&hdir->hi_inode->i_mutex);
+	inode_unlock(hdir->hi_inode);
 }
 
 #endif /* __KERNEL__ */

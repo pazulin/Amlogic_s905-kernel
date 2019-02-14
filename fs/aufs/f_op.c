@@ -1,5 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (C) 2005-2015 Junjiro R. Okajima
+ * Copyright (C) 2005-2018 Junjiro R. Okajima
  *
  * This program, aufs is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -29,40 +30,51 @@ int au_do_open_nondir(struct file *file, int flags, struct file *h_file)
 {
 	int err;
 	aufs_bindex_t bindex;
-	struct dentry *dentry;
+	struct dentry *dentry, *h_dentry;
 	struct au_finfo *finfo;
 	struct inode *h_inode;
 
 	FiMustWriteLock(file);
 
 	err = 0;
-	dentry = file->f_dentry;
+	dentry = file->f_path.dentry;
 	AuDebugOn(IS_ERR_OR_NULL(dentry));
 	finfo = au_fi(file);
 	memset(&finfo->fi_htop, 0, sizeof(finfo->fi_htop));
 	atomic_set(&finfo->fi_mmapped, 0);
-	bindex = au_dbstart(dentry);
-	if (!h_file)
+	bindex = au_dbtop(dentry);
+	if (!h_file) {
+		h_dentry = au_h_dptr(dentry, bindex);
+		err = vfsub_test_mntns(file->f_path.mnt, h_dentry->d_sb);
+		if (unlikely(err))
+			goto out;
 		h_file = au_h_open(dentry, bindex, flags, file, /*force_wr*/0);
-	else
-		get_file(h_file);
-	if (IS_ERR(h_file))
-		err = PTR_ERR(h_file);
-	else {
-		if ((flags & __O_TMPFILE)
-		    && !(flags & O_EXCL)) {
-			h_inode = file_inode(h_file);
-			spin_lock(&h_inode->i_lock);
-			h_inode->i_state |= I_LINKABLE;
-			spin_unlock(&h_inode->i_lock);
+		if (IS_ERR(h_file)) {
+			err = PTR_ERR(h_file);
+			goto out;
 		}
-		au_set_fbstart(file, bindex);
-		au_set_h_fptr(file, bindex, h_file);
-		au_update_figen(file);
-		/* todo: necessary? */
-		/* file->f_ra = h_file->f_ra; */
+	} else {
+		h_dentry = h_file->f_path.dentry;
+		err = vfsub_test_mntns(file->f_path.mnt, h_dentry->d_sb);
+		if (unlikely(err))
+			goto out;
+		/* br ref is already inc-ed */
 	}
 
+	if ((flags & __O_TMPFILE)
+	    && !(flags & O_EXCL)) {
+		h_inode = file_inode(h_file);
+		spin_lock(&h_inode->i_lock);
+		h_inode->i_state |= I_LINKABLE;
+		spin_unlock(&h_inode->i_lock);
+	}
+	au_set_fbtop(file, bindex);
+	au_set_h_fptr(file, bindex, h_file);
+	au_update_figen(file);
+	/* todo: necessary? */
+	/* file->f_ra = h_file->f_ra; */
+
+out:
 	return err;
 }
 
@@ -78,7 +90,7 @@ static int aufs_open_nondir(struct inode *inode __maybe_unused,
 	AuDbg("%pD, f_flags 0x%x, f_mode 0x%x\n",
 	      file, vfsub_file_flags(file), file->f_mode);
 
-	sb = file->f_dentry->d_sb;
+	sb = file->f_path.dentry->d_sb;
 	si_read_lock(sb, AuLock_FLUSH);
 	err = au_do_open(file, &args);
 	si_read_unlock(sb);
@@ -91,7 +103,8 @@ int aufs_release_nondir(struct inode *inode __maybe_unused, struct file *file)
 	aufs_bindex_t bindex;
 
 	finfo = au_fi(file);
-	au_sphl_del(&finfo->fi_hlist, &au_sbi(file->f_dentry->d_sb)->si_files);
+	au_hbl_del(&finfo->fi_hlist,
+		   &au_sbi(file->f_path.dentry->d_sb)->si_files);
 	bindex = finfo->fi_btop;
 	if (bindex >= 0)
 		au_set_h_fptr(file, bindex, NULL);
@@ -123,20 +136,20 @@ static int aufs_flush_nondir(struct file *file, fl_owner_t id)
 /*
  * read and write functions acquire [fdi]_rwsem once, but release before
  * mmap_sem. This is because to stop a race condition between mmap(2).
- * Releasing these aufs-rwsem should be safe, no branch-mamagement (by keeping
+ * Releasing these aufs-rwsem should be safe, no branch-management (by keeping
  * si_rwsem), no harmful copy-up should happen. Actually copy-up may happen in
  * read functions after [fdi]_rwsem are released, but it should be harmless.
  */
 
 /* Callers should call au_read_post() or fput() in the end */
-struct file *au_read_pre(struct file *file, int keep_fi)
+struct file *au_read_pre(struct file *file, int keep_fi, unsigned int lsc)
 {
 	struct file *h_file;
 	int err;
 
-	err = au_reval_and_lock_fdi(file, au_reopen_nondir, /*wlock*/0);
+	err = au_reval_and_lock_fdi(file, au_reopen_nondir, /*wlock*/0, lsc);
 	if (!err) {
-		di_read_unlock(file->f_dentry, AuLock_IR);
+		di_read_unlock(file->f_path.dentry, AuLock_IR);
 		h_file = au_hf_top(file);
 		get_file(h_file);
 		if (!keep_fi)
@@ -155,8 +168,12 @@ static void au_read_post(struct inode *inode, struct file *h_file)
 }
 
 struct au_write_pre {
+	/* input */
+	unsigned int lsc;
+
+	/* output */
 	blkcnt_t blks;
-	aufs_bindex_t bstart;
+	aufs_bindex_t btop;
 };
 
 /*
@@ -170,14 +187,18 @@ static struct file *au_write_pre(struct file *file, int do_ready,
 	struct file *h_file;
 	struct dentry *dentry;
 	int err;
+	unsigned int lsc;
 	struct au_pin pin;
 
-	err = au_reval_and_lock_fdi(file, au_reopen_nondir, /*wlock*/1);
+	lsc = 0;
+	if (wpre)
+		lsc = wpre->lsc;
+	err = au_reval_and_lock_fdi(file, au_reopen_nondir, /*wlock*/1, lsc);
 	h_file = ERR_PTR(err);
 	if (unlikely(err))
 		goto out;
 
-	dentry = file->f_dentry;
+	dentry = file->f_path.dentry;
 	if (do_ready) {
 		err = au_ready_to_write(file, -1, &pin);
 		if (unlikely(err)) {
@@ -189,7 +210,7 @@ static struct file *au_write_pre(struct file *file, int do_ready,
 
 	di_downgrade_lock(dentry, /*flags*/0);
 	if (wpre)
-		wpre->bstart = au_fbstart(file);
+		wpre->btop = au_fbtop(file);
 	h_file = au_hf_top(file);
 	get_file(h_file);
 	if (wpre)
@@ -210,16 +231,15 @@ static void au_write_post(struct inode *inode, struct file *h_file,
 	struct inode *h_inode;
 
 	au_cpup_attr_timesizes(inode);
-	AuDebugOn(au_ibstart(inode) != wpre->bstart);
+	AuDebugOn(au_ibtop(inode) != wpre->btop);
 	h_inode = file_inode(h_file);
 	inode->i_mode = h_inode->i_mode;
 	ii_write_unlock(inode);
-	fput(h_file);
-
 	/* AuDbg("blks %llu, %llu\n", (u64)blks, (u64)h_inode->i_blocks); */
 	if (written > 0)
-		au_fhsm_wrote(inode->i_sb, wpre->bstart,
+		au_fhsm_wrote(inode->i_sb, wpre->btop,
 			      /*force*/h_inode->i_blocks > wpre->blks);
+	fput(h_file);
 }
 
 static ssize_t aufs_read(struct file *file, char __user *buf, size_t count,
@@ -234,7 +254,7 @@ static ssize_t aufs_read(struct file *file, char __user *buf, size_t count,
 	sb = inode->i_sb;
 	si_read_lock(sb, AuLock_FLUSH | AuLock_NOPLMW);
 
-	h_file = au_read_pre(file, /*keep_fi*/0);
+	h_file = au_read_pre(file, /*keep_fi*/0, /*lsc*/0);
 	err = PTR_ERR(h_file);
 	if (IS_ERR(h_file))
 		goto out;
@@ -262,11 +282,11 @@ static void au_mtx_and_read_lock(struct inode *inode)
 	struct super_block *sb = inode->i_sb;
 
 	while (1) {
-		mutex_lock(&inode->i_mutex);
+		inode_lock(inode);
 		err = si_read_lock(sb, AuLock_FLUSH | AuLock_NOPLM);
 		if (!err)
 			break;
-		mutex_unlock(&inode->i_mutex);
+		inode_unlock(inode);
 		si_read_lock(sb, AuLock_NOPLMW);
 		si_read_unlock(sb);
 	}
@@ -284,6 +304,7 @@ static ssize_t aufs_write(struct file *file, const char __user *ubuf,
 	inode = file_inode(file);
 	au_mtx_and_read_lock(inode);
 
+	wpre.lsc = 0;
 	h_file = au_write_pre(file, /*do_ready*/1, &wpre);
 	err = PTR_ERR(h_file);
 	if (IS_ERR(h_file))
@@ -294,45 +315,44 @@ static ssize_t aufs_write(struct file *file, const char __user *ubuf,
 
 out:
 	si_read_unlock(inode->i_sb);
-	mutex_unlock(&inode->i_mutex);
+	inode_unlock(inode);
 	return err;
 }
 
-static ssize_t au_do_aio(struct file *h_file, int rw, struct kiocb *kio,
-			 const struct iovec *iov, unsigned long nv, loff_t pos)
+static ssize_t au_do_iter(struct file *h_file, int rw, struct kiocb *kio,
+			  struct iov_iter *iov_iter)
 {
 	ssize_t err;
 	struct file *file;
-	ssize_t (*func)(struct kiocb *, const struct iovec *, unsigned long,
-			loff_t);
+	ssize_t (*iter)(struct kiocb *, struct iov_iter *);
 
 	err = security_file_permission(h_file, rw);
 	if (unlikely(err))
 		goto out;
 
 	err = -ENOSYS;
-	func = NULL;
+	iter = NULL;
 	if (rw == MAY_READ)
-		func = h_file->f_op->aio_read;
+		iter = h_file->f_op->read_iter;
 	else if (rw == MAY_WRITE)
-		func = h_file->f_op->aio_write;
-	if (func) {
-		file = kio->ki_filp;
-		kio->ki_filp = h_file;
+		iter = h_file->f_op->write_iter;
+
+	file = kio->ki_filp;
+	kio->ki_filp = h_file;
+	if (iter) {
 		lockdep_off();
-		err = func(kio, iov, nv, pos);
+		err = iter(kio, iov_iter);
 		lockdep_on();
-		kio->ki_filp = file;
 	} else
 		/* currently there is no such fs */
 		WARN_ON_ONCE(1);
+	kio->ki_filp = file;
 
 out:
 	return err;
 }
 
-static ssize_t aufs_aio_read(struct kiocb *kio, const struct iovec *iov,
-			     unsigned long nv, loff_t pos)
+static ssize_t aufs_read_iter(struct kiocb *kio, struct iov_iter *iov_iter)
 {
 	ssize_t err;
 	struct file *file, *h_file;
@@ -344,12 +364,21 @@ static ssize_t aufs_aio_read(struct kiocb *kio, const struct iovec *iov,
 	sb = inode->i_sb;
 	si_read_lock(sb, AuLock_FLUSH | AuLock_NOPLMW);
 
-	h_file = au_read_pre(file, /*keep_fi*/0);
+	h_file = au_read_pre(file, /*keep_fi*/1, /*lsc*/0);
 	err = PTR_ERR(h_file);
 	if (IS_ERR(h_file))
 		goto out;
 
-	err = au_do_aio(h_file, MAY_READ, kio, iov, nv, pos);
+	if (au_test_loopback_kthread()) {
+		au_warn_loopback(h_file->f_path.dentry->d_sb);
+		if (file->f_mapping != h_file->f_mapping) {
+			file->f_mapping = h_file->f_mapping;
+			smp_mb(); /* unnecessary? */
+		}
+	}
+	fi_read_unlock(file);
+
+	err = au_do_iter(h_file, MAY_READ, kio, iov_iter);
 	/* todo: necessary? */
 	/* file->f_ra = h_file->f_ra; */
 	au_read_post(inode, h_file);
@@ -359,8 +388,7 @@ out:
 	return err;
 }
 
-static ssize_t aufs_aio_write(struct kiocb *kio, const struct iovec *iov,
-			      unsigned long nv, loff_t pos)
+static ssize_t aufs_write_iter(struct kiocb *kio, struct iov_iter *iov_iter)
 {
 	ssize_t err;
 	struct au_write_pre wpre;
@@ -371,17 +399,18 @@ static ssize_t aufs_aio_write(struct kiocb *kio, const struct iovec *iov,
 	inode = file_inode(file);
 	au_mtx_and_read_lock(inode);
 
+	wpre.lsc = 0;
 	h_file = au_write_pre(file, /*do_ready*/1, &wpre);
 	err = PTR_ERR(h_file);
 	if (IS_ERR(h_file))
 		goto out;
 
-	err = au_do_aio(h_file, MAY_WRITE, kio, iov, nv, pos);
+	err = au_do_iter(h_file, MAY_WRITE, kio, iov_iter);
 	au_write_post(inode, h_file, &wpre, err);
 
 out:
 	si_read_unlock(inode->i_sb);
-	mutex_unlock(&inode->i_mutex);
+	inode_unlock(inode);
 	return err;
 }
 
@@ -398,22 +427,13 @@ static ssize_t aufs_splice_read(struct file *file, loff_t *ppos,
 	sb = inode->i_sb;
 	si_read_lock(sb, AuLock_FLUSH | AuLock_NOPLMW);
 
-	h_file = au_read_pre(file, /*keep_fi*/1);
+	h_file = au_read_pre(file, /*keep_fi*/0, /*lsc*/0);
 	err = PTR_ERR(h_file);
 	if (IS_ERR(h_file))
 		goto out;
 
-	if (au_test_loopback_kthread()) {
-		au_warn_loopback(h_file->f_dentry->d_sb);
-		if (file->f_mapping != h_file->f_mapping) {
-			file->f_mapping = h_file->f_mapping;
-			smp_mb(); /* unnecessary? */
-		}
-	}
-	fi_read_unlock(file);
-
 	err = vfsub_splice_to(h_file, ppos, pipe, len, flags);
-	/* todo: necessasry? */
+	/* todo: necessary? */
 	/* file->f_ra = h_file->f_ra; */
 	au_read_post(inode, h_file);
 
@@ -434,6 +454,7 @@ aufs_splice_write(struct pipe_inode_info *pipe, struct file *file, loff_t *ppos,
 	inode = file_inode(file);
 	au_mtx_and_read_lock(inode);
 
+	wpre.lsc = 0;
 	h_file = au_write_pre(file, /*do_ready*/1, &wpre);
 	err = PTR_ERR(h_file);
 	if (IS_ERR(h_file))
@@ -444,7 +465,7 @@ aufs_splice_write(struct pipe_inode_info *pipe, struct file *file, loff_t *ppos,
 
 out:
 	si_read_unlock(inode->i_sb);
-	mutex_unlock(&inode->i_mutex);
+	inode_unlock(inode);
 	return err;
 }
 
@@ -459,20 +480,103 @@ static long aufs_fallocate(struct file *file, int mode, loff_t offset,
 	inode = file_inode(file);
 	au_mtx_and_read_lock(inode);
 
+	wpre.lsc = 0;
 	h_file = au_write_pre(file, /*do_ready*/1, &wpre);
 	err = PTR_ERR(h_file);
 	if (IS_ERR(h_file))
 		goto out;
 
 	lockdep_off();
-	err = do_fallocate(h_file, mode, offset, len);
+	err = vfs_fallocate(h_file, mode, offset, len);
 	lockdep_on();
 	au_write_post(inode, h_file, &wpre, /*written*/1);
 
 out:
 	si_read_unlock(inode->i_sb);
-	mutex_unlock(&inode->i_mutex);
+	inode_unlock(inode);
 	return err;
+}
+
+static ssize_t aufs_copy_file_range(struct file *src, loff_t src_pos,
+				    struct file *dst, loff_t dst_pos,
+				    size_t len, unsigned int flags)
+{
+	ssize_t err;
+	struct au_write_pre wpre;
+	enum { SRC, DST };
+	struct {
+		struct inode *inode;
+		struct file *h_file;
+		struct super_block *h_sb;
+	} a[2];
+#define a_src	a[SRC]
+#define a_dst	a[DST]
+
+	err = -EINVAL;
+	a_src.inode = file_inode(src);
+	if (unlikely(!S_ISREG(a_src.inode->i_mode)))
+		goto out;
+	a_dst.inode = file_inode(dst);
+	if (unlikely(!S_ISREG(a_dst.inode->i_mode)))
+		goto out;
+
+	au_mtx_and_read_lock(a_dst.inode);
+	/*
+	 * in order to match the order in di_write_lock2_{child,parent}(),
+	 * use f_path.dentry for this comparison.
+	 */
+	if (src->f_path.dentry < dst->f_path.dentry) {
+		a_src.h_file = au_read_pre(src, /*keep_fi*/1, AuLsc_FI_1);
+		err = PTR_ERR(a_src.h_file);
+		if (IS_ERR(a_src.h_file))
+			goto out_si;
+
+		wpre.lsc = AuLsc_FI_2;
+		a_dst.h_file = au_write_pre(dst, /*do_ready*/1, &wpre);
+		err = PTR_ERR(a_dst.h_file);
+		if (IS_ERR(a_dst.h_file)) {
+			au_read_post(a_src.inode, a_src.h_file);
+			goto out_si;
+		}
+	} else {
+		wpre.lsc = AuLsc_FI_1;
+		a_dst.h_file = au_write_pre(dst, /*do_ready*/1, &wpre);
+		err = PTR_ERR(a_dst.h_file);
+		if (IS_ERR(a_dst.h_file))
+			goto out_si;
+
+		a_src.h_file = au_read_pre(src, /*keep_fi*/1, AuLsc_FI_2);
+		err = PTR_ERR(a_src.h_file);
+		if (IS_ERR(a_src.h_file)) {
+			au_write_post(a_dst.inode, a_dst.h_file, &wpre,
+				      /*written*/0);
+			goto out_si;
+		}
+	}
+
+	err = -EXDEV;
+	a_src.h_sb = file_inode(a_src.h_file)->i_sb;
+	a_dst.h_sb = file_inode(a_dst.h_file)->i_sb;
+	if (unlikely(a_src.h_sb != a_dst.h_sb)) {
+		AuDbgFile(src);
+		AuDbgFile(dst);
+		goto out_file;
+	}
+
+	err = vfsub_copy_file_range(a_src.h_file, src_pos, a_dst.h_file,
+				    dst_pos, len, flags);
+
+out_file:
+	au_write_post(a_dst.inode, a_dst.h_file, &wpre, err);
+	fi_read_unlock(src);
+	au_read_post(a_src.inode, a_src.h_file);
+out_si:
+	si_read_unlock(a_dst.inode->i_sb);
+	inode_unlock(a_dst.inode);
+out:
+	return err;
+#undef a_src
+#undef a_dst
 }
 
 /* ---------------------------------------------------------------------- */
@@ -485,9 +589,9 @@ out:
  *	(Note that [fdi]i_rwsem are released before mmap_sem).
  * - in mmap case
  *   mmap(2) -- mmap_sem -- aufs_mmap() -- si_rwsem for read -- [fdi]i_rwsem
- * This AB-BA order is definitly bad, but is not a problem since "si_rwsem for
- * read" allows muliple processes to acquire it and [fdi]i_rwsem are not held in
- * file I/O. Aufs needs to stop lockdep in aufs_mmap() though.
+ * This AB-BA order is definitely bad, but is not a problem since "si_rwsem for
+ * read" allows multiple processes to acquire it and [fdi]i_rwsem are not held
+ * in file I/O. Aufs needs to stop lockdep in aufs_mmap() though.
  * It means that when aufs acquires si_rwsem for write, the process should never
  * acquire mmap_sem.
  *
@@ -565,7 +669,7 @@ static int aufs_mmap(struct file *file, struct vm_area_struct *vma)
 	 *			 au_flag_conv(vma->vm_flags));
 	 */
 	if (!err)
-		err = h_file->f_op->mmap(h_file, vma);
+		err = call_mmap(h_file, vma);
 	if (!err) {
 		au_vm_prfile_set(vma, file);
 		fsstack_copy_attr_atime(inode, file_inode(h_file));
@@ -604,6 +708,7 @@ static int aufs_fsync_nondir(struct file *file, loff_t start, loff_t end,
 	inode = file_inode(file);
 	au_mtx_and_read_lock(inode);
 
+	wpre.lsc = 0;
 	h_file = au_write_pre(file, /*do_ready*/1, &wpre);
 	err = PTR_ERR(h_file);
 	if (IS_ERR(h_file))
@@ -614,60 +719,10 @@ static int aufs_fsync_nondir(struct file *file, loff_t start, loff_t end,
 
 out_unlock:
 	si_read_unlock(inode->i_sb);
-	mutex_unlock(&inode->i_mutex);
+	inode_unlock(inode);
 out:
 	return err;
 }
-
-/* no one supports this operation, currently */
-#if 0
-static int aufs_aio_fsync_nondir(struct kiocb *kio, int datasync)
-{
-	int err;
-	struct au_write_pre wpre;
-	struct inode *inode;
-	struct file *file, *h_file;
-
-	err = 0; /* -EBADF; */ /* posix? */
-	if (unlikely(!(file->f_mode & FMODE_WRITE)))
-		goto out;
-
-	file = kio->ki_filp;
-	inode = file_inode(file);
-	au_mtx_and_read_lock(inode);
-
-	h_file = au_write_pre(file, /*do_ready*/1, &wpre);
-	err = PTR_ERR(h_file);
-	if (IS_ERR(h_file))
-		goto out_unlock;
-
-	err = -ENOSYS;
-	h_file = au_hf_top(file);
-	if (h_file->f_op->aio_fsync) {
-		struct mutex *h_mtx;
-
-		h_mtx = &file_inode(h_file)->i_mutex;
-		if (!is_sync_kiocb(kio)) {
-			get_file(h_file);
-			fput(file);
-		}
-		kio->ki_filp = h_file;
-		err = h_file->f_op->aio_fsync(kio, datasync);
-		mutex_lock_nested(h_mtx, AuLsc_I_CHILD);
-		if (!err)
-			vfsub_update_h_iattr(&h_file->f_path, /*did*/NULL);
-		/*ignore*/
-		mutex_unlock(h_mtx);
-	}
-	au_write_post(inode, h_file, &wpre, /*written*/0);
-
-out_unlock:
-	si_read_unlock(inode->sb);
-	mutex_unlock(&inode->i_mutex);
-out:
-	return err;
-}
-#endif
 
 static int aufs_fasync(int fd, struct file *file, int flag)
 {
@@ -675,16 +730,40 @@ static int aufs_fasync(int fd, struct file *file, int flag)
 	struct file *h_file;
 	struct super_block *sb;
 
-	sb = file->f_dentry->d_sb;
+	sb = file->f_path.dentry->d_sb;
 	si_read_lock(sb, AuLock_FLUSH | AuLock_NOPLMW);
 
-	h_file = au_read_pre(file, /*keep_fi*/0);
+	h_file = au_read_pre(file, /*keep_fi*/0, /*lsc*/0);
 	err = PTR_ERR(h_file);
 	if (IS_ERR(h_file))
 		goto out;
 
 	if (h_file->f_op->fasync)
 		err = h_file->f_op->fasync(fd, h_file, flag);
+	fput(h_file); /* instead of au_read_post() */
+
+out:
+	si_read_unlock(sb);
+	return err;
+}
+
+static int aufs_setfl(struct file *file, unsigned long arg)
+{
+	int err;
+	struct file *h_file;
+	struct super_block *sb;
+
+	sb = file->f_path.dentry->d_sb;
+	si_read_lock(sb, AuLock_FLUSH | AuLock_NOPLMW);
+
+	h_file = au_read_pre(file, /*keep_fi*/0, /*lsc*/0);
+	err = PTR_ERR(h_file);
+	if (IS_ERR(h_file))
+		goto out;
+
+	/* stop calling h_file->fasync */
+	arg |= vfsub_file_flags(file) & FASYNC;
+	err = setfl(/*unused fd*/-1, h_file, arg);
 	fput(h_file); /* instead of au_read_post() */
 
 out:
@@ -711,8 +790,9 @@ const struct file_operations aufs_file_fop = {
 
 	.read		= aufs_read,
 	.write		= aufs_write,
-	.aio_read	= aufs_aio_read,
-	.aio_write	= aufs_aio_write,
+	.read_iter	= aufs_read_iter,
+	.write_iter	= aufs_write_iter,
+
 #ifdef CONFIG_AUFS_POLL
 	.poll		= aufs_poll,
 #endif
@@ -725,14 +805,15 @@ const struct file_operations aufs_file_fop = {
 	.flush		= aufs_flush_nondir,
 	.release	= aufs_release_nondir,
 	.fsync		= aufs_fsync_nondir,
-	/* .aio_fsync	= aufs_aio_fsync_nondir, */
 	.fasync		= aufs_fasync,
 	/* .sendpage	= aufs_sendpage, */
+	.setfl		= aufs_setfl,
 	.splice_write	= aufs_splice_write,
 	.splice_read	= aufs_splice_read,
 #if 0
 	.aio_splice_write = aufs_aio_splice_write,
 	.aio_splice_read  = aufs_aio_splice_read,
 #endif
-	.fallocate	= aufs_fallocate
+	.fallocate	= aufs_fallocate,
+	.copy_file_range = aufs_copy_file_range
 };

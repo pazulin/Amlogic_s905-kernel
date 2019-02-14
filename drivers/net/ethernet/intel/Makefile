@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: GPL-2.0
 #
 # Makefile for the Intel network device drivers.
 #
@@ -12,3 +13,5 @@ obj-$(CONFIG_IXGBEVF) += ixgbevf/
 obj-$(CONFIG_I40E) += i40e/
 obj-$(CONFIG_IXGB) += ixgb/
 obj-$(CONFIG_I40EVF) += i40evf/
+obj-$(CONFIG_FM10K) += fm10k/
+obj-$(CONFIG_ICE) += ice/

@@ -1,5 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Copyright (C) 2010-2015 Junjiro R. Okajima
+ * Copyright (C) 2010-2018 Junjiro R. Okajima
  *
  * This program, aufs is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -39,7 +40,7 @@ struct au_dynop {
 
 struct au_dykey {
 	union {
-		struct list_head	dk_list;
+		struct hlist_bl_node	dk_hnode;
 		struct rcu_head		dk_rcu;
 	};
 	struct au_dynop		dk_op;
@@ -55,8 +56,6 @@ struct au_dykey {
 struct au_dyaop {
 	struct au_dykey			da_key;
 	struct address_space_operations	da_op; /* not const */
-	int (*da_get_xip_mem)(struct address_space *, pgoff_t, int,
-			      void **, unsigned long *);
 };
 
 /* ---------------------------------------------------------------------- */

@@ -12,9 +12,9 @@
 #include <linux/platform_device.h>
 #include <linux/dma-mapping.h>
 #include <linux/interrupt.h>
+#include <linux/io.h>
 
 #include <asm/sun3x.h>
-#include <asm/io.h>
 #include <asm/dma.h>
 #include <asm/dvma.h>
 
@@ -210,7 +210,7 @@ static int esp_sun3x_probe(struct platform_device *dev)
 	esp = shost_priv(host);
 
 	esp->host = host;
-	esp->dev = dev;
+	esp->dev = &dev->dev;
 	esp->ops = &sun3x_esp_ops;
 
 	res = platform_get_resource(dev, IORESOURCE_MEM, 0);
@@ -295,7 +295,6 @@ static struct platform_driver esp_sun3x_driver = {
 	.remove         = esp_sun3x_remove,
 	.driver = {
 		.name   = "sun3x_esp",
-		.owner	= THIS_MODULE,
 	},
 };
 

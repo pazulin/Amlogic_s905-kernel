@@ -1,5 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (C) 2005-2015 Junjiro R. Okajima
+ * Copyright (C) 2005-2018 Junjiro R. Okajima
  *
  * This program, aufs is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -21,7 +22,7 @@
 
 #include "aufs.h"
 
-#define WH_MASK			S_IRUGO
+#define WH_MASK			0444
 
 /*
  * If a directory contains this file, then it is opaque.  We start with the
@@ -80,16 +81,16 @@ int au_wh_test(struct dentry *h_parent, struct qstr *wh_name, int try_sio)
 	}
 
 	err = 0;
-	if (!wh_dentry->d_inode)
+	if (d_is_negative(wh_dentry))
 		goto out_wh; /* success */
 
 	err = 1;
-	if (S_ISREG(wh_dentry->d_inode->i_mode))
+	if (d_is_reg(wh_dentry))
 		goto out_wh; /* success */
 
 	err = -EIO;
 	AuIOErr("%pd Invalid whiteout entry type 0%o.\n",
-		wh_dentry, wh_dentry->d_inode->i_mode);
+		wh_dentry, d_inode(wh_dentry)->i_mode);
 
 out_wh:
 	dput(wh_dentry);
@@ -105,7 +106,7 @@ int au_diropq_test(struct dentry *h_dentry)
 	int err;
 	struct inode *h_dir;
 
-	h_dir = h_dentry->d_inode;
+	h_dir = d_inode(h_dentry);
 	err = au_wh_test(h_dentry, &diropq_name,
 			 au_test_h_perm_sio(h_dir, MAY_EXEC));
 	return err;
@@ -151,7 +152,7 @@ struct dentry *au_whtmp_lkup(struct dentry *h_parent, struct au_branch *br,
 	for (i = 0; i < 3; i++) {
 		sprintf(p, "%.*x", AUFS_WH_TMP_LEN, cnt++);
 		dentry = au_sio_lkup_one(&qs, h_parent);
-		if (IS_ERR(dentry) || !dentry->d_inode)
+		if (IS_ERR(dentry) || d_is_negative(dentry))
 			goto out_name;
 		dput(dentry);
 	}
@@ -181,7 +182,7 @@ int au_whtmp_ren(struct dentry *h_dentry, struct au_branch *br)
 	struct dentry *h_parent;
 
 	h_parent = h_dentry->d_parent; /* dir inode is locked */
-	h_dir = h_parent->d_inode;
+	h_dir = d_inode(h_parent);
 	IMustLock(h_dir);
 
 	h_path.dentry = au_whtmp_lkup(h_parent, br, &h_dentry->d_name);
@@ -191,7 +192,8 @@ int au_whtmp_ren(struct dentry *h_dentry, struct au_branch *br)
 
 	/* under the same dir, no need to lock_rename() */
 	delegated = NULL;
-	err = vfsub_rename(h_dir, h_dentry, h_dir, &h_path, &delegated, /*flags*/0);
+	err = vfsub_rename(h_dir, h_dentry, h_dir, &h_path, &delegated,
+			   /*flags*/0);
 	AuTraceErr(err);
 	if (unlikely(err == -EWOULDBLOCK)) {
 		pr_warn("cannot retry for NFSv4 delegation"
@@ -220,7 +222,7 @@ static int do_unlink_wh(struct inode *h_dir, struct path *h_path)
 	 * this may be a violation of unix fs semantics.
 	 */
 	force = (h_dir->i_mode & S_ISVTX)
-		&& !uid_eq(current_fsuid(), h_path->dentry->d_inode->i_uid);
+		&& !uid_eq(current_fsuid(), d_inode(h_path->dentry)->i_uid);
 	delegated = NULL;
 	err = vfsub_unlink(h_dir, h_path, &delegated, force);
 	if (unlikely(err == -EWOULDBLOCK)) {
@@ -256,9 +258,8 @@ static int unlink_wh_name(struct dentry *h_parent, struct qstr *wh,
 	if (IS_ERR(h_path.dentry))
 		err = PTR_ERR(h_path.dentry);
 	else {
-		if (h_path.dentry->d_inode
-		    && S_ISREG(h_path.dentry->d_inode->i_mode))
-			err = do_unlink_wh(h_parent->d_inode, &h_path);
+		if (d_is_reg(h_path.dentry))
+			err = do_unlink_wh(d_inode(h_parent), &h_path);
 		dput(h_path.dentry);
 	}
 
@@ -276,7 +277,7 @@ static void au_wh_clean(struct inode *h_dir, struct path *whpath,
 	int err;
 	struct inode *delegated;
 
-	if (!whpath->dentry->d_inode)
+	if (d_is_negative(whpath->dentry))
 		return;
 
 	if (isdir)
@@ -297,7 +298,7 @@ static void au_wh_clean(struct inode *h_dir, struct path *whpath,
 
 static int test_linkable(struct dentry *h_root)
 {
-	struct inode *h_dir = h_root->d_inode;
+	struct inode *h_dir = d_inode(h_root);
 
 	if (h_dir->i_op->link)
 		return 0;
@@ -313,11 +314,11 @@ static int au_whdir(struct inode *h_dir, struct path *path)
 	int err;
 
 	err = -EEXIST;
-	if (!path->dentry->d_inode) {
-		int mode = S_IRWXU;
+	if (d_is_negative(path->dentry)) {
+		int mode = 0700;
 
 		if (au_test_nfs(path->dentry->d_sb))
-			mode |= S_IXUGO;
+			mode |= 0111;
 		err = vfsub_mkdir(h_dir, path, mode);
 	} else if (d_is_dir(path->dentry))
 		err = 0;
@@ -346,7 +347,7 @@ static void au_wh_init_ro(struct inode *h_dir, struct au_wh_base base[],
 /*
  * returns tri-state,
  * minus: error, caller should print the message
- * zero: succuess
+ * zero: success
  * plus: error, caller should NOT print the message
  */
 static int au_wh_init_rw_nolink(struct dentry *h_root, struct au_wbr *wbr,
@@ -356,7 +357,7 @@ static int au_wh_init_rw_nolink(struct dentry *h_root, struct au_wbr *wbr,
 	int err;
 	struct inode *h_dir;
 
-	h_dir = h_root->d_inode;
+	h_dir = d_inode(h_root);
 	h_path->dentry = base[AuBrWh_BASE].dentry;
 	au_wh_clean(h_dir, h_path, /*isdir*/0);
 	h_path->dentry = base[AuBrWh_PLINK].dentry;
@@ -410,11 +411,11 @@ static int au_wh_init_rw(struct dentry *h_root, struct au_wbr *wbr,
 	 * todo: should this create be done in /sbin/mount.aufs helper?
 	 */
 	err = -EEXIST;
-	h_dir = h_root->d_inode;
-	if (!base[AuBrWh_BASE].dentry->d_inode) {
+	h_dir = d_inode(h_root);
+	if (d_is_negative(base[AuBrWh_BASE].dentry)) {
 		h_path->dentry = base[AuBrWh_BASE].dentry;
 		err = vfsub_create(h_dir, h_path, WH_MASK, /*want_excl*/true);
-	} else if (S_ISREG(base[AuBrWh_BASE].dentry->d_inode->i_mode))
+	} else if (d_is_reg(base[AuBrWh_BASE].dentry))
 		err = 0;
 	else
 		pr_err("unknown %pd2 exists\n", base[AuBrWh_BASE].dentry);
@@ -502,7 +503,7 @@ int au_wh_init(struct au_branch *br, struct super_block *sb)
 
 	err = 0;
 	if (!au_br_writable(br->br_perm)) {
-		h_dir = h_root->d_inode;
+		h_dir = d_inode(h_root);
 		au_wh_init_ro(h_dir, base, &path);
 	} else if (!au_br_wh_linkable(br->br_perm)) {
 		err = au_wh_init_rw_nolink(h_root, wbr, do_plink, base, &path);
@@ -562,12 +563,12 @@ static void reinit_br_wh(void *arg)
 		goto out;
 
 	di_read_lock_parent(a->sb->s_root, AuLock_IR);
-	dir = a->sb->s_root->d_inode;
+	dir = d_inode(a->sb->s_root);
 	hdir = au_hi(dir, bindex);
 	h_root = au_h_dptr(a->sb->s_root, bindex);
 	AuDebugOn(h_root != au_br_dentry(a->br));
 
-	au_hn_imtx_lock_nested(hdir, AuLsc_I_PARENT);
+	au_hn_inode_lock_nested(hdir, AuLsc_I_PARENT);
 	wbr_wh_write_lock(wbr);
 	err = au_h_verify(wbr->wbr_whbase, au_opt_udba(a->sb), hdir->hi_inode,
 			  h_root, a->br);
@@ -591,7 +592,7 @@ static void reinit_br_wh(void *arg)
 	if (!err)
 		err = au_wh_init(a->br, a->sb);
 	wbr_wh_write_unlock(wbr);
-	au_hn_imtx_unlock(hdir);
+	au_hn_inode_unlock(hdir);
 	di_read_unlock(a->sb->s_root, AuLock_IR);
 	if (!err)
 		au_fhsm_wrote(a->sb, bindex, /*force*/0);
@@ -599,7 +600,7 @@ static void reinit_br_wh(void *arg)
 out:
 	if (wbr)
 		atomic_dec(&wbr->wbr_wh_running);
-	atomic_dec(&a->br->br_count);
+	au_lcnt_dec(&a->br->br_count);
 	si_write_unlock(a->sb);
 	au_nwt_done(&au_sbi(a->sb)->si_nowait);
 	kfree(arg);
@@ -625,11 +626,11 @@ static void kick_reinit_br_wh(struct super_block *sb, struct au_branch *br)
 		 */
 		arg->sb = sb;
 		arg->br = br;
-		atomic_inc(&br->br_count);
+		au_lcnt_inc(&br->br_count);
 		wkq_err = au_wkq_nowait(reinit_br_wh, arg, sb, /*flags*/0);
 		if (unlikely(wkq_err)) {
 			atomic_dec(&br->br_wbr->wbr_wh_running);
-			atomic_dec(&br->br_count);
+			au_lcnt_dec(&br->br_count);
 			kfree(arg);
 		}
 		do_dec = 0;
@@ -658,7 +659,7 @@ static int link_or_create_wh(struct super_block *sb, aufs_bindex_t bindex,
 	struct inode *h_dir, *delegated;
 
 	h_parent = wh->d_parent; /* dir inode is locked */
-	h_dir = h_parent->d_inode;
+	h_dir = d_inode(h_parent);
 	IMustLock(h_dir);
 
 	br = au_sbr(sb, bindex);
@@ -721,7 +722,7 @@ static struct dentry *do_diropq(struct dentry *dentry, aufs_bindex_t bindex,
 			.dentry = opq_dentry,
 			.mnt	= au_br_mnt(br)
 		};
-		err = do_unlink_wh(au_h_iptr(dentry->d_inode, bindex), &tmp);
+		err = do_unlink_wh(au_h_iptr(d_inode(dentry), bindex), &tmp);
 		if (!err)
 			au_set_dbdiropq(dentry, -1);
 	}
@@ -751,7 +752,7 @@ struct dentry *au_diropq_sio(struct dentry *dentry, aufs_bindex_t bindex,
 	struct dentry *diropq, *h_dentry;
 
 	h_dentry = au_h_dptr(dentry, bindex);
-	if (!au_test_h_perm_sio(h_dentry->d_inode, MAY_EXEC | MAY_WRITE))
+	if (!au_test_h_perm_sio(d_inode(h_dentry), MAY_EXEC | MAY_WRITE))
 		diropq = do_diropq(dentry, bindex, flags);
 	else {
 		int wkq_err;
@@ -806,7 +807,7 @@ struct dentry *au_wh_create(struct dentry *dentry, aufs_bindex_t bindex,
 
 	sb = dentry->d_sb;
 	wh_dentry = au_wh_lkup(h_parent, &dentry->d_name, au_sbr(sb, bindex));
-	if (!IS_ERR(wh_dentry) && !wh_dentry->d_inode) {
+	if (!IS_ERR(wh_dentry) && d_is_negative(wh_dentry)) {
 		err = link_or_create_wh(sb, bindex, wh_dentry);
 		if (!err) {
 			au_set_dbwh(dentry, bindex);
@@ -895,15 +896,12 @@ struct au_whtmp_rmdir *au_whtmp_rmdir_alloc(struct super_block *sb, gfp_t gfp)
 
 	SiMustAnyLock(sb);
 
-	whtmp = kmalloc(sizeof(*whtmp), gfp);
+	whtmp = kzalloc(sizeof(*whtmp), gfp);
 	if (unlikely(!whtmp)) {
 		whtmp = ERR_PTR(-ENOMEM);
 		goto out;
 	}
 
-	whtmp->dir = NULL;
-	whtmp->br = NULL;
-	whtmp->wh_dentry = NULL;
 	/* no estimation for dir size */
 	rdhash = au_sbi(sb)->si_rdhash;
 	if (!rdhash)
@@ -921,7 +919,7 @@ out:
 void au_whtmp_rmdir_free(struct au_whtmp_rmdir *whtmp)
 {
 	if (whtmp->br)
-		atomic_dec(&whtmp->br->br_count);
+		au_lcnt_dec(&whtmp->br->br_count);
 	dput(whtmp->wh_dentry);
 	iput(whtmp->dir);
 	au_nhash_wh_free(&whtmp->whlist);
@@ -941,12 +939,12 @@ int au_whtmp_rmdir(struct inode *dir, aufs_bindex_t bindex,
 	struct inode *wh_inode, *h_dir;
 	struct au_branch *br;
 
-	h_dir = wh_dentry->d_parent->d_inode; /* dir inode is locked */
+	h_dir = d_inode(wh_dentry->d_parent); /* dir inode is locked */
 	IMustLock(h_dir);
 
 	br = au_sbr(dir->i_sb, bindex);
-	wh_inode = wh_dentry->d_inode;
-	mutex_lock_nested(&wh_inode->i_mutex, AuLsc_I_CHILD);
+	wh_inode = d_inode(wh_dentry);
+	inode_lock_nested(wh_inode, AuLsc_I_CHILD);
 
 	/*
 	 * someone else might change some whiteouts while we were sleeping.
@@ -968,7 +966,7 @@ int au_whtmp_rmdir(struct inode *dir, aufs_bindex_t bindex,
 		if (unlikely(wkq_err))
 			err = wkq_err;
 	}
-	mutex_unlock(&wh_inode->i_mutex);
+	inode_unlock(wh_inode);
 
 	if (!err) {
 		h_tmp.dentry = wh_dentry;
@@ -980,7 +978,7 @@ int au_whtmp_rmdir(struct inode *dir, aufs_bindex_t bindex,
 	}
 
 	if (!err) {
-		if (au_ibstart(dir) == bindex) {
+		if (au_ibtop(dir) == bindex) {
 			/* todo: dir->i_mutex is necessary */
 			au_cpup_attr_timesizes(dir);
 			if (h_nlink)
@@ -1004,7 +1002,7 @@ static void call_rmdir_whtmp(void *args)
 	struct au_hinode *hdir;
 
 	/* rmdir by nfsd may cause deadlock with this i_mutex */
-	/* mutex_lock(&a->dir->i_mutex); */
+	/* inode_lock(a->dir); */
 	err = -EROFS;
 	sb = a->dir->i_sb;
 	si_read_lock(sb, !AuLock_FLUSH);
@@ -1017,24 +1015,24 @@ static void call_rmdir_whtmp(void *args)
 	err = -EIO;
 	ii_write_lock_parent(a->dir);
 	h_parent = dget_parent(a->wh_dentry);
-	h_dir = h_parent->d_inode;
+	h_dir = d_inode(h_parent);
 	hdir = au_hi(a->dir, bindex);
 	err = vfsub_mnt_want_write(au_br_mnt(a->br));
 	if (unlikely(err))
 		goto out_mnt;
-	au_hn_imtx_lock_nested(hdir, AuLsc_I_PARENT);
+	au_hn_inode_lock_nested(hdir, AuLsc_I_PARENT);
 	err = au_h_verify(a->wh_dentry, au_opt_udba(sb), h_dir, h_parent,
 			  a->br);
 	if (!err)
 		err = au_whtmp_rmdir(a->dir, bindex, a->wh_dentry, &a->whlist);
-	au_hn_imtx_unlock(hdir);
+	au_hn_inode_unlock(hdir);
 	vfsub_mnt_drop_write(au_br_mnt(a->br));
 
 out_mnt:
 	dput(h_parent);
 	ii_write_unlock(a->dir);
 out:
-	/* mutex_unlock(&a->dir->i_mutex); */
+	/* inode_unlock(a->dir); */
 	au_whtmp_rmdir_free(a);
 	si_read_unlock(sb);
 	au_nwt_done(&au_sbi(sb)->si_nowait);
@@ -1054,7 +1052,7 @@ void au_whtmp_kick_rmdir(struct inode *dir, aufs_bindex_t bindex,
 	sb = dir->i_sb;
 	args->dir = au_igrab(dir);
 	args->br = au_sbr(sb, bindex);
-	atomic_inc(&args->br->br_count);
+	au_lcnt_inc(&args->br->br_count);
 	args->wh_dentry = dget(wh_dentry);
 	wkq_err = au_wkq_nowait(call_rmdir_whtmp, args, sb, /*flags*/0);
 	if (unlikely(wkq_err)) {

@@ -30,7 +30,6 @@
 #include <linux/types.h>
 #include <linux/errno.h>
 #include <linux/miscdevice.h>
-#include <linux/module.h>
 #include <linux/init.h>
 #include <linux/rtc.h>
 #include <linux/proc_fs.h>
@@ -359,19 +358,6 @@ static int efi_rtc_proc_show(struct seq_file *m, void *v)
 
 	return 0;
 }
-
-static int efi_rtc_proc_open(struct inode *inode, struct file *file)
-{
-	return single_open(file, efi_rtc_proc_show, NULL);
-}
-
-static const struct file_operations efi_rtc_proc_fops = {
-	.open		= efi_rtc_proc_open,
-	.read		= seq_read,
-	.llseek		= seq_lseek,
-	.release	= single_release,
-};
-
 static int __init 
 efi_rtc_init(void)
 {
@@ -387,7 +373,7 @@ efi_rtc_init(void)
 		return ret;
 	}
 
-	dir = proc_create("driver/efirtc", 0, NULL, &efi_rtc_proc_fops);
+	dir = proc_create_single("driver/efirtc", 0, NULL, efi_rtc_proc_show);
 	if (dir == NULL) {
 		printk(KERN_ERR "efirtc: can't create /proc/driver/efirtc.\n");
 		misc_deregister(&efi_rtc_dev);
@@ -395,14 +381,8 @@ efi_rtc_init(void)
 	}
 	return 0;
 }
+device_initcall(efi_rtc_init);
 
-static void __exit
-efi_rtc_exit(void)
-{
-	/* not yet used */
-}
-
-module_init(efi_rtc_init);
-module_exit(efi_rtc_exit);
-
+/*
 MODULE_LICENSE("GPL");
+*/

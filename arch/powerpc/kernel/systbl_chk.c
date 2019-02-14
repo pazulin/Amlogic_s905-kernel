@@ -21,15 +21,17 @@
 #ifdef CONFIG_PPC64
 #define OLDSYS(func)		-1
 #define SYS32ONLY(func)		-1
+#define PPC64ONLY(func)		__NR_##func
 #else
 #define OLDSYS(func)		__NR_old##func
 #define SYS32ONLY(func)		__NR_##func
+#define PPC64ONLY(func)		-1
 #endif
 #define SYSX(f, f3264, f32)	-1
 
 #define SYSCALL_SPU(func)	SYSCALL(func)
 #define COMPAT_SYS_SPU(func)	COMPAT_SYS(func)
-#define PPC_SYS_SPU(func)	PPC_SYS(func)
+#define COMPAT_SPU_NEW(func)	COMPAT_SYS(_new##func)
 #define SYSX_SPU(f, f3264, f32)	SYSX(f, f3264, f32)
 
 /* Just insert a marker for ni_syscalls */
@@ -55,4 +57,4 @@
 
 START_TABLE
 #include <asm/systbl.h>
-END_TABLE __NR_syscalls
+END_TABLE NR_syscalls

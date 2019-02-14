@@ -1,5 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Copyright (C) 2005-2015 Junjiro R. Okajima
+ * Copyright (C) 2005-2018 Junjiro R. Okajima
  *
  * This program, aufs is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -59,6 +60,11 @@ struct au_cp_generic {
 #define AuCpup_RWDST		(1 << 5)	/* force write target even if
 						   the branch is marked as RO */
 
+#ifndef CONFIG_AUFS_BR_HFSPLUS
+#undef AuCpup_HOPEN
+#define AuCpup_HOPEN		0
+#endif
+
 #define au_ftest_cpup(flags, name)	((flags) & AuCpup_##name)
 #define au_fset_cpup(flags, name) \
 	do { (flags) |= AuCpup_##name; } while (0)
@@ -84,7 +90,7 @@ int au_test_and_cpup_dirs(struct dentry *dentry, aufs_bindex_t bdst);
 struct au_dtime {
 	struct dentry *dt_dentry;
 	struct path dt_h_path;
-	struct timespec dt_atime, dt_mtime;
+	struct timespec64 dt_atime, dt_mtime;
 };
 void au_dtime_store(struct au_dtime *dt, struct dentry *dentry,
 		    struct path *h_path);

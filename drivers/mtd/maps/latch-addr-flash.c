@@ -10,7 +10,6 @@
  * kind, whether express or implied.
  */
 
-#include <linux/init.h>
 #include <linux/kernel.h>
 #include <linux/module.h>
 #include <linux/mtd/mtd.h>
@@ -196,11 +195,10 @@ static int latch_addr_flash_probe(struct platform_device *dev)
 		err = -ENODEV;
 		goto iounmap;
 	}
-	info->mtd->owner = THIS_MODULE;
+	info->mtd->dev.parent = &dev->dev;
 
-	mtd_device_parse_register(info->mtd, NULL, NULL,
-				  latch_addr_data->parts,
-				  latch_addr_data->nr_parts);
+	mtd_device_register(info->mtd, latch_addr_data->parts,
+			    latch_addr_data->nr_parts);
 	return 0;
 
 iounmap:

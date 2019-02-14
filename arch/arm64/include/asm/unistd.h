@@ -40,13 +40,17 @@
  * The following SVCs are ARM private.
  */
 #define __ARM_NR_COMPAT_BASE		0x0f0000
-#define __ARM_NR_compat_cacheflush	(__ARM_NR_COMPAT_BASE+2)
-#define __ARM_NR_compat_set_tls		(__ARM_NR_COMPAT_BASE+5)
+#define __ARM_NR_compat_cacheflush	(__ARM_NR_COMPAT_BASE + 2)
+#define __ARM_NR_compat_set_tls		(__ARM_NR_COMPAT_BASE + 5)
+#define __ARM_NR_COMPAT_END		(__ARM_NR_COMPAT_BASE + 0x800)
 
-#define __NR_compat_syscalls		385
+#define __NR_compat_syscalls		399
 #endif
 
 #define __ARCH_WANT_SYS_CLONE
+
+#ifndef __COMPAT_SYSCALL_NR
 #include <uapi/asm/unistd.h>
+#endif
 
 #define NR_syscalls (__NR_syscalls)

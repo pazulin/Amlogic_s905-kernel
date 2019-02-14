@@ -1,5 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (C) 2005-2015 Junjiro R. Okajima
+ * Copyright (C) 2005-2018 Junjiro R. Okajima
  *
  * This program, aufs is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -23,42 +24,66 @@
 #include <linux/seq_file.h>
 #include "aufs.h"
 
-void *au_kzrealloc(void *p, unsigned int nused, unsigned int new_sz, gfp_t gfp)
+/* shrinkable realloc */
+void *au_krealloc(void *p, unsigned int new_sz, gfp_t gfp, int may_shrink)
 {
-	if (new_sz <= nused)
-		return p;
+	size_t sz;
+	int diff;
 
-	p = krealloc(p, new_sz, gfp);
-	if (p)
+	sz = 0;
+	diff = -1;
+	if (p) {
+#if 0 /* unused */
+		if (!new_sz) {
+			kfree(p);
+			p = NULL;
+			goto out;
+		}
+#else
+		AuDebugOn(!new_sz);
+#endif
+		sz = ksize(p);
+		diff = au_kmidx_sub(sz, new_sz);
+	}
+	if (sz && !diff)
+		goto out;
+
+	if (sz < new_sz)
+		/* expand or SLOB */
+		p = krealloc(p, new_sz, gfp);
+	else if (new_sz < sz && may_shrink) {
+		/* shrink */
+		void *q;
+
+		q = kmalloc(new_sz, gfp);
+		if (q) {
+			if (p) {
+				memcpy(q, p, new_sz);
+				kfree(p);
+			}
+			p = q;
+		} else
+			p = NULL;
+	}
+
+out:
+	return p;
+}
+
+void *au_kzrealloc(void *p, unsigned int nused, unsigned int new_sz, gfp_t gfp,
+		   int may_shrink)
+{
+	p = au_krealloc(p, new_sz, gfp, may_shrink);
+	if (p && new_sz > nused)
 		memset(p + nused, 0, new_sz - nused);
 	return p;
 }
 
 /* ---------------------------------------------------------------------- */
-
 /*
  * aufs caches
  */
-struct kmem_cache *au_cachep[AuCache_Last];
-static int __init au_cache_init(void)
-{
-	au_cachep[AuCache_DINFO] = AuCacheCtor(au_dinfo, au_di_init_once);
-	if (au_cachep[AuCache_DINFO])
-		/* SLAB_DESTROY_BY_RCU */
-		au_cachep[AuCache_ICNTNR] = AuCacheCtor(au_icntnr,
-							au_icntnr_init_once);
-	if (au_cachep[AuCache_ICNTNR])
-		au_cachep[AuCache_FINFO] = AuCacheCtor(au_finfo,
-						       au_fi_init_once);
-	if (au_cachep[AuCache_FINFO])
-		au_cachep[AuCache_VDIR] = AuCache(au_vdir);
-	if (au_cachep[AuCache_VDIR])
-		au_cachep[AuCache_DEHSTR] = AuCache(au_vdir_dehstr);
-	if (au_cachep[AuCache_DEHSTR])
-		return 0;
-
-	return -ENOMEM;
-}
+struct kmem_cache *au_cache[AuCache_Last];
 
 static void au_cache_fin(void)
 {
@@ -72,11 +97,31 @@ static void au_cache_fin(void)
 
 	/* excluding AuCache_HNOTIFY */
 	BUILD_BUG_ON(AuCache_HNOTIFY + 1 != AuCache_Last);
-	for (i = 0; i < AuCache_HNOTIFY; i++)
-		if (au_cachep[i]) {
-			kmem_cache_destroy(au_cachep[i]);
-			au_cachep[i] = NULL;
-		}
+	for (i = 0; i < AuCache_HNOTIFY; i++) {
+		kmem_cache_destroy(au_cache[i]);
+		au_cache[i] = NULL;
+	}
+}
+
+static int __init au_cache_init(void)
+{
+	au_cache[AuCache_DINFO] = AuCacheCtor(au_dinfo, au_di_init_once);
+	if (au_cache[AuCache_DINFO])
+		/* SLAB_DESTROY_BY_RCU */
+		au_cache[AuCache_ICNTNR] = AuCacheCtor(au_icntnr,
+						       au_icntnr_init_once);
+	if (au_cache[AuCache_ICNTNR])
+		au_cache[AuCache_FINFO] = AuCacheCtor(au_finfo,
+						      au_fi_init_once);
+	if (au_cache[AuCache_FINFO])
+		au_cache[AuCache_VDIR] = AuCache(au_vdir);
+	if (au_cache[AuCache_VDIR])
+		au_cache[AuCache_DEHSTR] = AuCache(au_vdir_dehstr);
+	if (au_cache[AuCache_DEHSTR])
+		return 0;
+
+	au_cache_fin();
+	return -ENOMEM;
 }
 
 /* ---------------------------------------------------------------------- */
@@ -88,10 +133,8 @@ int au_dir_roflags;
  * iterate_supers_type() doesn't protect us from
  * remounting (branch management)
  */
-struct au_splhead au_sbilist;
+struct hlist_bl_head au_sbilist;
 #endif
-
-struct lock_class_key au_lc_key[AuLcKey_Last];
 
 /*
  * functions for module interface.
@@ -107,12 +150,12 @@ MODULE_ALIAS_FS(AUFS_NAME);
 /* this module parameter has no meaning when SYSFS is disabled */
 int sysaufs_brs = 1;
 MODULE_PARM_DESC(brs, "use <sysfs>/fs/aufs/si_*/brN");
-module_param_named(brs, sysaufs_brs, int, S_IRUGO);
+module_param_named(brs, sysaufs_brs, int, 0444);
 
 /* this module parameter has no meaning when USER_NS is disabled */
-static bool au_userns;
+bool au_userns;
 MODULE_PARM_DESC(allow_userns, "allow unprivileged to mount under userns");
-module_param_named(allow_userns, au_userns, bool, S_IRUGO);
+module_param_named(allow_userns, au_userns, bool, 0444);
 
 /* ---------------------------------------------------------------------- */
 
@@ -123,9 +166,9 @@ int au_seq_path(struct seq_file *seq, struct path *path)
 	int err;
 
 	err = seq_path(seq, path, au_esc_chars);
-	if (err > 0)
+	if (err >= 0)
 		err = 0;
-	else if (err < 0)
+	else
 		err = -ENOMEM;
 
 	return err;
@@ -147,6 +190,12 @@ static int __init aufs_init(void)
 
 	au_dir_roflags = au_file_roflags(O_DIRECTORY | O_LARGEFILE);
 
+	memcpy(aufs_iop_nogetattr, aufs_iop, sizeof(aufs_iop));
+	for (i = 0; i < AuIop_Last; i++)
+		aufs_iop_nogetattr[i].getattr = NULL;
+
+	memset(au_cache, 0, sizeof(au_cache));	/* including hnotify */
+
 	au_sbilist_init();
 	sysaufs_brs_init();
 	au_debug_init();
@@ -154,9 +203,12 @@ static int __init aufs_init(void)
 	err = sysaufs_init();
 	if (unlikely(err))
 		goto out;
-	err = au_procfs_init();
+	err = dbgaufs_init();
 	if (unlikely(err))
 		goto out_sysaufs;
+	err = au_procfs_init();
+	if (unlikely(err))
+		goto out_dbgaufs;
 	err = au_wkq_init();
 	if (unlikely(err))
 		goto out_procfs;
@@ -194,6 +246,8 @@ out_wkq:
 	au_wkq_fin();
 out_procfs:
 	au_procfs_fin();
+out_dbgaufs:
+	dbgaufs_fin();
 out_sysaufs:
 	sysaufs_fin();
 	au_dy_fin();
@@ -210,6 +264,7 @@ static void __exit aufs_exit(void)
 	au_loopback_fin();
 	au_wkq_fin();
 	au_procfs_fin();
+	dbgaufs_fin();
 	sysaufs_fin();
 	au_dy_fin();
 }

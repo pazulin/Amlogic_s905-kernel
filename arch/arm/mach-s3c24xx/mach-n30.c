@@ -1,18 +1,15 @@
-/* Machine specific code for the Acer n30, Acer N35, Navman PiN 570,
- * Yakumo AlphaX and Airis NC05 PDAs.
- *
- * Copyright (c) 2003-2005 Simtec Electronics
- *	Ben Dooks <ben@simtec.co.uk>
- *
- * Copyright (c) 2005-2008 Christer Weinigel <christer@weinigel.se>
- *
- * There is a wiki with more information about the n30 port at
- * http://handhelds.org/moin/moin.cgi/AcerN30Documentation .
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- */
+// SPDX-License-Identifier: GPL-2.0
+//
+// Machine specific code for the Acer n30, Acer N35, Navman PiN 570,
+// Yakumo AlphaX and Airis NC05 PDAs.
+//
+// Copyright (c) 2003-2005 Simtec Electronics
+//	Ben Dooks <ben@simtec.co.uk>
+//
+// Copyright (c) 2005-2008 Christer Weinigel <christer@weinigel.se>
+//
+// There is a wiki with more information about the n30 port at
+// http://handhelds.org/moin/moin.cgi/AcerN30Documentation .
 
 #include <linux/kernel.h>
 #include <linux/types.h>
@@ -24,6 +21,7 @@
 #include <linux/interrupt.h>
 #include <linux/platform_device.h>
 #include <linux/serial_core.h>
+#include <linux/serial_s3c.h>
 #include <linux/timer.h>
 #include <linux/io.h>
 #include <linux/mmc/host.h>
@@ -43,9 +41,7 @@
 #include <asm/mach/map.h>
 
 #include <linux/platform_data/i2c-s3c2410.h>
-#include <plat/regs-serial.h>
 
-#include <plat/clock.h>
 #include <plat/cpu.h>
 #include <plat/devs.h>
 #include <linux/platform_data/mmc-s3cmci.h>
@@ -523,7 +519,7 @@ static void __init n30_hwinit(void)
 	 *
 	 * The pull ups for H6/H7 are enabled on N30 but not on the
 	 * N35/PiN.  I suppose is useful for a budget model of the N30
-	 * with no bluetooh.  It doesn't hurt to have the pull ups
+	 * with no bluetooth.  It doesn't hurt to have the pull ups
 	 * enabled on the N35, so leave them enabled for all models.
 	 */
 	__raw_writel(0x0028aaaa, S3C2410_GPHCON);
@@ -535,9 +531,14 @@ static void __init n30_map_io(void)
 {
 	s3c24xx_init_io(n30_iodesc, ARRAY_SIZE(n30_iodesc));
 	n30_hwinit();
-	s3c24xx_init_clocks(0);
 	s3c24xx_init_uarts(n30_uartcfgs, ARRAY_SIZE(n30_uartcfgs));
 	samsung_set_timer_source(SAMSUNG_PWM3, SAMSUNG_PWM4);
+}
+
+static void __init n30_init_time(void)
+{
+	s3c2410_init_clocks(12000000);
+	samsung_timer_init();
 }
 
 /* GPB3 is the line that controls the pull-up for the USB D+ line */
@@ -591,20 +592,18 @@ MACHINE_START(N30, "Acer-N30")
 				Ben Dooks <ben-linux@fluff.org>
 	*/
 	.atag_offset	= 0x100,
-	.init_time	= samsung_timer_init,
+	.init_time	= n30_init_time,
 	.init_machine	= n30_init,
 	.init_irq	= s3c2410_init_irq,
 	.map_io		= n30_map_io,
-	.restart	= s3c2410_restart,
 MACHINE_END
 
 MACHINE_START(N35, "Acer-N35")
 	/* Maintainer: Christer Weinigel <christer@weinigel.se>
 	*/
 	.atag_offset	= 0x100,
-	.init_time	= samsung_timer_init,
+	.init_time	= n30_init_time,
 	.init_machine	= n30_init,
 	.init_irq	= s3c2410_init_irq,
 	.map_io		= n30_map_io,
-	.restart	= s3c2410_restart,
 MACHINE_END

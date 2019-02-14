@@ -36,7 +36,7 @@
 
 static DEFINE_SPINLOCK(eeh_eventlist_lock);
 static struct semaphore eeh_eventlist_sem;
-LIST_HEAD(eeh_eventlist);
+static LIST_HEAD(eeh_eventlist);
 
 /**
  * eeh_event_handler - Dispatch EEH events.
@@ -73,18 +73,16 @@ static int eeh_event_handler(void * dummy)
 		/* We might have event without binding PE */
 		pe = event->pe;
 		if (pe) {
-			eeh_pe_state_mark(pe, EEH_PE_RECOVERING);
 			if (pe->type & EEH_PE_PHB)
-				pr_info("EEH: Detected error on PHB#%d\n",
+				pr_info("EEH: Detected error on PHB#%x\n",
 					 pe->phb->global_number);
 			else
 				pr_info("EEH: Detected PCI bus error on "
-					"PHB#%d-PE#%x\n",
+					"PHB#%x-PE#%x\n",
 					pe->phb->global_number, pe->addr);
-			eeh_handle_event(pe);
-			eeh_pe_state_clear(pe, EEH_PE_RECOVERING);
+			eeh_handle_normal_event(pe);
 		} else {
-			eeh_handle_event(NULL);
+			eeh_handle_special_event();
 		}
 
 		kfree(event);
@@ -152,24 +150,33 @@ int eeh_send_failure_event(struct eeh_pe *pe)
 /**
  * eeh_remove_event - Remove EEH event from the queue
  * @pe: Event binding to the PE
+ * @force: Event will be removed unconditionally
  *
  * On PowerNV platform, we might have subsequent coming events
  * is part of the former one. For that case, those subsequent
  * coming events are totally duplicated and unnecessary, thus
  * they should be removed.
  */
-void eeh_remove_event(struct eeh_pe *pe)
+void eeh_remove_event(struct eeh_pe *pe, bool force)
 {
 	unsigned long flags;
 	struct eeh_event *event, *tmp;
 
+	/*
+	 * If we have NULL PE passed in, we have dead IOC
+	 * or we're sure we can report all existing errors
+	 * by the caller.
+	 *
+	 * With "force", the event with associated PE that
+	 * have been isolated, the event won't be removed
+	 * to avoid event lost.
+	 */
 	spin_lock_irqsave(&eeh_eventlist_lock, flags);
 	list_for_each_entry_safe(event, tmp, &eeh_eventlist, list) {
-		/*
-		 * If we don't have valid PE passed in, that means
-		 * we already have event corresponding to dead IOC
-		 * and all events should be purged.
-		 */
+		if (!force && event->pe &&
+		    (event->pe->state & EEH_PE_ISOLATED))
+			continue;
+
 		if (!pe) {
 			list_del(&event->list);
 			kfree(event);

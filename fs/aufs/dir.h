@@ -1,5 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Copyright (C) 2005-2015 Junjiro R. Okajima
+ * Copyright (C) 2005-2018 Junjiro R. Okajima
  *
  * This program, aufs is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -78,9 +79,9 @@ struct au_vdir {
 		union au_vdir_deblk_p	p;
 	} vd_last;
 
-	unsigned long	vd_version;
+	u64		vd_version;
 	unsigned int	vd_deblk_sz;
-	unsigned long	vd_jiffy;
+	unsigned long		vd_jiffy;
 } ____cacheline_aligned_in_smp;
 
 /* ---------------------------------------------------------------------- */

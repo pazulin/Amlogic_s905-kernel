@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 WITH Linux-syscall-note */
 #ifndef _UAPI_LINUX_MSDOS_FS_H
 #define _UAPI_LINUX_MSDOS_FS_H
 
@@ -9,7 +10,9 @@
  * The MS-DOS filesystem constants/structures
  */
 
+#ifndef SECTOR_SIZE
 #define SECTOR_SIZE	512		/* sector size (bytes) */
+#endif
 #define SECTOR_BITS	9		/* log2(SECTOR_SIZE) */
 #define MSDOS_DPB	(MSDOS_DPS)	/* dir entries per block */
 #define MSDOS_DPB_BITS	4		/* log2(MSDOS_DPB) */
@@ -134,7 +137,7 @@ struct fat_boot_sector {
 			__u8	vol_id[4];	/* volume ID */
 			__u8	vol_label[11];	/* volume label */
 			__u8	fs_type[8];		/* file system type */
-			/* other fiealds are not added here */
+			/* other fields are not added here */
 		} fat16;
 
 		struct {
@@ -157,7 +160,7 @@ struct fat_boot_sector {
 			__u8	vol_id[4];	/* volume ID */
 			__u8	vol_label[11];	/* volume label */
 			__u8	fs_type[8];		/* file system type */
-			/* other fiealds are not added here */
+			/* other fields are not added here */
 		} fat32;
 	};
 };

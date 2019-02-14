@@ -147,7 +147,7 @@ static int esp_jazz_probe(struct platform_device *dev)
 	esp = shost_priv(host);
 
 	esp->host = host;
-	esp->dev = dev;
+	esp->dev = &dev->dev;
 	esp->ops = &jazz_esp_ops;
 
 	res = platform_get_resource(dev, IORESOURCE_MEM, 0);
@@ -226,7 +226,6 @@ static struct platform_driver esp_jazz_driver = {
 	.remove		= esp_jazz_remove,
 	.driver	= {
 		.name	= "jazz_esp",
-		.owner	= THIS_MODULE,
 	},
 };
 

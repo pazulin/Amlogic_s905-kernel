@@ -1,5 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (C) 2005-2015 Junjiro R. Okajima
+ * Copyright (C) 2005-2018 Junjiro R. Okajima
  *
  * This program, aufs is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -30,7 +31,7 @@
 static int au_wbr_fd(struct path *path, struct aufs_wbr_fd __user *arg)
 {
 	int err, fd;
-	aufs_bindex_t wbi, bindex, bend;
+	aufs_bindex_t wbi, bindex, bbot;
 	struct file *h_file;
 	struct super_block *sb;
 	struct dentry *root;
@@ -59,7 +60,7 @@ static int au_wbr_fd(struct path *path, struct aufs_wbr_fd __user *arg)
 			goto out;
 	}
 
-	fd = get_unused_fd();
+	fd = get_unused_fd_flags(0);
 	err = fd;
 	if (unlikely(fd < 0))
 		goto out;
@@ -70,10 +71,10 @@ static int au_wbr_fd(struct path *path, struct aufs_wbr_fd __user *arg)
 	sb = path->dentry->d_sb;
 	root = sb->s_root;
 	aufs_read_lock(root, AuLock_IR);
-	bend = au_sbend(sb);
+	bbot = au_sbbot(sb);
 	if (wbrfd.brid >= 0) {
 		wbi = au_br_index(sb, wbrfd.brid);
-		if (unlikely(wbi < 0 || wbi > bend))
+		if (unlikely(wbi < 0 || wbi > bbot))
 			goto out_unlock;
 	}
 
@@ -85,7 +86,7 @@ static int au_wbr_fd(struct path *path, struct aufs_wbr_fd __user *arg)
 
 		bindex = wbi + 1;
 		wbi = -1;
-		for (; bindex <= bend; bindex++) {
+		for (; bindex <= bbot; bindex++) {
 			br = au_sbr(sb, bindex);
 			if (au_br_writable(br->br_perm)) {
 				wbi = bindex;
@@ -105,7 +106,7 @@ out_unlock:
 	if (IS_ERR(h_file))
 		goto out_fd;
 
-	atomic_dec(&br->br_count); /* cf. au_h_open() */
+	au_lcnt_dec(&br->br_nfiles); /* cf. au_h_open() */
 	fd_install(fd, h_file);
 	err = fd;
 	goto out; /* success */
@@ -143,7 +144,7 @@ long aufs_ioctl_dir(struct file *file, unsigned int cmd, unsigned long arg)
 		break;
 
 	case AUFS_CTL_FHSM_FD:
-		dentry = file->f_dentry;
+		dentry = file->f_path.dentry;
 		if (IS_ROOT(dentry))
 			err = au_fhsm_fd(dentry->d_sb, arg);
 		else
@@ -166,7 +167,7 @@ long aufs_ioctl_nondir(struct file *file, unsigned int cmd, unsigned long arg)
 
 	switch (cmd) {
 	case AUFS_CTL_MVDOWN:
-		err = au_mvdown(file->f_dentry, (void __user *)arg);
+		err = au_mvdown(file->f_path.dentry, (void __user *)arg);
 		break;
 
 	case AUFS_CTL_WBR_FD:

@@ -115,7 +115,7 @@ struct scb_platform_data;
 #endif
 
 #define AHD_BUILD_COL_IDX(target, lun)				\
-	(((lun) << 4) | target)
+	((((u8)lun) << 4) | target)
 
 #define AHD_GET_SCB_COL_IDX(ahd, scb)				\
 	((SCB_GET_LUN(scb) << 4) | SCB_GET_TARGET(ahd, scb))
@@ -624,7 +624,7 @@ struct scb {
 };
 
 TAILQ_HEAD(scb_tailq, scb);
-LIST_HEAD(scb_list, scb);
+BSD_LIST_HEAD(scb_list, scb);
 
 struct scb_data {
 	/*
@@ -911,7 +911,7 @@ struct vpd_config {
 	uint8_t  length;
 	uint8_t  revision;
 	uint8_t  device_flags;
-	uint8_t  termnation_menus[2];
+	uint8_t  termination_menus[2];
 	uint8_t  fifo_threshold;
 	uint8_t  end_tag;
 	uint8_t  vpd_checksum;
@@ -1046,8 +1046,6 @@ typedef enum {
 
 typedef uint8_t ahd_mode_state;
 
-typedef void ahd_callback_t (void *);
-
 struct ahd_completion
 {
 	uint16_t	tag;
@@ -1069,7 +1067,7 @@ struct ahd_softc {
 	/*
 	 * SCBs that have been sent to the controller
 	 */
-	LIST_HEAD(, scb)	  pending_scbs;
+	BSD_LIST_HEAD(, scb)	  pending_scbs;
 
 	/*
 	 * Current register window mode information.
@@ -1122,8 +1120,7 @@ struct ahd_softc {
 	/*
 	 * Timer handles for timer driven callbacks.
 	 */
-	ahd_timer_t		  reset_timer;
-	ahd_timer_t		  stat_timer;
+	struct timer_list	stat_timer;
 
 	/*
 	 * Statistics.

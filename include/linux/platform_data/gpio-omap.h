@@ -157,11 +157,6 @@
 #define OMAP_MPUIO(nr)		(OMAP_MAX_GPIO_LINES + (nr))
 #define OMAP_GPIO_IS_MPUIO(nr)	((nr) >= OMAP_MAX_GPIO_LINES)
 
-struct omap_gpio_dev_attr {
-	int bank_width;		/* GPIO bank width */
-	bool dbck_flag;		/* dbck required or not - True for OMAP3&4 */
-};
-
 struct omap_gpio_reg_offs {
 	u16 revision;
 	u16 direction;
@@ -208,9 +203,17 @@ struct omap_gpio_platform_data {
 	int (*get_context_loss_count)(struct device *dev);
 };
 
+#if IS_BUILTIN(CONFIG_GPIO_OMAP)
 extern void omap2_gpio_prepare_for_idle(int off_mode);
 extern void omap2_gpio_resume_after_idle(void);
-extern void omap_set_gpio_debounce(int gpio, int enable);
-extern void omap_set_gpio_debounce_time(int gpio, int enable);
+#else
+static inline void omap2_gpio_prepare_for_idle(int off_mode)
+{
+}
+
+static inline void omap2_gpio_resume_after_idle(void)
+{
+}
+#endif
 
 #endif

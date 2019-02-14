@@ -1,5 +1,6 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
- * Copyright (C) 2005-2015 Junjiro R. Okajima
+ * Copyright (C) 2005-2018 Junjiro R. Okajima
  *
  * This program, aufs is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -26,6 +27,7 @@
 
 #include <linux/file.h>
 #include <linux/fs.h>
+#include <linux/mm_types.h>
 #include <linux/poll.h>
 #include "rwsem.h"
 
@@ -62,7 +64,7 @@ struct au_finfo {
 	};
 	struct au_fidir		*fi_hdir;	/* for dir only */
 
-	struct hlist_node	fi_hlist;
+	struct hlist_bl_node	fi_hlist;
 	struct file		*fi_file;	/* very ugly */
 } ____cacheline_aligned_in_smp;
 
@@ -74,7 +76,7 @@ unsigned int au_file_roflags(unsigned int flags);
 struct file *au_h_open(struct dentry *dentry, aufs_bindex_t bindex, int flags,
 		       struct file *file, int force_wr);
 struct au_do_open_args {
-	int		no_lock;
+	int		aopen;
 	int		(*open)(struct file *file, int flags,
 				struct file *h_file);
 	struct au_fidir	*fidir;
@@ -85,13 +87,13 @@ int au_reopen_nondir(struct file *file);
 struct au_pin;
 int au_ready_to_write(struct file *file, loff_t len, struct au_pin *pin);
 int au_reval_and_lock_fdi(struct file *file, int (*reopen)(struct file *file),
-			  int wlock);
+			  int wlock, unsigned int fi_lsc);
 int au_do_flush(struct file *file, fl_owner_t id,
 		int (*flush)(struct file *file, fl_owner_t id));
 
 /* poll.c */
 #ifdef CONFIG_AUFS_POLL
-unsigned int aufs_poll(struct file *file, poll_table *wait);
+__poll_t aufs_poll(struct file *file, struct poll_table_struct *pt);
 #endif
 
 #ifdef CONFIG_AUFS_BR_HFSPLUS
@@ -111,16 +113,16 @@ AuStubVoid(au_h_open_post, struct dentry *dentry, aufs_bindex_t bindex,
 extern const struct file_operations aufs_file_fop;
 int au_do_open_nondir(struct file *file, int flags, struct file *h_file);
 int aufs_release_nondir(struct inode *inode __maybe_unused, struct file *file);
-struct file *au_read_pre(struct file *file, int keep_fi);
+struct file *au_read_pre(struct file *file, int keep_fi, unsigned int lsc);
 
 /* finfo.c */
-void au_hfput(struct au_hfile *hf, struct file *file);
+void au_hfput(struct au_hfile *hf, int execed);
 void au_set_h_fptr(struct file *file, aufs_bindex_t bindex,
 		   struct file *h_file);
 
 void au_update_figen(struct file *file);
 struct au_fidir *au_fidir_alloc(struct super_block *sb);
-int au_fidir_realloc(struct au_finfo *finfo, int nbr);
+int au_fidir_realloc(struct au_finfo *finfo, int nbr, int may_shrink);
 
 void au_fi_init_once(void *_fi);
 void au_finfo_fin(struct file *file);
@@ -144,11 +146,59 @@ static inline struct au_finfo *au_fi(struct file *file)
 
 /* ---------------------------------------------------------------------- */
 
+#define fi_read_lock(f)	au_rw_read_lock(&au_fi(f)->fi_rwsem)
+#define fi_write_lock(f)	au_rw_write_lock(&au_fi(f)->fi_rwsem)
+#define fi_read_trylock(f)	au_rw_read_trylock(&au_fi(f)->fi_rwsem)
+#define fi_write_trylock(f)	au_rw_write_trylock(&au_fi(f)->fi_rwsem)
 /*
- * fi_read_lock, fi_write_lock,
- * fi_read_unlock, fi_write_unlock, fi_downgrade_lock
+#define fi_read_trylock_nested(f) \
+	au_rw_read_trylock_nested(&au_fi(f)->fi_rwsem)
+#define fi_write_trylock_nested(f) \
+	au_rw_write_trylock_nested(&au_fi(f)->fi_rwsem)
+*/
+
+#define fi_read_unlock(f)	au_rw_read_unlock(&au_fi(f)->fi_rwsem)
+#define fi_write_unlock(f)	au_rw_write_unlock(&au_fi(f)->fi_rwsem)
+#define fi_downgrade_lock(f)	au_rw_dgrade_lock(&au_fi(f)->fi_rwsem)
+
+/* lock subclass for finfo */
+enum {
+	AuLsc_FI_1,
+	AuLsc_FI_2
+};
+
+static inline void fi_read_lock_nested(struct file *f, unsigned int lsc)
+{
+	au_rw_read_lock_nested(&au_fi(f)->fi_rwsem, lsc);
+}
+
+static inline void fi_write_lock_nested(struct file *f, unsigned int lsc)
+{
+	au_rw_write_lock_nested(&au_fi(f)->fi_rwsem, lsc);
+}
+
+/*
+ * fi_read_lock_1, fi_write_lock_1,
+ * fi_read_lock_2, fi_write_lock_2
  */
-AuSimpleRwsemFuncs(fi, struct file *f, &au_fi(f)->fi_rwsem);
+#define AuReadLockFunc(name) \
+static inline void fi_read_lock_##name(struct file *f) \
+{ fi_read_lock_nested(f, AuLsc_FI_##name); }
+
+#define AuWriteLockFunc(name) \
+static inline void fi_write_lock_##name(struct file *f) \
+{ fi_write_lock_nested(f, AuLsc_FI_##name); }
+
+#define AuRWLockFuncs(name) \
+	AuReadLockFunc(name) \
+	AuWriteLockFunc(name)
+
+AuRWLockFuncs(1);
+AuRWLockFuncs(2);
+
+#undef AuReadLockFunc
+#undef AuWriteLockFunc
+#undef AuRWLockFuncs
 
 #define FiMustNoWaiters(f)	AuRwMustNoWaiters(&au_fi(f)->fi_rwsem)
 #define FiMustAnyLock(f)	AuRwMustAnyLock(&au_fi(f)->fi_rwsem)
@@ -157,13 +207,13 @@ AuSimpleRwsemFuncs(fi, struct file *f, &au_fi(f)->fi_rwsem);
 /* ---------------------------------------------------------------------- */
 
 /* todo: hard/soft set? */
-static inline aufs_bindex_t au_fbstart(struct file *file)
+static inline aufs_bindex_t au_fbtop(struct file *file)
 {
 	FiMustAnyLock(file);
 	return au_fi(file)->fi_btop;
 }
 
-static inline aufs_bindex_t au_fbend_dir(struct file *file)
+static inline aufs_bindex_t au_fbbot_dir(struct file *file)
 {
 	FiMustAnyLock(file);
 	AuDebugOn(!au_fi(file)->fi_hdir);
@@ -177,13 +227,13 @@ static inline struct au_vdir *au_fvdir_cache(struct file *file)
 	return au_fi(file)->fi_hdir->fd_vdir_cache;
 }
 
-static inline void au_set_fbstart(struct file *file, aufs_bindex_t bindex)
+static inline void au_set_fbtop(struct file *file, aufs_bindex_t bindex)
 {
 	FiMustWriteLock(file);
 	au_fi(file)->fi_btop = bindex;
 }
 
-static inline void au_set_fbend_dir(struct file *file, aufs_bindex_t bindex)
+static inline void au_set_fbbot_dir(struct file *file, aufs_bindex_t bindex)
 {
 	FiMustWriteLock(file);
 	AuDebugOn(!au_fi(file)->fi_hdir);

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 #include <asm/setup.h>
 #include <libfdt.h>
 
@@ -6,6 +7,8 @@
 #else
 #define do_extend_cmdline 0
 #endif
+
+#define NR_BANKS 16
 
 static int node_offset(void *fdt, const char *node_path)
 {

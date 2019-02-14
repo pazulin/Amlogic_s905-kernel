@@ -1,5 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (C) 2011-2015 Junjiro R. Okajima
+ * Copyright (C) 2011-2018 Junjiro R. Okajima
  *
  * This program, aufs is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -155,12 +156,12 @@ void au_fhsm_wrote(struct super_block *sb, aufs_bindex_t bindex, int force)
 
 void au_fhsm_wrote_all(struct super_block *sb, int force)
 {
-	aufs_bindex_t bindex, bend;
+	aufs_bindex_t bindex, bbot;
 	struct au_branch *br;
 
 	/* exclude the bottom */
-	bend = au_fhsm_bottom(sb);
-	for (bindex = 0; bindex < bend; bindex++) {
+	bbot = au_fhsm_bottom(sb);
+	for (bindex = 0; bindex < bbot; bindex++) {
 		br = au_sbr(sb, bindex);
 		if (au_br_fhsm(br->br_perm))
 			au_fhsm_wrote(sb, bindex, force);
@@ -169,10 +170,9 @@ void au_fhsm_wrote_all(struct super_block *sb, int force)
 
 /* ---------------------------------------------------------------------- */
 
-static unsigned int au_fhsm_poll(struct file *file,
-				 struct poll_table_struct *wait)
+static __poll_t au_fhsm_poll(struct file *file, struct poll_table_struct *wait)
 {
-	unsigned int mask;
+	__poll_t mask;
 	struct au_sbinfo *sbinfo;
 	struct au_fhsm *fhsm;
 
@@ -181,9 +181,10 @@ static unsigned int au_fhsm_poll(struct file *file,
 	fhsm = &sbinfo->si_fhsm;
 	poll_wait(file, &fhsm->fhsm_wqh, wait);
 	if (atomic_read(&fhsm->fhsm_readable))
-		mask = POLLIN /* | POLLRDNORM */;
+		mask = EPOLLIN /* | EPOLLRDNORM */;
 
-	AuTraceErr((int)mask);
+	if (!mask)
+		AuDbg("mask 0x%x\n", mask);
 	return mask;
 }
 
@@ -206,15 +207,15 @@ static ssize_t au_fhsm_do_read(struct super_block *sb,
 {
 	ssize_t err;
 	int nstbr;
-	aufs_bindex_t bindex, bend;
+	aufs_bindex_t bindex, bbot;
 	struct au_branch *br;
 	struct au_br_fhsm *bf;
 
 	/* except the bottom branch */
 	err = 0;
 	nstbr = 0;
-	bend = au_fhsm_bottom(sb);
-	for (bindex = 0; !err && bindex < bend; bindex++) {
+	bbot = au_fhsm_bottom(sb);
+	for (bindex = 0; !err && bindex < bbot; bindex++) {
 		br = au_sbr(sb, bindex);
 		if (!au_br_fhsm(br->br_perm))
 			continue;
@@ -245,7 +246,7 @@ static ssize_t au_fhsm_read(struct file *file, char __user *buf, size_t count,
 {
 	ssize_t err;
 	int readable;
-	aufs_bindex_t nfhsm, bindex, bend;
+	aufs_bindex_t nfhsm, bindex, bbot;
 	struct au_sbinfo *sbinfo;
 	struct au_fhsm *fhsm;
 	struct au_branch *br;
@@ -276,8 +277,8 @@ need_data:
 		AuDebugOn(!sb);
 		/* exclude the bottom branch */
 		nfhsm = 0;
-		bend = au_fhsm_bottom(sb);
-		for (bindex = 0; bindex < bend; bindex++) {
+		bbot = au_fhsm_bottom(sb);
+		for (bindex = 0; bindex < bbot; bindex++) {
 			br = au_sbr(sb, bindex);
 			if (au_br_fhsm(br->br_perm))
 				nfhsm++;
@@ -354,7 +355,7 @@ int au_fhsm_fd(struct super_block *sb, int oflags)
 	if (unlikely(fd < 0))
 		goto out_pid;
 
-	/* succeed reglardless 'fhsm' status */
+	/* succeed regardless 'fhsm' status */
 	kobject_get(&sbinfo->si_kobj);
 	si_noflush_read_lock(sb);
 	if (au_ftest_si(sbinfo, FHSM))

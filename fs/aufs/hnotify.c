@@ -1,5 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0
 /*
- * Copyright (C) 2005-2015 Junjiro R. Okajima
+ * Copyright (C) 2005-2018 Junjiro R. Okajima
  *
  * This program, aufs is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License as published by
@@ -38,9 +39,9 @@ int au_hn_alloc(struct au_hinode *hinode, struct inode *inode)
 			au_cache_free_hnotify(hn);
 			/*
 			 * The upper dir was removed by udba, but the same named
-			 * dir left. In this case, aufs assignes a new inode
+			 * dir left. In this case, aufs assigns a new inode
 			 * number and set the monitor again.
-			 * For the lower dir, the old monitnor is still left.
+			 * For the lower dir, the old monitor is still left.
 			 */
 			if (err == -EEXIST)
 				err = 0;
@@ -73,17 +74,17 @@ void au_hn_ctl(struct au_hinode *hinode, int do_set)
 
 void au_hn_reset(struct inode *inode, unsigned int flags)
 {
-	aufs_bindex_t bindex, bend;
+	aufs_bindex_t bindex, bbot;
 	struct inode *hi;
 	struct dentry *iwhdentry;
 
-	bend = au_ibend(inode);
-	for (bindex = au_ibstart(inode); bindex <= bend; bindex++) {
+	bbot = au_ibbot(inode);
+	for (bindex = au_ibtop(inode); bindex <= bbot; bindex++) {
 		hi = au_h_iptr(inode, bindex);
 		if (!hi)
 			continue;
 
-		/* mutex_lock_nested(&hi->i_mutex, AuLsc_I_CHILD); */
+		/* inode_lock_nested(hi, AuLsc_I_CHILD); */
 		iwhdentry = au_hi_wh(inode, bindex);
 		if (iwhdentry)
 			dget(iwhdentry);
@@ -93,7 +94,7 @@ void au_hn_reset(struct inode *inode, unsigned int flags)
 			      flags & ~AuHi_XINO);
 		iput(hi);
 		dput(iwhdentry);
-		/* mutex_unlock(&hi->i_mutex); */
+		/* inode_unlock(hi); */
 	}
 }
 
@@ -102,7 +103,7 @@ void au_hn_reset(struct inode *inode, unsigned int flags)
 static int hn_xino(struct inode *inode, struct inode *h_inode)
 {
 	int err;
-	aufs_bindex_t bindex, bend, bfound, bstart;
+	aufs_bindex_t bindex, bbot, bfound, btop;
 	struct inode *h_i;
 
 	err = 0;
@@ -112,15 +113,15 @@ static int hn_xino(struct inode *inode, struct inode *h_inode)
 	}
 
 	bfound = -1;
-	bend = au_ibend(inode);
-	bstart = au_ibstart(inode);
+	bbot = au_ibbot(inode);
+	btop = au_ibtop(inode);
 #if 0 /* reserved for future use */
-	if (bindex == bend) {
+	if (bindex == bbot) {
 		/* keep this ino in rename case */
 		goto out;
 	}
 #endif
-	for (bindex = bstart; bindex <= bend; bindex++)
+	for (bindex = btop; bindex <= bbot; bindex++)
 		if (au_h_iptr(inode, bindex) == h_inode) {
 			bfound = bindex;
 			break;
@@ -128,7 +129,7 @@ static int hn_xino(struct inode *inode, struct inode *h_inode)
 	if (bfound < 0)
 		goto out;
 
-	for (bindex = bstart; bindex <= bend; bindex++) {
+	for (bindex = btop; bindex <= bbot; bindex++) {
 		h_i = au_h_iptr(inode, bindex);
 		if (!h_i)
 			continue;
@@ -171,10 +172,10 @@ static int hn_gen_tree(struct dentry *dentry)
 				continue;
 
 			au_digen_dec(d);
-			if (d->d_inode)
+			if (d_really_is_positive(d))
 				/* todo: reset children xino?
 				   cached children only? */
-				au_iigen_dec(d->d_inode);
+				au_iigen_dec(d_inode(d));
 		}
 	}
 
@@ -211,7 +212,7 @@ static int hn_gen_by_inode(char *name, unsigned int nlen, struct inode *inode,
 		AuDebugOn(!name);
 		au_iigen_dec(inode);
 		spin_lock(&inode->i_lock);
-		hlist_for_each_entry(d, &inode->i_dentry, d_alias) {
+		hlist_for_each_entry(d, &inode->i_dentry, d_u.d_alias) {
 			spin_lock(&d->d_lock);
 			dname = &d->d_name;
 			if (dname->len != nlen
@@ -252,12 +253,8 @@ out:
 static int hn_gen_by_name(struct dentry *dentry, const unsigned int isdir)
 {
 	int err;
-	struct inode *inode;
 
-	inode = dentry->d_inode;
-	if (IS_ROOT(dentry)
-	    /* || (inode && inode->i_ino == AUFS_ROOT_INO) */
-		) {
+	if (IS_ROOT(dentry)) {
 		pr_warn("branch root dir was changed\n");
 		return 0;
 	}
@@ -265,11 +262,11 @@ static int hn_gen_by_name(struct dentry *dentry, const unsigned int isdir)
 	err = 0;
 	if (!isdir) {
 		au_digen_dec(dentry);
-		if (inode)
-			au_iigen_dec(inode);
+		if (d_really_is_positive(dentry))
+			au_iigen_dec(d_inode(dentry));
 	} else {
 		au_fset_si(au_sbi(dentry->d_sb), FAILED_REFRESH_DIR);
-		if (inode)
+		if (d_really_is_positive(dentry))
 			err = hn_gen_tree(dentry);
 	}
 
@@ -326,11 +323,11 @@ static int hn_job(struct hn_job_args *a)
 	if (au_ftest_hnjob(a->flags, TRYXINO0)
 	    && a->inode
 	    && a->h_inode) {
-		mutex_lock_nested(&a->h_inode->i_mutex, AuLsc_I_CHILD);
+		inode_lock_shared_nested(a->h_inode, AuLsc_I_CHILD);
 		if (!a->h_inode->i_nlink
 		    && !(a->h_inode->i_state & I_LINKABLE))
 			hn_xino(a->inode, a->h_inode); /* ignore this error */
-		mutex_unlock(&a->h_inode->i_mutex);
+		inode_unlock_shared(a->h_inode);
 	}
 
 	/* make the generation obsolete */
@@ -352,7 +349,7 @@ static int hn_job(struct hn_job_args *a)
 		if (vdir)
 			vdir->vd_jiffy = 0;
 		/* IMustLock(a->inode); */
-		/* a->inode->i_version++; */
+		/* inode_inc_iversion(a->inode); */
 	}
 
 	/* can do nothing but warn */
@@ -378,7 +375,7 @@ static struct dentry *lookup_wlock_by_name(char *name, unsigned int nlen,
 
 	dentry = NULL;
 	spin_lock(&parent->d_lock);
-	list_for_each_entry(d, &parent->d_subdirs, d_u.d_child) {
+	list_for_each_entry(d, &parent->d_subdirs, d_child) {
 		/* AuDbg("%pd\n", d); */
 		spin_lock_nested(&d->d_lock, DENTRY_D_LOCK_NESTED);
 		dname = &d->d_name;
@@ -437,7 +434,7 @@ static void au_hn_bh(void *_args)
 {
 	struct au_hnotify_args *a = _args;
 	struct super_block *sb;
-	aufs_bindex_t bindex, bend, bfound;
+	aufs_bindex_t bindex, bbot, bfound;
 	unsigned char xino, try_iput;
 	int err;
 	struct inode *inode;
@@ -466,10 +463,18 @@ static void au_hn_bh(void *_args)
 	AuDebugOn(!sbinfo);
 	si_write_lock(sb, AuLock_NOPLMW);
 
+	if (au_opt_test(sbinfo->si_mntflags, DIRREN))
+		switch (a->mask & FS_EVENTS_POSS_ON_CHILD) {
+		case FS_MOVED_FROM:
+		case FS_MOVED_TO:
+			AuWarn1("DIRREN with UDBA may not work correctly "
+				"for the direct rename(2)\n");
+		}
+
 	ii_read_lock_parent(a->dir);
 	bfound = -1;
-	bend = au_ibend(a->dir);
-	for (bindex = au_ibstart(a->dir); bindex <= bend; bindex++)
+	bbot = au_ibbot(a->dir);
+	for (bindex = au_ibtop(a->dir); bindex <= bbot; bindex++)
 		if (au_h_iptr(a->dir, bindex) == a->h_dir) {
 			bfound = bindex;
 			break;
@@ -489,15 +494,15 @@ static void au_hn_bh(void *_args)
 		dentry = lookup_wlock_by_name(a->h_child_name, a->h_child_nlen,
 					      a->dir);
 	try_iput = 0;
-	if (dentry)
-		inode = dentry->d_inode;
+	if (dentry && d_really_is_positive(dentry))
+		inode = d_inode(dentry);
 	if (xino && !inode && h_ino
 	    && (au_ftest_hnjob(a->flags[AuHn_CHILD], XINO0)
 		|| au_ftest_hnjob(a->flags[AuHn_CHILD], TRYXINO0)
 		|| au_ftest_hnjob(a->flags[AuHn_CHILD], GEN))) {
 		inode = lookup_wlock_by_ino(sb, bfound, h_ino);
 		try_iput = 1;
-	    }
+	}
 
 	args.flags = a->flags[AuHn_CHILD];
 	args.dentry = dentry;
@@ -631,8 +636,10 @@ int au_hnotify(struct inode *h_dir, struct au_hnotify *hnotify, u32 mask,
 		p[len] = 0;
 	}
 
+	/* NFS fires the event for silly-renamed one from kworker */
 	f = 0;
-	if (!dir->i_nlink)
+	if (!dir->i_nlink
+	    || (au_test_nfs(h_dir->i_sb) && (mask & FS_DELETE)))
 		f = AuWkq_NEST;
 	err = au_wkq_nowait(au_hn_bh, args, dir->i_sb, f);
 	if (unlikely(err)) {
@@ -681,8 +688,8 @@ void au_hnotify_fin_br(struct au_branch *br)
 
 static void au_hn_destroy_cache(void)
 {
-	kmem_cache_destroy(au_cachep[AuCache_HNOTIFY]);
-	au_cachep[AuCache_HNOTIFY] = NULL;
+	kmem_cache_destroy(au_cache[AuCache_HNOTIFY]);
+	au_cache[AuCache_HNOTIFY] = NULL;
 }
 
 int __init au_hnotify_init(void)
@@ -690,8 +697,8 @@ int __init au_hnotify_init(void)
 	int err;
 
 	err = -ENOMEM;
-	au_cachep[AuCache_HNOTIFY] = AuCache(au_hnotify);
-	if (au_cachep[AuCache_HNOTIFY]) {
+	au_cache[AuCache_HNOTIFY] = AuCache(au_hnotify);
+	if (au_cache[AuCache_HNOTIFY]) {
 		err = 0;
 		if (au_hnotify_op.init)
 			err = au_hnotify_op.init();
@@ -706,7 +713,8 @@ void au_hnotify_fin(void)
 {
 	if (au_hnotify_op.fin)
 		au_hnotify_op.fin();
+
 	/* cf. au_cache_fin() */
-	if (au_cachep[AuCache_HNOTIFY])
+	if (au_cache[AuCache_HNOTIFY])
 		au_hn_destroy_cache();
 }

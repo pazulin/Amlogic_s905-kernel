@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /* auxio.c: Probing for the Sparc AUXIO register at boot time.
  *
  * Copyright (C) 1996 David S. Miller (davem@caip.rutgers.edu)
@@ -135,7 +136,6 @@ static struct platform_driver auxio_driver = {
 	.probe		= auxio_probe,
 	.driver = {
 		.name = "auxio",
-		.owner = THIS_MODULE,
 		.of_match_table = auxio_match,
 	},
 };

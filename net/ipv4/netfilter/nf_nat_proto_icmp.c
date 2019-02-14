@@ -30,7 +30,7 @@ icmp_in_range(const struct nf_conntrack_tuple *tuple,
 static void
 icmp_unique_tuple(const struct nf_nat_l3proto *l3proto,
 		  struct nf_conntrack_tuple *tuple,
-		  const struct nf_nat_range *range,
+		  const struct nf_nat_range2 *range,
 		  enum nf_nat_manip_type maniptype,
 		  const struct nf_conn *ct)
 {
@@ -67,7 +67,7 @@ icmp_manip_pkt(struct sk_buff *skb,
 
 	hdr = (struct icmphdr *)(skb->data + hdroff);
 	inet_proto_csum_replace2(&hdr->checksum, skb,
-				 hdr->un.echo.id, tuple->src.u.icmp.id, 0);
+				 hdr->un.echo.id, tuple->src.u.icmp.id, false);
 	hdr->un.echo.id = tuple->src.u.icmp.id;
 	return true;
 }
@@ -77,7 +77,7 @@ const struct nf_nat_l4proto nf_nat_l4proto_icmp = {
 	.manip_pkt		= icmp_manip_pkt,
 	.in_range		= icmp_in_range,
 	.unique_tuple		= icmp_unique_tuple,
-#if defined(CONFIG_NF_CT_NETLINK) || defined(CONFIG_NF_CT_NETLINK_MODULE)
+#if IS_ENABLED(CONFIG_NF_CT_NETLINK)
 	.nlattr_to_range	= nf_nat_l4proto_nlattr_to_range,
 #endif
 };
