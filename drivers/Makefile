@@ -6,6 +6,8 @@
 # Rewritten to use lists instead of if-statements.
 #
 
+obj-$(CONFIG_MALI400)				+= mali450/src/devicedrv/mali/
+
 obj-y				+= irqchip/
 obj-y				+= bus/
 
@@ -186,5 +188,3 @@ obj-$(CONFIG_MULTIPLEXER)	+= mux/
 obj-$(CONFIG_UNISYS_VISORBUS)	+= visorbus/
 obj-$(CONFIG_SIOX)		+= siox/
 obj-$(CONFIG_GNSS)		+= gnss/
-obj-$(CONFIG_MALI450)		+= mali/
-

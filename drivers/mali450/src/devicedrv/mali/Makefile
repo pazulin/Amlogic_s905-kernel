@@ -8,12 +8,8 @@
 # Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #
 
-USING_UMP=0
-BUILD=debug
-MALI_DMA_BUF_MAP_ON_ATTACH=1
-USING_PROFILING=0
-MALI_PLATFORM=meson
-USING_DVFS=0
+KDIR=$PWD/../../../../../
+
 USE_UMPV2=0
 USING_PROFILING ?= 1
 USING_INTERNAL_PROFILING ?= 0
@@ -200,7 +196,7 @@ EXTRA_DEFINES += -DMALI_MEM_SWAP_TRACKING=1
 endif
 
 all: $(UMP_SYMVERS_FILE)
-	$(MAKE) ARCH=$(ARCH) -C $(KDIR) M=$(CURDIR) modules
+	USING_UMP=0 BUILD=debug MALI_DMA_BUF_MAP_ON_ATTACH=1 USING_PROFILING=0 MALI_PLATFORM=meson USING_DVFS=0  $(MAKE) ARCH=$(ARCH) -C $(KDIR) M=$(CURDIR) modules
 	@rm $(FILES_PREFIX)__malidrv_build_info.c $(FILES_PREFIX)__malidrv_build_info.o
 
 clean:
