@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * TI DaVinci Audio definitions
  */
@@ -21,6 +22,9 @@
 /* Bases of da830 McASP1 register banks */
 #define DAVINCI_DA830_MCASP1_REG_BASE	0x01D04000
 
+/* Bases of da830 McASP2 register banks */
+#define DAVINCI_DA830_MCASP2_REG_BASE	0x01D08000
+
 /* EDMA channels of dm644x and dm355 */
 #define DAVINCI_DMA_ASP0_TX	2
 #define DAVINCI_DMA_ASP0_RX	3
@@ -39,6 +43,10 @@
 /* EDMA channels of da830 McASP1 */
 #define DAVINCI_DA830_DMA_MCASP1_AREVT	2
 #define DAVINCI_DA830_DMA_MCASP1_AXEVT	3
+
+/* EDMA channels of da830 McASP2 */
+#define DAVINCI_DA830_DMA_MCASP2_AREVT	4
+#define DAVINCI_DA830_DMA_MCASP2_AXEVT	5
 
 /* Interrupts */
 #define DAVINCI_ASP0_RX_INT	IRQ_MBRINT

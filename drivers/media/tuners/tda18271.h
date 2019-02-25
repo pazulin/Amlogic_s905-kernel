@@ -22,7 +22,7 @@
 #define __TDA18271_H__
 
 #include <linux/i2c.h>
-#include "dvb_frontend.h"
+#include <media/dvb_frontend.h>
 
 struct tda18271_std_map_item {
 	u16 if_freq;
@@ -121,7 +121,7 @@ enum tda18271_mode {
 	TDA18271_DIGITAL,
 };
 
-#if IS_ENABLED(CONFIG_MEDIA_TUNER_TDA18271)
+#if IS_REACHABLE(CONFIG_MEDIA_TUNER_TDA18271)
 extern struct dvb_frontend *tda18271_attach(struct dvb_frontend *fe, u8 addr,
 					    struct i2c_adapter *i2c,
 					    struct tda18271_config *cfg);

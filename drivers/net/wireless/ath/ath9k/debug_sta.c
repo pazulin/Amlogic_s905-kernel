@@ -26,12 +26,11 @@ static ssize_t read_file_node_aggr(struct file *file, char __user *user_buf,
 	struct ath_node *an = file->private_data;
 	struct ath_softc *sc = an->sc;
 	struct ath_atx_tid *tid;
-	struct ath_atx_ac *ac;
 	struct ath_txq *txq;
 	u32 len = 0, size = 4096;
 	char *buf;
 	size_t retval;
-	int tidno, acno;
+	int tidno;
 
 	buf = kzalloc(size, GFP_KERNEL);
 	if (buf == NULL)
@@ -49,30 +48,17 @@ static ssize_t read_file_node_aggr(struct file *file, char __user *user_buf,
 			 an->mpdudensity);
 
 	len += scnprintf(buf + len, size - len,
-			 "%2s%7s\n", "AC", "SCHED");
-
-	for (acno = 0, ac = &an->ac[acno];
-	     acno < IEEE80211_NUM_ACS; acno++, ac++) {
-		txq = ac->txq;
-		ath_txq_lock(sc, txq);
-		len += scnprintf(buf + len, size - len,
-				 "%2d%7d\n",
-				 acno, ac->sched);
-		ath_txq_unlock(sc, txq);
-	}
-
-	len += scnprintf(buf + len, size - len,
 			 "\n%3s%11s%10s%10s%10s%10s%9s%6s%8s\n",
 			 "TID", "SEQ_START", "SEQ_NEXT", "BAW_SIZE",
 			 "BAW_HEAD", "BAW_TAIL", "BAR_IDX", "SCHED", "PAUSED");
 
-	for (tidno = 0, tid = &an->tid[tidno];
-	     tidno < IEEE80211_NUM_TIDS; tidno++, tid++) {
-		txq = tid->ac->txq;
+	for (tidno = 0; tidno < IEEE80211_NUM_TIDS; tidno++) {
+		tid = ath_node_to_tid(an, tidno);
+		txq = tid->txq;
 		ath_txq_lock(sc, txq);
 		if (tid->active) {
 			len += scnprintf(buf + len, size - len,
-					 "%3d%11d%10d%10d%10d%10d%9d%6d%8d\n",
+					 "%3d%11d%10d%10d%10d%10d%9d%6d\n",
 					 tid->tidno,
 					 tid->seq_start,
 					 tid->seq_next,
@@ -80,8 +66,7 @@ static ssize_t read_file_node_aggr(struct file *file, char __user *user_buf,
 					 tid->baw_head,
 					 tid->baw_tail,
 					 tid->bar_index,
-					 tid->sched,
-					 tid->paused);
+					 !list_empty(&tid->list));
 		}
 		ath_txq_unlock(sc, txq);
 	}
@@ -131,12 +116,12 @@ void ath_debug_rate_stats(struct ath_softc *sc,
 		if (rxs->rate_idx >= ARRAY_SIZE(rstats->ht_stats))
 			goto exit;
 
-		if (rxs->flag & RX_FLAG_40MHZ)
+		if (rxs->bw == RATE_INFO_BW_40)
 			rstats->ht_stats[rxs->rate_idx].ht40_cnt++;
 		else
 			rstats->ht_stats[rxs->rate_idx].ht20_cnt++;
 
-		if (rxs->flag & RX_FLAG_SHORT_GI)
+		if (rxs->enc_flags & RX_ENC_FLAG_SHORT_GI)
 			rstats->ht_stats[rxs->rate_idx].sgi_cnt++;
 		else
 			rstats->ht_stats[rxs->rate_idx].lgi_cnt++;
@@ -145,7 +130,7 @@ void ath_debug_rate_stats(struct ath_softc *sc,
 	}
 
 	if (IS_CCK_RATE(rs->rs_rate)) {
-		if (rxs->flag & RX_FLAG_SHORTPRE)
+		if (rxs->enc_flags & RX_ENC_FLAG_SHORTPRE)
 			rstats->cck_stats[rxs->rate_idx].cck_sp_cnt++;
 		else
 			rstats->cck_stats[rxs->rate_idx].cck_lp_cnt++;
@@ -154,7 +139,7 @@ void ath_debug_rate_stats(struct ath_softc *sc,
 	}
 
 	if (IS_OFDM_RATE(rs->rs_rate)) {
-		if (ah->curchan->chan->band == IEEE80211_BAND_2GHZ)
+		if (ah->curchan->chan->band == NL80211_BAND_2GHZ)
 			rstats->ofdm_stats[rxs->rate_idx - 4].ofdm_cnt++;
 		else
 			rstats->ofdm_stats[rxs->rate_idx].ofdm_cnt++;
@@ -188,7 +173,7 @@ static ssize_t read_file_node_recv(struct file *file, char __user *user_buf,
 	struct ath_hw *ah = sc->sc_ah;
 	struct ath_rx_rate_stats *rstats;
 	struct ieee80211_sta *sta = an->sta;
-	enum ieee80211_band band;
+	enum nl80211_band band;
 	u32 len = 0, size = 4096;
 	char *buf;
 	size_t retval;
@@ -221,7 +206,7 @@ static ssize_t read_file_node_recv(struct file *file, char __user *user_buf,
 	len += scnprintf(buf + len, size - len, "\n");
 
 legacy:
-	if (band == IEEE80211_BAND_2GHZ) {
+	if (band == NL80211_BAND_2GHZ) {
 		PRINT_CCK_RATE("CCK-1M/LP", 0, false);
 		PRINT_CCK_RATE("CCK-2M/LP", 1, false);
 		PRINT_CCK_RATE("CCK-5.5M/LP", 2, false);
@@ -257,6 +242,75 @@ static const struct file_operations fops_node_recv = {
 	.llseek = default_llseek,
 };
 
+void ath_debug_airtime(struct ath_softc *sc,
+		struct ath_node *an,
+		u32 rx,
+		u32 tx)
+{
+	struct ath_airtime_stats *astats = &an->airtime_stats;
+
+	astats->rx_airtime += rx;
+	astats->tx_airtime += tx;
+}
+
+static ssize_t read_airtime(struct file *file, char __user *user_buf,
+			size_t count, loff_t *ppos)
+{
+	struct ath_node *an = file->private_data;
+	struct ath_airtime_stats *astats;
+	static const char *qname[4] = {
+		"VO", "VI", "BE", "BK"
+	};
+	u32 len = 0, size = 256;
+	char *buf;
+	size_t retval;
+	int i;
+
+	buf = kzalloc(size, GFP_KERNEL);
+	if (buf == NULL)
+		return -ENOMEM;
+
+	astats = &an->airtime_stats;
+
+	len += scnprintf(buf + len, size - len, "RX: %u us\n", astats->rx_airtime);
+	len += scnprintf(buf + len, size - len, "TX: %u us\n", astats->tx_airtime);
+	len += scnprintf(buf + len, size - len, "Deficit: ");
+	for (i = 0; i < 4; i++)
+		len += scnprintf(buf+len, size - len, "%s: %lld us ", qname[i], an->airtime_deficit[i]);
+	if (len < size)
+		buf[len++] = '\n';
+
+	retval = simple_read_from_buffer(user_buf, count, ppos, buf, len);
+	kfree(buf);
+
+	return retval;
+}
+
+static ssize_t
+write_airtime_reset_stub(struct file *file, const char __user *ubuf,
+		   size_t count, loff_t *ppos)
+{
+	struct ath_node *an = file->private_data;
+	struct ath_airtime_stats *astats;
+	int i;
+
+	astats = &an->airtime_stats;
+	astats->rx_airtime = 0;
+	astats->tx_airtime = 0;
+	for (i = 0; i < 4; i++)
+		an->airtime_deficit[i] = ATH_AIRTIME_QUANTUM;
+	return count;
+}
+
+static const struct file_operations fops_airtime = {
+	.read = read_airtime,
+	.write = write_airtime_reset_stub,
+	.open = simple_open,
+	.owner = THIS_MODULE,
+	.llseek = default_llseek,
+};
+
+
 void ath9k_sta_add_debugfs(struct ieee80211_hw *hw,
 			   struct ieee80211_vif *vif,
 			   struct ieee80211_sta *sta,
@@ -264,6 +318,7 @@ void ath9k_sta_add_debugfs(struct ieee80211_hw *hw,
 {
 	struct ath_node *an = (struct ath_node *)sta->drv_priv;
 
-	debugfs_create_file("node_aggr", S_IRUGO, dir, an, &fops_node_aggr);
-	debugfs_create_file("node_recv", S_IRUGO, dir, an, &fops_node_recv);
+	debugfs_create_file("node_aggr", 0444, dir, an, &fops_node_aggr);
+	debugfs_create_file("node_recv", 0444, dir, an, &fops_node_recv);
+	debugfs_create_file("airtime", 0644, dir, an, &fops_airtime);
 }

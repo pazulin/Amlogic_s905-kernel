@@ -1,18 +1,12 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _NF_NAT_L3PROTO_H
 #define _NF_NAT_L3PROTO_H
 
-struct nf_nat_l4proto;
 struct nf_nat_l3proto {
 	u8	l3proto;
 
-	bool	(*in_range)(const struct nf_conntrack_tuple *t,
-			    const struct nf_nat_range *range);
-
-	u32 	(*secure_port)(const struct nf_conntrack_tuple *t, __be16);
-
 	bool	(*manip_pkt)(struct sk_buff *skb,
 			     unsigned int iphdroff,
-			     const struct nf_nat_l4proto *l4proto,
 			     const struct nf_conntrack_tuple *target,
 			     enum nf_nat_manip_type maniptype);
 
@@ -32,7 +26,7 @@ struct nf_nat_l3proto {
 				  struct flowi *fl);
 
 	int	(*nlattr_to_range)(struct nlattr *tb[],
-				   struct nf_nat_range *range);
+				   struct nf_nat_range2 *range);
 };
 
 int nf_nat_l3proto_register(const struct nf_nat_l3proto *);
@@ -42,8 +36,15 @@ const struct nf_nat_l3proto *__nf_nat_l3proto_find(u8 l3proto);
 int nf_nat_icmp_reply_translation(struct sk_buff *skb, struct nf_conn *ct,
 				  enum ip_conntrack_info ctinfo,
 				  unsigned int hooknum);
+
 int nf_nat_icmpv6_reply_translation(struct sk_buff *skb, struct nf_conn *ct,
 				    enum ip_conntrack_info ctinfo,
 				    unsigned int hooknum, unsigned int hdrlen);
+
+int nf_nat_l3proto_ipv4_register_fn(struct net *net, const struct nf_hook_ops *ops);
+void nf_nat_l3proto_ipv4_unregister_fn(struct net *net, const struct nf_hook_ops *ops);
+
+int nf_nat_l3proto_ipv6_register_fn(struct net *net, const struct nf_hook_ops *ops);
+void nf_nat_l3proto_ipv6_unregister_fn(struct net *net, const struct nf_hook_ops *ops);
 
 #endif /* _NF_NAT_L3PROTO_H */

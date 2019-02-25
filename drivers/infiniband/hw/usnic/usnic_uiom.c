@@ -7,7 +7,7 @@
  * licenses.  You may choose to be licensed under the terms of the GNU
  * General Public License (GPL) Version 2, available from the file
  * COPYING in the main directory of this source tree, or the
- * OpenIB.org BSD license below:
+ * BSD license below:
  *
  *     Redistribution and use in source and binary forms, with or
  *     without modification, are permitted provided that the following
@@ -34,13 +34,14 @@
 
 #include <linux/mm.h>
 #include <linux/dma-mapping.h>
-#include <linux/sched.h>
+#include <linux/sched/signal.h>
+#include <linux/sched/mm.h>
 #include <linux/hugetlb.h>
-#include <linux/dma-attrs.h>
 #include <linux/iommu.h>
 #include <linux/workqueue.h>
 #include <linux/list.h>
 #include <linux/pci.h>
+#include <rdma/ib_verbs.h>
 
 #include "usnic_log.h"
 #include "usnic_uiom.h"
@@ -52,18 +53,6 @@ static struct workqueue_struct *usnic_uiom_wq;
 	((PAGE_SIZE - offsetof(struct usnic_uiom_chunk, page_list))	/\
 	((void *) &((struct usnic_uiom_chunk *) 0)->page_list[1] -	\
 	(void *) &((struct usnic_uiom_chunk *) 0)->page_list[0]))
-
-static void usnic_uiom_reg_account(struct work_struct *work)
-{
-	struct usnic_uiom_reg *umem = container_of(work,
-						struct usnic_uiom_reg, work);
-
-	down_write(&umem->mm->mmap_sem);
-	umem->mm->locked_vm -= umem->diff;
-	up_write(&umem->mm->mmap_sem);
-	mmput(umem->mm);
-	kfree(umem);
-}
 
 static int usnic_uiom_dma_fault(struct iommu_domain *domain,
 				struct device *dev,
@@ -88,7 +77,7 @@ static void usnic_uiom_put_pages(struct list_head *chunk_list, int dirty)
 		for_each_sg(chunk->page_list, sg, chunk->nents, i) {
 			page = sg_page(sg);
 			pa = sg_phys(sg);
-			if (dirty)
+			if (!PageDirty(page) && dirty)
 				set_page_dirty_lock(page);
 			put_page(page);
 			usnic_dbg("pa: %pa\n", &pa);
@@ -98,8 +87,9 @@ static void usnic_uiom_put_pages(struct list_head *chunk_list, int dirty)
 }
 
 static int usnic_uiom_get_pages(unsigned long addr, size_t size, int writable,
-				int dmasync, struct list_head *chunk_list)
+				int dmasync, struct usnic_uiom_reg *uiomr)
 {
+	struct list_head *chunk_list = &uiomr->chunk_list;
 	struct page **page_list;
 	struct scatterlist *sg;
 	struct usnic_uiom_chunk *chunk;
@@ -112,10 +102,18 @@ static int usnic_uiom_get_pages(unsigned long addr, size_t size, int writable,
 	int i;
 	int flags;
 	dma_addr_t pa;
-	DEFINE_DMA_ATTRS(attrs);
+	unsigned int gup_flags;
+	struct mm_struct *mm;
 
-	if (dmasync)
-		dma_set_attr(DMA_ATTR_WRITE_BARRIER, &attrs);
+	/*
+	 * If the combination of the addr and size requested for this memory
+	 * region causes an integer overflow, return error.
+	 */
+	if (((addr + size) < addr) || PAGE_ALIGN(addr + size) < (addr + size))
+		return -EINVAL;
+
+	if (!size)
+		return -EINVAL;
 
 	if (!can_do_mlock())
 		return -EPERM;
@@ -128,9 +126,10 @@ static int usnic_uiom_get_pages(unsigned long addr, size_t size, int writable,
 
 	npages = PAGE_ALIGN(size + (addr & ~PAGE_MASK)) >> PAGE_SHIFT;
 
-	down_write(&current->mm->mmap_sem);
+	uiomr->owning_mm = mm = current->mm;
+	down_write(&mm->mmap_sem);
 
-	locked = npages + current->mm->locked_vm;
+	locked = npages + current->mm->pinned_vm;
 	lock_limit = rlimit(RLIMIT_MEMLOCK) >> PAGE_SHIFT;
 
 	if ((locked > lock_limit) && !capable(CAP_IPC_LOCK)) {
@@ -140,14 +139,16 @@ static int usnic_uiom_get_pages(unsigned long addr, size_t size, int writable,
 
 	flags = IOMMU_READ | IOMMU_CACHE;
 	flags |= (writable) ? IOMMU_WRITE : 0;
+	gup_flags = FOLL_WRITE;
+	gup_flags |= (writable) ? 0 : FOLL_FORCE;
 	cur_base = addr & PAGE_MASK;
 	ret = 0;
 
 	while (npages) {
-		ret = get_user_pages(current, current->mm, cur_base,
+		ret = get_user_pages_longterm(cur_base,
 					min_t(unsigned long, npages,
 					PAGE_SIZE / sizeof(struct page *)),
-					1, !writable, page_list, NULL);
+					gup_flags, page_list, NULL);
 
 		if (ret < 0)
 			goto out;
@@ -186,10 +187,12 @@ static int usnic_uiom_get_pages(unsigned long addr, size_t size, int writable,
 out:
 	if (ret < 0)
 		usnic_uiom_put_pages(chunk_list, 0);
-	else
-		current->mm->locked_vm = locked;
+	else {
+		mm->pinned_vm = locked;
+		mmgrab(uiomr->owning_mm);
+	}
 
-	up_write(&current->mm->mmap_sem);
+	up_write(&mm->mmap_sem);
 	free_page((unsigned long) page_list);
 	return ret;
 }
@@ -228,7 +231,7 @@ static void __usnic_uiom_reg_release(struct usnic_uiom_pd *pd,
 	vpn_last = vpn_start + npages - 1;
 
 	spin_lock(&pd->lock);
-	usnic_uiom_remove_interval(&pd->rb_root, vpn_start,
+	usnic_uiom_remove_interval(&pd->root, vpn_start,
 					vpn_last, &rm_intervals);
 	usnic_uiom_unmap_sorted_intervals(&rm_intervals, pd);
 
@@ -286,7 +289,7 @@ iter_chunk:
 				err = iommu_map(pd->domain, va_start, pa_start,
 							size, flags);
 				if (err) {
-					usnic_err("Failed to map va 0x%lx pa 0x%pa size 0x%zx with err %d\n",
+					usnic_err("Failed to map va 0x%lx pa %pa size 0x%zx with err %d\n",
 						va_start, &pa_start, size, err);
 					goto err_out;
 				}
@@ -369,7 +372,7 @@ struct usnic_uiom_reg *usnic_uiom_reg_get(struct usnic_uiom_pd *pd,
 	uiomr->pd = pd;
 
 	err = usnic_uiom_get_pages(addr, size, writable, dmasync,
-					&uiomr->chunk_list);
+				   uiomr);
 	if (err) {
 		usnic_err("Failed get_pages vpn [0x%lx,0x%lx] err %d\n",
 				vpn_start, vpn_last, err);
@@ -380,7 +383,7 @@ struct usnic_uiom_reg *usnic_uiom_reg_get(struct usnic_uiom_pd *pd,
 	err = usnic_uiom_get_intervals_diff(vpn_start, vpn_last,
 						(writable) ? IOMMU_WRITE : 0,
 						IOMMU_WRITE,
-						&pd->rb_root,
+						&pd->root,
 						&sorted_diff_intervals);
 	if (err) {
 		usnic_err("Failed disjoint interval vpn [0x%lx,0x%lx] err %d\n",
@@ -396,7 +399,7 @@ struct usnic_uiom_reg *usnic_uiom_reg_get(struct usnic_uiom_pd *pd,
 
 	}
 
-	err = usnic_uiom_insert_interval(&pd->rb_root, vpn_start, vpn_last,
+	err = usnic_uiom_insert_interval(&pd->root, vpn_start, vpn_last,
 					(writable) ? IOMMU_WRITE : 0);
 	if (err) {
 		usnic_err("Failed insert interval vpn [0x%lx,0x%lx] err %d\n",
@@ -416,25 +419,39 @@ out_put_intervals:
 out_put_pages:
 	usnic_uiom_put_pages(&uiomr->chunk_list, 0);
 	spin_unlock(&pd->lock);
+	mmdrop(uiomr->owning_mm);
 out_free_uiomr:
 	kfree(uiomr);
 	return ERR_PTR(err);
 }
 
-void usnic_uiom_reg_release(struct usnic_uiom_reg *uiomr, int closing)
+static void __usnic_uiom_release_tail(struct usnic_uiom_reg *uiomr)
 {
-	struct mm_struct *mm;
-	unsigned long diff;
+	mmdrop(uiomr->owning_mm);
+	kfree(uiomr);
+}
 
+static inline size_t usnic_uiom_num_pages(struct usnic_uiom_reg *uiomr)
+{
+	return PAGE_ALIGN(uiomr->length + uiomr->offset) >> PAGE_SHIFT;
+}
+
+static void usnic_uiom_release_defer(struct work_struct *work)
+{
+	struct usnic_uiom_reg *uiomr =
+		container_of(work, struct usnic_uiom_reg, work);
+
+	down_write(&uiomr->owning_mm->mmap_sem);
+	uiomr->owning_mm->pinned_vm -= usnic_uiom_num_pages(uiomr);
+	up_write(&uiomr->owning_mm->mmap_sem);
+
+	__usnic_uiom_release_tail(uiomr);
+}
+
+void usnic_uiom_reg_release(struct usnic_uiom_reg *uiomr,
+			    struct ib_ucontext *context)
+{
 	__usnic_uiom_reg_release(uiomr->pd, uiomr, 1);
-
-	mm = get_task_mm(current);
-	if (!mm) {
-		kfree(uiomr);
-		return;
-	}
-
-	diff = PAGE_ALIGN(uiomr->length + uiomr->offset) >> PAGE_SHIFT;
 
 	/*
 	 * We may be called with the mm's mmap_sem already held.  This
@@ -442,24 +459,21 @@ void usnic_uiom_reg_release(struct usnic_uiom_reg *uiomr, int closing)
 	 * the last reference to our file and calls our release
 	 * method.  If there are memory regions to destroy, we'll end
 	 * up here and not be able to take the mmap_sem.  In that case
-	 * we defer the vm_locked accounting to the system workqueue.
+	 * we defer the vm_locked accounting to a workqueue.
 	 */
-	if (closing) {
-		if (!down_write_trylock(&mm->mmap_sem)) {
-			INIT_WORK(&uiomr->work, usnic_uiom_reg_account);
-			uiomr->mm = mm;
-			uiomr->diff = diff;
-
+	if (context->closing) {
+		if (!down_write_trylock(&uiomr->owning_mm->mmap_sem)) {
+			INIT_WORK(&uiomr->work, usnic_uiom_release_defer);
 			queue_work(usnic_uiom_wq, &uiomr->work);
 			return;
 		}
-	} else
-		down_write(&mm->mmap_sem);
+	} else {
+		down_write(&uiomr->owning_mm->mmap_sem);
+	}
+	uiomr->owning_mm->pinned_vm -= usnic_uiom_num_pages(uiomr);
+	up_write(&uiomr->owning_mm->mmap_sem);
 
-	current->mm->locked_vm -= diff;
-	up_write(&mm->mmap_sem);
-	mmput(mm);
-	kfree(uiomr);
+	__usnic_uiom_release_tail(uiomr);
 }
 
 struct usnic_uiom_pd *usnic_uiom_alloc_pd(void)
@@ -472,11 +486,10 @@ struct usnic_uiom_pd *usnic_uiom_alloc_pd(void)
 		return ERR_PTR(-ENOMEM);
 
 	pd->domain = domain = iommu_domain_alloc(&pci_bus_type);
-	if (IS_ERR_OR_NULL(domain)) {
-		usnic_err("Failed to allocate IOMMU domain with err %ld\n",
-				PTR_ERR(pd->domain));
+	if (!domain) {
+		usnic_err("Failed to allocate IOMMU domain");
 		kfree(pd);
-		return ERR_PTR(domain ? PTR_ERR(domain) : -ENOMEM);
+		return ERR_PTR(-ENOMEM);
 	}
 
 	iommu_set_fault_handler(pd->domain, usnic_uiom_dma_fault, NULL);
@@ -507,7 +520,7 @@ int usnic_uiom_attach_dev_to_pd(struct usnic_uiom_pd *pd, struct device *dev)
 	if (err)
 		goto out_free_dev;
 
-	if (!iommu_domain_has_cap(pd->domain, IOMMU_CAP_CACHE_COHERENCY)) {
+	if (!iommu_capable(dev->bus, IOMMU_CAP_CACHE_COHERENCY)) {
 		usnic_err("IOMMU of %s does not support cache coherency\n",
 				dev_name(dev));
 		err = -EINVAL;

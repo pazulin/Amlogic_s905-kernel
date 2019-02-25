@@ -35,6 +35,9 @@
 #define REG_MONTHS   0x08
 #define REG_YEARS    0x09
 
+#define REG_OFFSET   0x0e
+#define REG_OFFSET_MODE BIT(7)
+
 struct pcf8523 {
 	struct rtc_device *rtc;
 };
@@ -80,6 +83,18 @@ static int pcf8523_write(struct i2c_client *client, u8 reg, u8 value)
 		return err;
 
 	return 0;
+}
+
+static int pcf8523_voltage_low(struct i2c_client *client)
+{
+	u8 value;
+	int err;
+
+	err = pcf8523_read(client, REG_CONTROL3, &value);
+	if (err < 0)
+		return err;
+
+	return !!(value & REG_CONTROL3_BLF);
 }
 
 static int pcf8523_select_capacitance(struct i2c_client *client, bool high)
@@ -164,6 +179,14 @@ static int pcf8523_rtc_read_time(struct device *dev, struct rtc_time *tm)
 	struct i2c_msg msgs[2];
 	int err;
 
+	err = pcf8523_voltage_low(client);
+	if (err < 0) {
+		return err;
+	} else if (err > 0) {
+		dev_err(dev, "low voltage detected, time is unreliable\n");
+		return -EINVAL;
+	}
+
 	msgs[0].addr = client->addr;
 	msgs[0].flags = 0;
 	msgs[0].len = 1;
@@ -178,38 +201,18 @@ static int pcf8523_rtc_read_time(struct device *dev, struct rtc_time *tm)
 	if (err < 0)
 		return err;
 
-	if (regs[0] & REG_SECONDS_OS) {
-		/*
-		 * If the oscillator was stopped, try to clear the flag. Upon
-		 * power-up the flag is always set, but if we cannot clear it
-		 * the oscillator isn't running properly for some reason. The
-		 * sensible thing therefore is to return an error, signalling
-		 * that the clock cannot be assumed to be correct.
-		 */
-
-		regs[0] &= ~REG_SECONDS_OS;
-
-		err = pcf8523_write(client, REG_SECONDS, regs[0]);
-		if (err < 0)
-			return err;
-
-		err = pcf8523_read(client, REG_SECONDS, &regs[0]);
-		if (err < 0)
-			return err;
-
-		if (regs[0] & REG_SECONDS_OS)
-			return -EAGAIN;
-	}
+	if (regs[0] & REG_SECONDS_OS)
+		return -EINVAL;
 
 	tm->tm_sec = bcd2bin(regs[0] & 0x7f);
 	tm->tm_min = bcd2bin(regs[1] & 0x7f);
 	tm->tm_hour = bcd2bin(regs[2] & 0x3f);
 	tm->tm_mday = bcd2bin(regs[3] & 0x3f);
 	tm->tm_wday = regs[4] & 0x7;
-	tm->tm_mon = bcd2bin(regs[5] & 0x1f);
+	tm->tm_mon = bcd2bin(regs[5] & 0x1f) - 1;
 	tm->tm_year = bcd2bin(regs[6]) + 100;
 
-	return rtc_valid_tm(tm);
+	return 0;
 }
 
 static int pcf8523_rtc_set_time(struct device *dev, struct rtc_time *tm)
@@ -219,17 +222,29 @@ static int pcf8523_rtc_set_time(struct device *dev, struct rtc_time *tm)
 	u8 regs[8];
 	int err;
 
+	/*
+	 * The hardware can only store values between 0 and 99 in it's YEAR
+	 * register (with 99 overflowing to 0 on increment).
+	 * After 2100-02-28 we could start interpreting the year to be in the
+	 * interval [2100, 2199], but there is no path to switch in a smooth way
+	 * because the chip handles YEAR=0x00 (and the out-of-spec
+	 * YEAR=0xa0) as a leap year, but 2100 isn't.
+	 */
+	if (tm->tm_year < 100 || tm->tm_year >= 200)
+		return -EINVAL;
+
 	err = pcf8523_stop_rtc(client);
 	if (err < 0)
 		return err;
 
 	regs[0] = REG_SECONDS;
+	/* This will purposely overwrite REG_SECONDS_OS */
 	regs[1] = bin2bcd(tm->tm_sec);
 	regs[2] = bin2bcd(tm->tm_min);
 	regs[3] = bin2bcd(tm->tm_hour);
 	regs[4] = bin2bcd(tm->tm_mday);
 	regs[5] = tm->tm_wday;
-	regs[6] = bin2bcd(tm->tm_mon);
+	regs[6] = bin2bcd(tm->tm_mon + 1);
 	regs[7] = bin2bcd(tm->tm_year - 100);
 
 	msg.addr = client->addr;
@@ -256,17 +271,13 @@ static int pcf8523_rtc_ioctl(struct device *dev, unsigned int cmd,
 			     unsigned long arg)
 {
 	struct i2c_client *client = to_i2c_client(dev);
-	u8 value;
-	int ret = 0, err;
+	int ret;
 
 	switch (cmd) {
 	case RTC_VL_READ:
-		err = pcf8523_read(client, REG_CONTROL3, &value);
-		if (err < 0)
-			return err;
-
-		if (value & REG_CONTROL3_BLF)
-			ret = 1;
+		ret = pcf8523_voltage_low(client);
+		if (ret < 0)
+			return ret;
 
 		if (copy_to_user((void __user *)arg, &ret, sizeof(int)))
 			return -EFAULT;
@@ -280,10 +291,47 @@ static int pcf8523_rtc_ioctl(struct device *dev, unsigned int cmd,
 #define pcf8523_rtc_ioctl NULL
 #endif
 
+static int pcf8523_rtc_read_offset(struct device *dev, long *offset)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	int err;
+	u8 value;
+	s8 val;
+
+	err = pcf8523_read(client, REG_OFFSET, &value);
+	if (err < 0)
+		return err;
+
+	/* sign extend the 7-bit offset value */
+	val = value << 1;
+	*offset = (value & REG_OFFSET_MODE ? 4069 : 4340) * (val >> 1);
+
+	return 0;
+}
+
+static int pcf8523_rtc_set_offset(struct device *dev, long offset)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	long reg_m0, reg_m1;
+	u8 value;
+
+	reg_m0 = clamp(DIV_ROUND_CLOSEST(offset, 4340), -64L, 63L);
+	reg_m1 = clamp(DIV_ROUND_CLOSEST(offset, 4069), -64L, 63L);
+
+	if (abs(reg_m0 * 4340 - offset) < abs(reg_m1 * 4069 - offset))
+		value = reg_m0 & 0x7f;
+	else
+		value = (reg_m1 & 0x7f) | REG_OFFSET_MODE;
+
+	return pcf8523_write(client, REG_OFFSET, value);
+}
+
 static const struct rtc_class_ops pcf8523_rtc_ops = {
 	.read_time = pcf8523_rtc_read_time,
 	.set_time = pcf8523_rtc_set_time,
 	.ioctl = pcf8523_rtc_ioctl,
+	.read_offset = pcf8523_rtc_read_offset,
+	.set_offset = pcf8523_rtc_set_offset,
 };
 
 static int pcf8523_probe(struct i2c_client *client,
@@ -334,7 +382,6 @@ MODULE_DEVICE_TABLE(of, pcf8523_of_match);
 static struct i2c_driver pcf8523_driver = {
 	.driver = {
 		.name = DRIVER_NAME,
-		.owner = THIS_MODULE,
 		.of_match_table = of_match_ptr(pcf8523_of_match),
 	},
 	.probe = pcf8523_probe,

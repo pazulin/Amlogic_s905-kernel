@@ -74,6 +74,11 @@ module_param(fnic_trace_max_pages, uint, S_IRUGO|S_IWUSR);
 MODULE_PARM_DESC(fnic_trace_max_pages, "Total allocated memory pages "
 					"for fnic trace buffer");
 
+unsigned int fnic_fc_trace_max_pages = 64;
+module_param(fnic_fc_trace_max_pages, uint, S_IRUGO|S_IWUSR);
+MODULE_PARM_DESC(fnic_fc_trace_max_pages,
+		 "Total allocated memory pages for fc trace buffer");
+
 static unsigned int fnic_max_qdepth = FNIC_DFLT_QUEUE_DEPTH;
 module_param(fnic_max_qdepth, uint, S_IRUGO|S_IWUSR);
 MODULE_PARM_DESC(fnic_max_qdepth, "Queue depth to report for each LUN");
@@ -90,12 +95,10 @@ static int fnic_slave_alloc(struct scsi_device *sdev)
 {
 	struct fc_rport *rport = starget_to_rport(scsi_target(sdev));
 
-	sdev->tagged_supported = 1;
-
 	if (!rport || fc_remote_port_chkready(rport))
 		return -ENXIO;
 
-	scsi_activate_tcq(sdev, fnic_max_qdepth);
+	scsi_change_queue_depth(sdev, fnic_max_qdepth);
 	return 0;
 }
 
@@ -103,19 +106,19 @@ static struct scsi_host_template fnic_host_template = {
 	.module = THIS_MODULE,
 	.name = DRV_NAME,
 	.queuecommand = fnic_queuecommand,
+	.eh_timed_out = fc_eh_timed_out,
 	.eh_abort_handler = fnic_abort_cmd,
 	.eh_device_reset_handler = fnic_device_reset,
 	.eh_host_reset_handler = fnic_host_reset,
 	.slave_alloc = fnic_slave_alloc,
-	.change_queue_depth = fc_change_queue_depth,
-	.change_queue_type = fc_change_queue_type,
+	.change_queue_depth = scsi_change_queue_depth,
 	.this_id = -1,
 	.cmd_per_lun = 3,
-	.can_queue = FNIC_MAX_IO_REQ,
-	.use_clustering = ENABLE_CLUSTERING,
+	.can_queue = FNIC_DFLT_IO_REQ,
 	.sg_tablesize = FNIC_MAX_SG_DESC_CNT,
 	.max_sectors = 0xffff,
 	.shost_attrs = fnic_attrs,
+	.track_queue_depth = 1,
 };
 
 static void
@@ -172,11 +175,21 @@ static void fnic_get_host_speed(struct Scsi_Host *shost)
 
 	/* Add in other values as they get defined in fw */
 	switch (port_speed) {
-	case 10000:
+	case DCEM_PORTSPEED_10G:
 		fc_host_speed(shost) = FC_PORTSPEED_10GBIT;
 		break;
+	case DCEM_PORTSPEED_25G:
+		fc_host_speed(shost) = FC_PORTSPEED_25GBIT;
+		break;
+	case DCEM_PORTSPEED_40G:
+	case DCEM_PORTSPEED_4x10G:
+		fc_host_speed(shost) = FC_PORTSPEED_40GBIT;
+		break;
+	case DCEM_PORTSPEED_100G:
+		fc_host_speed(shost) = FC_PORTSPEED_100GBIT;
+		break;
 	default:
-		fc_host_speed(shost) = FC_PORTSPEED_10GBIT;
+		fc_host_speed(shost) = FC_PORTSPEED_UNKNOWN;
 		break;
 	}
 }
@@ -393,18 +406,18 @@ static int fnic_notify_set(struct fnic *fnic)
 	return err;
 }
 
-static void fnic_notify_timer(unsigned long data)
+static void fnic_notify_timer(struct timer_list *t)
 {
-	struct fnic *fnic = (struct fnic *)data;
+	struct fnic *fnic = from_timer(fnic, t, notify_timer);
 
 	fnic_handle_link_event(fnic);
 	mod_timer(&fnic->notify_timer,
 		  round_jiffies(jiffies + FNIC_NOTIFY_TIMER_PERIOD));
 }
 
-static void fnic_fip_notify_timer(unsigned long data)
+static void fnic_fip_notify_timer(struct timer_list *t)
 {
-	struct fnic *fnic = (struct fnic *)data;
+	struct fnic *fnic = from_timer(fnic, t, fip_timer);
 
 	fnic_handle_fip_timer(fnic);
 }
@@ -433,21 +446,30 @@ static int fnic_dev_wait(struct vnic_dev *vdev,
 	unsigned long time;
 	int done;
 	int err;
+	int count;
+
+	count = 0;
 
 	err = start(vdev, arg);
 	if (err)
 		return err;
 
-	/* Wait for func to complete...2 seconds max */
+	/* Wait for func to complete.
+	* Sometime schedule_timeout_uninterruptible take long time
+	* to wake up so we do not retry as we are only waiting for
+	* 2 seconds in while loop. By adding count, we make sure
+	* we try atleast three times before returning -ETIMEDOUT
+	*/
 	time = jiffies + (HZ * 2);
 	do {
 		err = finished(vdev, &done);
+		count++;
 		if (err)
 			return err;
 		if (done)
 			return 0;
 		schedule_timeout_uninterruptible(HZ / 10);
-	} while (time_after(time, jiffies));
+	} while (time_after(time, jiffies) || (count < 3));
 
 	return -ETIMEDOUT;
 }
@@ -588,28 +610,13 @@ static int fnic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	 * limitation for the device.  Try 64-bit first, and
 	 * fail to 32-bit.
 	 */
-	err = pci_set_dma_mask(pdev, DMA_BIT_MASK(64));
+	err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(64));
 	if (err) {
-		err = pci_set_dma_mask(pdev, DMA_BIT_MASK(32));
+		err = dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(32));
 		if (err) {
 			shost_printk(KERN_ERR, fnic->lport->host,
 				     "No usable DMA configuration "
 				     "aborting\n");
-			goto err_out_release_regions;
-		}
-		err = pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(32));
-		if (err) {
-			shost_printk(KERN_ERR, fnic->lport->host,
-				     "Unable to obtain 32-bit DMA "
-				     "for consistent allocations, aborting.\n");
-			goto err_out_release_regions;
-		}
-	} else {
-		err = pci_set_consistent_dma_mask(pdev, DMA_BIT_MASK(64));
-		if (err) {
-			shost_printk(KERN_ERR, fnic->lport->host,
-				     "Unable to obtain 64-bit DMA "
-				     "for consistent allocations, aborting.\n");
 			goto err_out_release_regions;
 		}
 	}
@@ -684,13 +691,6 @@ static int fnic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 	}
 	fnic->fnic_max_tag_id = host->can_queue;
 
-	err = scsi_init_shared_tag_map(host, fnic->fnic_max_tag_id);
-	if (err) {
-		shost_printk(KERN_ERR, fnic->lport->host,
-			  "Unable to alloc shared tag map\n");
-		goto err_out_dev_close;
-	}
-
 	host->max_lun = fnic->config.luns_per_tgt;
 	host->max_id = FNIC_MAX_FCP_TARGET;
 	host->max_cmd_len = FCOE_MAX_CMD_LEN;
@@ -761,8 +761,7 @@ static int fnic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		vnic_dev_add_addr(fnic->vdev, fnic->ctlr.ctl_src_addr);
 		fnic->set_vlan = fnic_set_vlan;
 		fcoe_ctlr_init(&fnic->ctlr, FIP_MODE_AUTO);
-		setup_timer(&fnic->fip_timer, fnic_fip_notify_timer,
-							(unsigned long)fnic);
+		timer_setup(&fnic->fip_timer, fnic_fip_notify_timer, 0);
 		spin_lock_init(&fnic->vlans_lock);
 		INIT_WORK(&fnic->fip_frame_work, fnic_handle_fip_frame);
 		INIT_WORK(&fnic->event_work, fnic_handle_event);
@@ -773,6 +772,7 @@ static int fnic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 		shost_printk(KERN_INFO, fnic->lport->host,
 			     "firmware uses non-FIP mode\n");
 		fcoe_ctlr_init(&fnic->ctlr, FIP_MODE_NON_FIP);
+		fnic->ctlr.state = FIP_ST_NON_FIP;
 	}
 	fnic->state = FNIC_IN_FC_MODE;
 
@@ -792,8 +792,7 @@ static int fnic_probe(struct pci_dev *pdev, const struct pci_device_id *ent)
 
 	/* Setup notify timer when using MSI interrupts */
 	if (vnic_dev_get_intr_mode(fnic->vdev) == VNIC_DEV_INTR_MODE_MSI)
-		setup_timer(&fnic->notify_timer,
-			    fnic_notify_timer, (unsigned long)fnic);
+		timer_setup(&fnic->notify_timer, fnic_notify_timer, 0);
 
 	/* allocate RQ buffers and post them to RQ*/
 	for (i = 0; i < fnic->rq_count; i++) {
@@ -1033,9 +1032,18 @@ static int __init fnic_init_module(void)
 	/* Allocate memory for trace buffer */
 	err = fnic_trace_buf_init();
 	if (err < 0) {
-		printk(KERN_ERR PFX "Trace buffer initialization Failed "
-				  "Fnic Tracing utility is disabled\n");
+		printk(KERN_ERR PFX
+		       "Trace buffer initialization Failed. "
+		       "Fnic Tracing utility is disabled\n");
 		fnic_trace_free();
+	}
+
+    /* Allocate memory for fc trace buffer */
+	err = fnic_fc_trace_init();
+	if (err < 0) {
+		printk(KERN_ERR PFX "FC trace buffer initialization Failed "
+		       "FC frame tracing utility is disabled\n");
+		fnic_fc_trace_free();
 	}
 
 	/* Create a cache for allocation of default size sgls */
@@ -1118,6 +1126,7 @@ err_create_fnic_sgl_slab_max:
 	kmem_cache_destroy(fnic_sgl_cache[FNIC_SGL_CACHE_DFLT]);
 err_create_fnic_sgl_slab_dflt:
 	fnic_trace_free();
+	fnic_fc_trace_free();
 	fnic_debugfs_terminate();
 	return err;
 }
@@ -1135,6 +1144,7 @@ static void __exit fnic_cleanup_module(void)
 	kmem_cache_destroy(fnic_io_req_cache);
 	fc_release_transport(fnic_fc_transport);
 	fnic_trace_free();
+	fnic_fc_trace_free();
 	fnic_debugfs_terminate();
 }
 

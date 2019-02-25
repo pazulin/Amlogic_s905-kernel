@@ -1,4 +1,5 @@
 # Monitor the system for dropped packets and proudce a report of drop locations and counts
+# SPDX-License-Identifier: GPL-2.0
 
 import os
 import sys
@@ -66,7 +67,7 @@ def trace_end():
 	print_drop_table()
 
 # called from perf, when it finds a correspoinding event
-def skb__kfree_skb(name, context, cpu, sec, nsec, pid, comm,
+def skb__kfree_skb(name, context, cpu, sec, nsec, pid, comm, callchain,
 		   skbaddr, location, protocol):
 	slocation = str(location)
 	try:

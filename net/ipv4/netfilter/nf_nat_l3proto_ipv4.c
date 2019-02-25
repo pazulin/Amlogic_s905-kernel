@@ -62,22 +62,8 @@ static void nf_nat_ipv4_decode_session(struct sk_buff *skb,
 }
 #endif /* CONFIG_XFRM */
 
-static bool nf_nat_ipv4_in_range(const struct nf_conntrack_tuple *t,
-				 const struct nf_nat_range *range)
-{
-	return ntohl(t->src.u3.ip) >= ntohl(range->min_addr.ip) &&
-	       ntohl(t->src.u3.ip) <= ntohl(range->max_addr.ip);
-}
-
-static u32 nf_nat_ipv4_secure_port(const struct nf_conntrack_tuple *t,
-				   __be16 dport)
-{
-	return secure_ipv4_port_ephemeral(t->src.u3.ip, t->dst.u3.ip, dport);
-}
-
 static bool nf_nat_ipv4_manip_pkt(struct sk_buff *skb,
 				  unsigned int iphdroff,
-				  const struct nf_nat_l4proto *l4proto,
 				  const struct nf_conntrack_tuple *target,
 				  enum nf_nat_manip_type maniptype)
 {
@@ -90,8 +76,8 @@ static bool nf_nat_ipv4_manip_pkt(struct sk_buff *skb,
 	iph = (void *)skb->data + iphdroff;
 	hdroff = iphdroff + iph->ihl * 4;
 
-	if (!l4proto->manip_pkt(skb, &nf_nat_l3proto_ipv4, iphdroff, hdroff,
-				target, maniptype))
+	if (!nf_nat_l4proto_manip_pkt(skb, &nf_nat_l3proto_ipv4, iphdroff,
+				      hdroff, target, maniptype))
 		return false;
 	iph = (void *)skb->data + iphdroff;
 
@@ -120,42 +106,30 @@ static void nf_nat_ipv4_csum_update(struct sk_buff *skb,
 		oldip = iph->daddr;
 		newip = t->dst.u3.ip;
 	}
-	inet_proto_csum_replace4(check, skb, oldip, newip, 1);
+	inet_proto_csum_replace4(check, skb, oldip, newip, true);
 }
 
 static void nf_nat_ipv4_csum_recalc(struct sk_buff *skb,
 				    u8 proto, void *data, __sum16 *check,
 				    int datalen, int oldlen)
 {
-	const struct iphdr *iph = ip_hdr(skb);
-	struct rtable *rt = skb_rtable(skb);
-
 	if (skb->ip_summed != CHECKSUM_PARTIAL) {
-		if (!(rt->rt_flags & RTCF_LOCAL) &&
-		    (!skb->dev || skb->dev->features & NETIF_F_V4_CSUM)) {
-			skb->ip_summed = CHECKSUM_PARTIAL;
-			skb->csum_start = skb_headroom(skb) +
-					  skb_network_offset(skb) +
-					  ip_hdrlen(skb);
-			skb->csum_offset = (void *)check - data;
-			*check = ~csum_tcpudp_magic(iph->saddr, iph->daddr,
-						    datalen, proto, 0);
-		} else {
-			*check = 0;
-			*check = csum_tcpudp_magic(iph->saddr, iph->daddr,
-						   datalen, proto,
-						   csum_partial(data, datalen,
-								0));
-			if (proto == IPPROTO_UDP && !*check)
-				*check = CSUM_MANGLED_0;
-		}
+		const struct iphdr *iph = ip_hdr(skb);
+
+		skb->ip_summed = CHECKSUM_PARTIAL;
+		skb->csum_start = skb_headroom(skb) + skb_network_offset(skb) +
+			ip_hdrlen(skb);
+		skb->csum_offset = (void *)check - data;
+		*check = ~csum_tcpudp_magic(iph->saddr, iph->daddr, datalen,
+					    proto, 0);
 	} else
 		inet_proto_csum_replace2(check, skb,
-					 htons(oldlen), htons(datalen), 1);
+					 htons(oldlen), htons(datalen), true);
 }
 
+#if IS_ENABLED(CONFIG_NF_CT_NETLINK)
 static int nf_nat_ipv4_nlattr_to_range(struct nlattr *tb[],
-				       struct nf_nat_range *range)
+				       struct nf_nat_range2 *range)
 {
 	if (tb[CTA_NAT_V4_MINIP]) {
 		range->min_addr.ip = nla_get_be32(tb[CTA_NAT_V4_MINIP]);
@@ -169,15 +143,16 @@ static int nf_nat_ipv4_nlattr_to_range(struct nlattr *tb[],
 
 	return 0;
 }
+#endif
 
 static const struct nf_nat_l3proto nf_nat_l3proto_ipv4 = {
 	.l3proto		= NFPROTO_IPV4,
-	.in_range		= nf_nat_ipv4_in_range,
-	.secure_port		= nf_nat_ipv4_secure_port,
 	.manip_pkt		= nf_nat_ipv4_manip_pkt,
 	.csum_update		= nf_nat_ipv4_csum_update,
 	.csum_recalc		= nf_nat_ipv4_csum_recalc,
+#if IS_ENABLED(CONFIG_NF_CT_NETLINK)
 	.nlattr_to_range	= nf_nat_ipv4_nlattr_to_range,
+#endif
 #ifdef CONFIG_XFRM
 	.decode_session		= nf_nat_ipv4_decode_session,
 #endif
@@ -195,11 +170,10 @@ int nf_nat_icmp_reply_translation(struct sk_buff *skb,
 	enum ip_conntrack_dir dir = CTINFO2DIR(ctinfo);
 	enum nf_nat_manip_type manip = HOOK2MANIP(hooknum);
 	unsigned int hdrlen = ip_hdrlen(skb);
-	const struct nf_nat_l4proto *l4proto;
 	struct nf_conntrack_tuple target;
 	unsigned long statusbit;
 
-	NF_CT_ASSERT(ctinfo == IP_CT_RELATED || ctinfo == IP_CT_RELATED_REPLY);
+	WARN_ON(ctinfo != IP_CT_RELATED && ctinfo != IP_CT_RELATED_REPLY);
 
 	if (!skb_make_writable(skb, hdrlen + sizeof(*inside)))
 		return 0;
@@ -226,9 +200,8 @@ int nf_nat_icmp_reply_translation(struct sk_buff *skb,
 	if (!(ct->status & statusbit))
 		return 1;
 
-	l4proto = __nf_nat_l4proto_find(NFPROTO_IPV4, inside->ip.protocol);
 	if (!nf_nat_ipv4_manip_pkt(skb, hdrlen + sizeof(inside->icmp),
-				   l4proto, &ct->tuplehash[!dir].tuple, !manip))
+				   &ct->tuplehash[!dir].tuple, !manip))
 		return 0;
 
 	if (skb->ip_summed != CHECKSUM_PARTIAL) {
@@ -242,36 +215,170 @@ int nf_nat_icmp_reply_translation(struct sk_buff *skb,
 
 	/* Change outer to look like the reply to an incoming packet */
 	nf_ct_invert_tuplepr(&target, &ct->tuplehash[!dir].tuple);
-	l4proto = __nf_nat_l4proto_find(NFPROTO_IPV4, 0);
-	if (!nf_nat_ipv4_manip_pkt(skb, 0, l4proto, &target, manip))
+	target.dst.protonum = IPPROTO_ICMP;
+	if (!nf_nat_ipv4_manip_pkt(skb, 0, &target, manip))
 		return 0;
 
 	return 1;
 }
 EXPORT_SYMBOL_GPL(nf_nat_icmp_reply_translation);
 
-static int __init nf_nat_l3proto_ipv4_init(void)
+static unsigned int
+nf_nat_ipv4_fn(void *priv, struct sk_buff *skb,
+	       const struct nf_hook_state *state)
 {
+	struct nf_conn *ct;
+	enum ip_conntrack_info ctinfo;
+
+	ct = nf_ct_get(skb, &ctinfo);
+	if (!ct)
+		return NF_ACCEPT;
+
+	if (ctinfo == IP_CT_RELATED || ctinfo == IP_CT_RELATED_REPLY) {
+		if (ip_hdr(skb)->protocol == IPPROTO_ICMP) {
+			if (!nf_nat_icmp_reply_translation(skb, ct, ctinfo,
+							   state->hook))
+				return NF_DROP;
+			else
+				return NF_ACCEPT;
+		}
+	}
+
+	return nf_nat_inet_fn(priv, skb, state);
+}
+
+static unsigned int
+nf_nat_ipv4_in(void *priv, struct sk_buff *skb,
+	       const struct nf_hook_state *state)
+{
+	unsigned int ret;
+	__be32 daddr = ip_hdr(skb)->daddr;
+
+	ret = nf_nat_ipv4_fn(priv, skb, state);
+	if (ret != NF_DROP && ret != NF_STOLEN &&
+	    daddr != ip_hdr(skb)->daddr)
+		skb_dst_drop(skb);
+
+	return ret;
+}
+
+static unsigned int
+nf_nat_ipv4_out(void *priv, struct sk_buff *skb,
+		const struct nf_hook_state *state)
+{
+#ifdef CONFIG_XFRM
+	const struct nf_conn *ct;
+	enum ip_conntrack_info ctinfo;
+	int err;
+#endif
+	unsigned int ret;
+
+	ret = nf_nat_ipv4_fn(priv, skb, state);
+#ifdef CONFIG_XFRM
+	if (ret != NF_DROP && ret != NF_STOLEN &&
+	    !(IPCB(skb)->flags & IPSKB_XFRM_TRANSFORMED) &&
+	    (ct = nf_ct_get(skb, &ctinfo)) != NULL) {
+		enum ip_conntrack_dir dir = CTINFO2DIR(ctinfo);
+
+		if ((ct->tuplehash[dir].tuple.src.u3.ip !=
+		     ct->tuplehash[!dir].tuple.dst.u3.ip) ||
+		    (ct->tuplehash[dir].tuple.dst.protonum != IPPROTO_ICMP &&
+		     ct->tuplehash[dir].tuple.src.u.all !=
+		     ct->tuplehash[!dir].tuple.dst.u.all)) {
+			err = nf_xfrm_me_harder(state->net, skb, AF_INET);
+			if (err < 0)
+				ret = NF_DROP_ERR(err);
+		}
+	}
+#endif
+	return ret;
+}
+
+static unsigned int
+nf_nat_ipv4_local_fn(void *priv, struct sk_buff *skb,
+		     const struct nf_hook_state *state)
+{
+	const struct nf_conn *ct;
+	enum ip_conntrack_info ctinfo;
+	unsigned int ret;
 	int err;
 
-	err = nf_nat_l4proto_register(NFPROTO_IPV4, &nf_nat_l4proto_icmp);
-	if (err < 0)
-		goto err1;
-	err = nf_nat_l3proto_register(&nf_nat_l3proto_ipv4);
-	if (err < 0)
-		goto err2;
-	return err;
+	ret = nf_nat_ipv4_fn(priv, skb, state);
+	if (ret != NF_DROP && ret != NF_STOLEN &&
+	    (ct = nf_ct_get(skb, &ctinfo)) != NULL) {
+		enum ip_conntrack_dir dir = CTINFO2DIR(ctinfo);
 
-err2:
-	nf_nat_l4proto_unregister(NFPROTO_IPV4, &nf_nat_l4proto_icmp);
-err1:
-	return err;
+		if (ct->tuplehash[dir].tuple.dst.u3.ip !=
+		    ct->tuplehash[!dir].tuple.src.u3.ip) {
+			err = ip_route_me_harder(state->net, skb, RTN_UNSPEC);
+			if (err < 0)
+				ret = NF_DROP_ERR(err);
+		}
+#ifdef CONFIG_XFRM
+		else if (!(IPCB(skb)->flags & IPSKB_XFRM_TRANSFORMED) &&
+			 ct->tuplehash[dir].tuple.dst.protonum != IPPROTO_ICMP &&
+			 ct->tuplehash[dir].tuple.dst.u.all !=
+			 ct->tuplehash[!dir].tuple.src.u.all) {
+			err = nf_xfrm_me_harder(state->net, skb, AF_INET);
+			if (err < 0)
+				ret = NF_DROP_ERR(err);
+		}
+#endif
+	}
+	return ret;
+}
+
+static const struct nf_hook_ops nf_nat_ipv4_ops[] = {
+	/* Before packet filtering, change destination */
+	{
+		.hook		= nf_nat_ipv4_in,
+		.pf		= NFPROTO_IPV4,
+		.hooknum	= NF_INET_PRE_ROUTING,
+		.priority	= NF_IP_PRI_NAT_DST,
+	},
+	/* After packet filtering, change source */
+	{
+		.hook		= nf_nat_ipv4_out,
+		.pf		= NFPROTO_IPV4,
+		.hooknum	= NF_INET_POST_ROUTING,
+		.priority	= NF_IP_PRI_NAT_SRC,
+	},
+	/* Before packet filtering, change destination */
+	{
+		.hook		= nf_nat_ipv4_local_fn,
+		.pf		= NFPROTO_IPV4,
+		.hooknum	= NF_INET_LOCAL_OUT,
+		.priority	= NF_IP_PRI_NAT_DST,
+	},
+	/* After packet filtering, change source */
+	{
+		.hook		= nf_nat_ipv4_fn,
+		.pf		= NFPROTO_IPV4,
+		.hooknum	= NF_INET_LOCAL_IN,
+		.priority	= NF_IP_PRI_NAT_SRC,
+	},
+};
+
+int nf_nat_l3proto_ipv4_register_fn(struct net *net, const struct nf_hook_ops *ops)
+{
+	return nf_nat_register_fn(net, ops, nf_nat_ipv4_ops, ARRAY_SIZE(nf_nat_ipv4_ops));
+}
+EXPORT_SYMBOL_GPL(nf_nat_l3proto_ipv4_register_fn);
+
+void nf_nat_l3proto_ipv4_unregister_fn(struct net *net, const struct nf_hook_ops *ops)
+{
+	nf_nat_unregister_fn(net, ops, ARRAY_SIZE(nf_nat_ipv4_ops));
+}
+EXPORT_SYMBOL_GPL(nf_nat_l3proto_ipv4_unregister_fn);
+
+static int __init nf_nat_l3proto_ipv4_init(void)
+{
+	return nf_nat_l3proto_register(&nf_nat_l3proto_ipv4);
 }
 
 static void __exit nf_nat_l3proto_ipv4_exit(void)
 {
 	nf_nat_l3proto_unregister(&nf_nat_l3proto_ipv4);
-	nf_nat_l4proto_unregister(NFPROTO_IPV4, &nf_nat_l4proto_icmp);
 }
 
 MODULE_LICENSE("GPL");

@@ -46,7 +46,7 @@
 #include <linux/sunrpc/gss_api.h>
 #include <linux/sunrpc/clnt.h>
 
-#ifdef RPC_DEBUG
+#if IS_ENABLED(CONFIG_SUNRPC_DEBUG)
 # define RPCDBG_FACILITY        RPCDBG_AUTH
 #endif
 
@@ -117,7 +117,7 @@ int gss_mech_register(struct gss_api_mech *gm)
 	if (status)
 		return status;
 	spin_lock(&registered_mechs_lock);
-	list_add(&gm->gm_list, &registered_mechs);
+	list_add_rcu(&gm->gm_list, &registered_mechs);
 	spin_unlock(&registered_mechs_lock);
 	dprintk("RPC:       registered gss mechanism %s\n", gm->gm_name);
 	return 0;
@@ -132,7 +132,7 @@ EXPORT_SYMBOL_GPL(gss_mech_register);
 void gss_mech_unregister(struct gss_api_mech *gm)
 {
 	spin_lock(&registered_mechs_lock);
-	list_del(&gm->gm_list);
+	list_del_rcu(&gm->gm_list);
 	spin_unlock(&registered_mechs_lock);
 	dprintk("RPC:       unregistered gss mechanism %s\n", gm->gm_name);
 	gss_mech_free(gm);
@@ -151,15 +151,15 @@ _gss_mech_get_by_name(const char *name)
 {
 	struct gss_api_mech	*pos, *gm = NULL;
 
-	spin_lock(&registered_mechs_lock);
-	list_for_each_entry(pos, &registered_mechs, gm_list) {
+	rcu_read_lock();
+	list_for_each_entry_rcu(pos, &registered_mechs, gm_list) {
 		if (0 == strcmp(name, pos->gm_name)) {
 			if (try_module_get(pos->gm_owner))
 				gm = pos;
 			break;
 		}
 	}
-	spin_unlock(&registered_mechs_lock);
+	rcu_read_unlock();
 	return gm;
 
 }
@@ -186,8 +186,8 @@ struct gss_api_mech *gss_mech_get_by_OID(struct rpcsec_gss_oid *obj)
 	dprintk("RPC:       %s(%s)\n", __func__, buf);
 	request_module("rpc-auth-gss-%s", buf);
 
-	spin_lock(&registered_mechs_lock);
-	list_for_each_entry(pos, &registered_mechs, gm_list) {
+	rcu_read_lock();
+	list_for_each_entry_rcu(pos, &registered_mechs, gm_list) {
 		if (obj->len == pos->gm_oid.len) {
 			if (0 == memcmp(obj->data, pos->gm_oid.data, obj->len)) {
 				if (try_module_get(pos->gm_owner))
@@ -196,7 +196,7 @@ struct gss_api_mech *gss_mech_get_by_OID(struct rpcsec_gss_oid *obj)
 			}
 		}
 	}
-	spin_unlock(&registered_mechs_lock);
+	rcu_read_unlock();
 	return gm;
 }
 
@@ -216,17 +216,15 @@ static struct gss_api_mech *_gss_mech_get_by_pseudoflavor(u32 pseudoflavor)
 {
 	struct gss_api_mech *gm = NULL, *pos;
 
-	spin_lock(&registered_mechs_lock);
-	list_for_each_entry(pos, &registered_mechs, gm_list) {
-		if (!mech_supports_pseudoflavor(pos, pseudoflavor)) {
-			module_put(pos->gm_owner);
+	rcu_read_lock();
+	list_for_each_entry_rcu(pos, &registered_mechs, gm_list) {
+		if (!mech_supports_pseudoflavor(pos, pseudoflavor))
 			continue;
-		}
 		if (try_module_get(pos->gm_owner))
 			gm = pos;
 		break;
 	}
-	spin_unlock(&registered_mechs_lock);
+	rcu_read_unlock();
 	return gm;
 }
 
@@ -246,7 +244,7 @@ gss_mech_get_by_pseudoflavor(u32 pseudoflavor)
 
 /**
  * gss_mech_list_pseudoflavors - Discover registered GSS pseudoflavors
- * @array: array to fill in
+ * @array_ptr: array to fill in
  * @size: size of "array"
  *
  * Returns the number of array items filled in, or a negative errno.
@@ -259,8 +257,8 @@ int gss_mech_list_pseudoflavors(rpc_authflavor_t *array_ptr, int size)
 	struct gss_api_mech *pos = NULL;
 	int j, i = 0;
 
-	spin_lock(&registered_mechs_lock);
-	list_for_each_entry(pos, &registered_mechs, gm_list) {
+	rcu_read_lock();
+	list_for_each_entry_rcu(pos, &registered_mechs, gm_list) {
 		for (j = 0; j < pos->gm_pf_num; j++) {
 			if (i >= size) {
 				spin_unlock(&registered_mechs_lock);
@@ -269,7 +267,7 @@ int gss_mech_list_pseudoflavors(rpc_authflavor_t *array_ptr, int size)
 			array_ptr[i++] = pos->gm_pfs[j].pseudoflavor;
 		}
 	}
-	spin_unlock(&registered_mechs_lock);
+	rcu_read_unlock();
 	return i;
 }
 
@@ -362,6 +360,18 @@ gss_pseudoflavor_to_service(struct gss_api_mech *gm, u32 pseudoflavor)
 	return 0;
 }
 EXPORT_SYMBOL(gss_pseudoflavor_to_service);
+
+bool
+gss_pseudoflavor_to_datatouch(struct gss_api_mech *gm, u32 pseudoflavor)
+{
+	int i;
+
+	for (i = 0; i < gm->gm_pf_num; i++) {
+		if (gm->gm_pfs[i].pseudoflavor == pseudoflavor)
+			return gm->gm_pfs[i].datatouch;
+	}
+	return false;
+}
 
 char *
 gss_service_to_auth_domain_name(struct gss_api_mech *gm, u32 service)

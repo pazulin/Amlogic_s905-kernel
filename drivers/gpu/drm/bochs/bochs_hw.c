@@ -47,15 +47,65 @@ static void bochs_dispi_write(struct bochs_device *bochs, u16 reg, u16 val)
 	}
 }
 
-int bochs_hw_init(struct drm_device *dev, uint32_t flags)
+static void bochs_hw_set_big_endian(struct bochs_device *bochs)
+{
+	if (bochs->qext_size < 8)
+		return;
+
+	writel(0xbebebebe, bochs->mmio + 0x604);
+}
+
+static void bochs_hw_set_little_endian(struct bochs_device *bochs)
+{
+	if (bochs->qext_size < 8)
+		return;
+
+	writel(0x1e1e1e1e, bochs->mmio + 0x604);
+}
+
+#ifdef __BIG_ENDIAN
+#define bochs_hw_set_native_endian(_b) bochs_hw_set_big_endian(_b)
+#else
+#define bochs_hw_set_native_endian(_b) bochs_hw_set_little_endian(_b)
+#endif
+
+static int bochs_get_edid_block(void *data, u8 *buf,
+				unsigned int block, size_t len)
+{
+	struct bochs_device *bochs = data;
+	size_t i, start = block * EDID_LENGTH;
+
+	if (start + len > 0x400 /* vga register offset */)
+		return -1;
+
+	for (i = 0; i < len; i++) {
+		buf[i] = readb(bochs->mmio + start + i);
+	}
+	return 0;
+}
+
+int bochs_hw_load_edid(struct bochs_device *bochs)
+{
+	if (!bochs->mmio)
+		return -1;
+
+	kfree(bochs->edid);
+	bochs->edid = drm_do_get_edid(&bochs->connector,
+				      bochs_get_edid_block, bochs);
+	if (bochs->edid == NULL)
+		return -1;
+
+	return 0;
+}
+
+int bochs_hw_init(struct drm_device *dev)
 {
 	struct bochs_device *bochs = dev->dev_private;
 	struct pci_dev *pdev = dev->pdev;
 	unsigned long addr, size, mem, ioaddr, iosize;
 	u16 id;
 
-	if (/* (ent->driver_data == BOCHS_QEMU_STDVGA) && */
-	    (pdev->resource[2].flags & IORESOURCE_MEM)) {
+	if (pdev->resource[2].flags & IORESOURCE_MEM) {
 		/* mmio bar with vga and bochs registers present */
 		if (pci_request_region(pdev, 2, "bochs-drm") != 0) {
 			DRM_ERROR("Cannot request mmio region\n");
@@ -116,6 +166,19 @@ int bochs_hw_init(struct drm_device *dev, uint32_t flags)
 		 size / 1024, addr,
 		 bochs->ioports ? "ioports" : "mmio",
 		 ioaddr);
+
+	if (bochs->mmio && pdev->revision >= 2) {
+		bochs->qext_size = readl(bochs->mmio + 0x600);
+		if (bochs->qext_size < 4 || bochs->qext_size > iosize) {
+			bochs->qext_size = 0;
+			goto noext;
+		}
+		DRM_DEBUG("Found qemu ext regs, size %ld\n",
+			  bochs->qext_size);
+		bochs_hw_set_native_endian(bochs);
+	}
+
+noext:
 	return 0;
 }
 
@@ -130,10 +193,12 @@ void bochs_hw_fini(struct drm_device *dev)
 	if (bochs->fb_map)
 		iounmap(bochs->fb_map);
 	pci_release_regions(dev->pdev);
+	kfree(bochs->edid);
 }
 
 void bochs_hw_setmode(struct bochs_device *bochs,
-		      struct drm_display_mode *mode)
+		      struct drm_display_mode *mode,
+		      const struct drm_format_info *format)
 {
 	bochs->xres = mode->hdisplay;
 	bochs->yres = mode->vdisplay;
@@ -141,12 +206,17 @@ void bochs_hw_setmode(struct bochs_device *bochs,
 	bochs->stride = mode->hdisplay * (bochs->bpp / 8);
 	bochs->yres_virtual = bochs->fb_size / bochs->stride;
 
-	DRM_DEBUG_DRIVER("%dx%d @ %d bpp, vy %d\n",
+	DRM_DEBUG_DRIVER("%dx%d @ %d bpp, format %c%c%c%c, vy %d\n",
 			 bochs->xres, bochs->yres, bochs->bpp,
+			 (format->format >>  0) & 0xff,
+			 (format->format >>  8) & 0xff,
+			 (format->format >> 16) & 0xff,
+			 (format->format >> 24) & 0xff,
 			 bochs->yres_virtual);
 
 	bochs_vga_writeb(bochs, 0x3c0, 0x20); /* unblank */
 
+	bochs_dispi_write(bochs, VBE_DISPI_INDEX_ENABLE,      0);
 	bochs_dispi_write(bochs, VBE_DISPI_INDEX_BPP,         bochs->bpp);
 	bochs_dispi_write(bochs, VBE_DISPI_INDEX_XRES,        bochs->xres);
 	bochs_dispi_write(bochs, VBE_DISPI_INDEX_YRES,        bochs->yres);
@@ -159,6 +229,20 @@ void bochs_hw_setmode(struct bochs_device *bochs,
 
 	bochs_dispi_write(bochs, VBE_DISPI_INDEX_ENABLE,
 			  VBE_DISPI_ENABLED | VBE_DISPI_LFB_ENABLED);
+
+	switch (format->format) {
+	case DRM_FORMAT_XRGB8888:
+		bochs_hw_set_little_endian(bochs);
+		break;
+	case DRM_FORMAT_BGRX8888:
+		bochs_hw_set_big_endian(bochs);
+		break;
+	default:
+		/* should not happen */
+		DRM_ERROR("%s: Huh? Got framebuffer format 0x%x",
+			  __func__, format->format);
+		break;
+	};
 }
 
 void bochs_hw_setbase(struct bochs_device *bochs,

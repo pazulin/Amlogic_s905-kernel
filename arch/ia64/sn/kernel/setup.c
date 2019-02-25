@@ -20,7 +20,7 @@
 #include <linux/mm.h>
 #include <linux/serial.h>
 #include <linux/irq.h>
-#include <linux/bootmem.h>
+#include <linux/memblock.h>
 #include <linux/mmzone.h>
 #include <linux/interrupt.h>
 #include <linux/acpi.h>
@@ -511,7 +511,8 @@ static void __init sn_init_pdas(char **cmdline_p)
 	 */
 	for_each_online_node(cnode) {
 		nodepdaindr[cnode] =
-		    alloc_bootmem_node(NODE_DATA(cnode), sizeof(nodepda_t));
+		    memblock_alloc_node(sizeof(nodepda_t), SMP_CACHE_BYTES,
+					cnode);
 		memset(nodepdaindr[cnode]->phys_cpuid, -1,
 		    sizeof(nodepdaindr[cnode]->phys_cpuid));
 		spin_lock_init(&nodepdaindr[cnode]->ptc_lock);
@@ -522,7 +523,7 @@ static void __init sn_init_pdas(char **cmdline_p)
 	 */
 	for (cnode = num_online_nodes(); cnode < num_cnodes; cnode++)
 		nodepdaindr[cnode] =
-		    alloc_bootmem_node(NODE_DATA(0), sizeof(nodepda_t));
+		    memblock_alloc_node(sizeof(nodepda_t), SMP_CACHE_BYTES, 0);
 
 	/*
 	 * Now copy the array of nodepda pointers to each nodepda.
@@ -579,7 +580,7 @@ void sn_cpu_init(void)
 		       (sn_prom_type == 1) ? "real" : "fake");
 	}
 
-	memset(pda, 0, sizeof(pda));
+	memset(pda, 0, sizeof(*pda));
 	if (ia64_sn_get_sn_info(0, &sn_hub_info->shub2,
 				&sn_hub_info->nasid_bitmask,
 				&sn_hub_info->nasid_shift,
@@ -629,7 +630,7 @@ void sn_cpu_init(void)
 
 	cnode = nasid_to_cnodeid(nasid);
 
-	sn_nodepda = nodepdaindr[cnode];
+	__this_cpu_write(__sn_nodepda, nodepdaindr[cnode]);
 
 	pda->led_address =
 	    (typeof(pda->led_address)) (LED0 + (slice << LED_CPU_SHIFT));

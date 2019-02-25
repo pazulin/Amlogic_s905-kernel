@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 #ifndef _LIBLOCKDEP_MUTEX_H
 #define _LIBLOCKDEP_MUTEX_H
 
@@ -35,7 +36,7 @@ static inline int __mutex_init(liblockdep_pthread_mutex_t *lock,
 
 static inline int liblockdep_pthread_mutex_lock(liblockdep_pthread_mutex_t *lock)
 {
-	lock_acquire(&lock->dep_map, 0, 0, 0, 2, NULL, (unsigned long)_RET_IP_);
+	lock_acquire(&lock->dep_map, 0, 0, 0, 1, NULL, (unsigned long)_RET_IP_);
 	return pthread_mutex_lock(&lock->mutex);
 }
 
@@ -47,12 +48,13 @@ static inline int liblockdep_pthread_mutex_unlock(liblockdep_pthread_mutex_t *lo
 
 static inline int liblockdep_pthread_mutex_trylock(liblockdep_pthread_mutex_t *lock)
 {
-	lock_acquire(&lock->dep_map, 0, 1, 0, 2, NULL, (unsigned long)_RET_IP_);
+	lock_acquire(&lock->dep_map, 0, 1, 0, 1, NULL, (unsigned long)_RET_IP_);
 	return pthread_mutex_trylock(&lock->mutex) == 0 ? 1 : 0;
 }
 
 static inline int liblockdep_pthread_mutex_destroy(liblockdep_pthread_mutex_t *lock)
 {
+	lockdep_reset_lock(&lock->dep_map);
 	return pthread_mutex_destroy(&lock->mutex);
 }
 

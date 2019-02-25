@@ -21,10 +21,6 @@
  * but WITHOUT ANY WARRANTY; without even the implied warranty of
  * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
  * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program; if not, write to the Free Software
- * Foundation, Inc., 675 Mass Ave, Cambridge, MA 02139, USA.
  */
 
 
@@ -36,6 +32,7 @@
 #include <linux/i2c.h>
 #include <linux/mutex.h>
 #include <media/v4l2-device.h>
+#include <media/v4l2-ctrls.h>
 #include <media/tuner.h>
 #include <linux/videodev2.h>
 
@@ -203,14 +200,6 @@ enum {
 	mr = LIMIT_RGB(mm_r); \
 }
 
-/* Debugging aid */
-#define USBVISION_SAY_AND_WAIT(what) { \
-	wait_queue_head_t wq; \
-	init_waitqueue_head(&wq); \
-	printk(KERN_INFO "Say: %s\n", what); \
-	interruptible_sleep_on_timeout(&wq, HZ * 3); \
-}
-
 /*
  * This macro checks if usbvision is still operational. The 'usbvision'
  * pointer must be valid, usbvision->dev must be valid, we are not
@@ -365,8 +354,9 @@ extern struct usb_device_id usbvision_table[];
 
 struct usb_usbvision {
 	struct v4l2_device v4l2_dev;
-	struct video_device *vdev;					/* Video Device */
-	struct video_device *rdev;					/* Radio Device */
+	struct v4l2_ctrl_handler hdl;
+	struct video_device vdev;					/* Video Device */
+	struct video_device rdev;					/* Radio Device */
 
 	/* i2c Declaration Section*/
 	struct i2c_adapter i2c_adap;
@@ -376,7 +366,6 @@ struct usb_usbvision {
 	unsigned char ctrl_urb_buffer[8];
 	int ctrl_urb_busy;
 	struct usb_ctrlrequest ctrl_urb_setup;
-	wait_queue_head_t ctrl_urb_wq;					/* Processes waiting */
 
 	/* configuration part */
 	int have_tuner;
@@ -384,7 +373,8 @@ struct usb_usbvision {
 	int bridge_type;						/* NT1003, NT1004, NT1005 */
 	int radio;
 	int video_inputs;						/* # of inputs */
-	unsigned long freq;
+	unsigned long radio_freq;
+	unsigned long tv_freq;
 	int audio_mute;
 	int audio_channel;
 	int isoc_mode;							/* format of video data for the usb isoc-transfer */
@@ -399,8 +389,6 @@ struct usb_usbvision {
 	unsigned char iface_alt;					/* Alt settings */
 	unsigned char vin_reg2_preset;
 	struct mutex v4l2_lock;
-	struct timer_list power_off_timer;
-	struct work_struct power_off_work;
 	int power;							/* is the device powered on? */
 	int user;							/* user count for exclusive use */
 	int initialized;						/* Had we already sent init sequence? */
@@ -459,7 +447,6 @@ struct usb_usbvision {
 	unsigned long isoc_skip_count;			/* How many empty ISO packets received */
 	unsigned long isoc_err_count;			/* How many bad ISO packets received */
 	unsigned long isoc_packet_count;		/* How many packets we totally got */
-	unsigned long time_in_irq;			/* How long do we need for interrupt */
 	int isoc_measure_bandwidth_count;
 	int frame_num;					/* How many video frames we send to user */
 	int max_strip_len;				/* How big is the biggest strip */
@@ -518,18 +505,7 @@ int usbvision_muxsel(struct usb_usbvision *usbvision, int channel);
 int usbvision_set_input(struct usb_usbvision *usbvision);
 int usbvision_set_output(struct usb_usbvision *usbvision, int width, int height);
 
-void usbvision_init_power_off_timer(struct usb_usbvision *usbvision);
-void usbvision_set_power_off_timer(struct usb_usbvision *usbvision);
-void usbvision_reset_power_off_timer(struct usb_usbvision *usbvision);
 int usbvision_power_off(struct usb_usbvision *usbvision);
 int usbvision_power_on(struct usb_usbvision *usbvision);
 
 #endif									/* __LINUX_USBVISION_H */
-
-/*
- * Overrides for Emacs so that we follow Linus's tabbing style.
- * ---------------------------------------------------------------------------
- * Local variables:
- * c-basic-offset: 8
- * End:
- */

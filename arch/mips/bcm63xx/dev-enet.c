@@ -14,7 +14,6 @@
 #include <bcm63xx_io.h>
 #include <bcm63xx_regs.h>
 
-#ifdef BCMCPU_RUNTIME_DETECT
 static const unsigned long bcm6348_regs_enetdmac[] = {
 	[ENETDMAC_CHANCFG]	= ENETDMAC_CHANCFG_REG,
 	[ENETDMAC_IR]		= ENETDMAC_IR_REG,
@@ -43,9 +42,6 @@ static __init void bcm63xx_enetdmac_regs_init(void)
 	else
 		bcm63xx_regs_enetdmac = bcm6348_regs_enetdmac;
 }
-#else
-static __init void bcm63xx_enetdmac_regs_init(void) { }
-#endif
 
 static struct resource shared_res[] = {
 	{
@@ -267,6 +263,14 @@ int __init bcm63xx_enet_register(int unit,
 	} else {
 		dpd->dma_has_sram = true;
 		dpd->dma_chan_width = ENETDMA_CHAN_WIDTH;
+	}
+
+	if (unit == 0) {
+		dpd->rx_chan = 0;
+		dpd->tx_chan = 1;
+	} else {
+		dpd->rx_chan = 2;
+		dpd->tx_chan = 3;
 	}
 
 	ret = platform_device_register(pdev);

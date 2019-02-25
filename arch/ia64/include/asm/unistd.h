@@ -1,3 +1,4 @@
+/* SPDX-License-Identifier: GPL-2.0 */
 /*
  * IA-64 Linux syscall numbers and inline-functions.
  *
@@ -9,9 +10,7 @@
 
 #include <uapi/asm/unistd.h>
 
-
-
-#define NR_syscalls			314 /* length of syscall table */
+#define NR_syscalls		__NR_syscalls /* length of syscall table */
 
 /*
  * The following defines stop scripts/checksyscalls.sh from complaining about
@@ -26,6 +25,9 @@
 #define __IGNORE_getpgrp	/* getpgid() */
 #define __IGNORE_vfork		/* clone() */
 #define __IGNORE_umount2	/* umount() */
+
+#define __ARCH_WANT_NEW_STAT
+#define __ARCH_WANT_SYS_UTIME
 
 #if !defined(__ASSEMBLY__) && !defined(ASSEMBLER)
 

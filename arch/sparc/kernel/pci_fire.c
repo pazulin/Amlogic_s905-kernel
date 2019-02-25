@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-2.0
 /* pci_fire.c: Sun4u platform PCI-E controller support.
  *
  * Copyright (C) 2007 David S. Miller (davem@davemloft.net)
@@ -508,7 +509,6 @@ static const struct of_device_id fire_match[] = {
 static struct platform_driver fire_driver = {
 	.driver = {
 		.name = DRIVER_NAME,
-		.owner = THIS_MODULE,
 		.of_match_table = fire_match,
 	},
 	.probe		= fire_probe,
