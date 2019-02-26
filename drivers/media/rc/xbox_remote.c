@@ -103,12 +103,12 @@ static void xbox_remote_input_report(struct urb *urb)
 	/* Deal with strange looking inputs */
 	if (urb->actual_length != 6 || urb->actual_length != data[1]) {
 		dev_warn(&urb->dev->dev, "Weird data, len=%d: %*ph\n",
-			urb->actual_length, urb->actual_length, data);
+			 urb->actual_length, urb->actual_length, data);
 		return;
 	}
 
 	rc_keydown(xbox_remote->rdev, RC_PROTO_UNKNOWN,
-		   le16_to_cpup((__le16*)(data + 2)), 0);
+		   le16_to_cpup((__le16 *)(data + 2)), 0);
 }
 
 /*
@@ -162,7 +162,7 @@ static void xbox_remote_rc_init(struct xbox_remote *xbox_remote)
 }
 
 static int xbox_remote_initialize(struct xbox_remote *xbox_remote,
-	struct usb_endpoint_descriptor *endpoint_in)
+				  struct usb_endpoint_descriptor *endpoint_in)
 {
 	struct usb_device *udev = xbox_remote->udev;
 	int pipe, maxp;
@@ -183,7 +183,7 @@ static int xbox_remote_initialize(struct xbox_remote *xbox_remote,
  * xbox_remote_probe
  */
 static int xbox_remote_probe(struct usb_interface *interface,
-	const struct usb_device_id *id)
+			     const struct usb_device_id *id)
 {
 	struct usb_device *udev = interface_to_usbdev(interface);
 	struct usb_host_interface *iface_host = interface->cur_altsetting;
@@ -198,7 +198,7 @@ static int xbox_remote_probe(struct usb_interface *interface,
 
 	if (iface_host->desc.bNumEndpoints != 1) {
 		pr_err("%s: Unexpected desc.bNumEndpoints: %d\n",
-			__func__, iface_host->desc.bNumEndpoints);
+		       __func__, iface_host->desc.bNumEndpoints);
 		return -ENODEV;
 	}
 
@@ -232,15 +232,15 @@ static int xbox_remote_probe(struct usb_interface *interface,
 	strlcat(xbox_remote->rc_phys, "/input0", sizeof(xbox_remote->rc_phys));
 
 	snprintf(xbox_remote->rc_name, sizeof(xbox_remote->rc_name), "%s%s%s",
-		udev->manufacturer ?: "",
-		udev->manufacturer && udev->product ? " " : "",
-		udev->product ?: "");
+		 udev->manufacturer ?: "",
+		 udev->manufacturer && udev->product ? " " : "",
+		 udev->product ?: "");
 
 	if (!strlen(xbox_remote->rc_name))
 		snprintf(xbox_remote->rc_name, sizeof(xbox_remote->rc_name),
-			DRIVER_DESC "(%04x,%04x)",
-			le16_to_cpu(xbox_remote->udev->descriptor.idVendor),
-			le16_to_cpu(xbox_remote->udev->descriptor.idProduct));
+			 DRIVER_DESC "(%04x,%04x)",
+			 le16_to_cpu(xbox_remote->udev->descriptor.idVendor),
+			 le16_to_cpu(xbox_remote->udev->descriptor.idProduct));
 
 	rc_dev->map_name = RC_MAP_XBOX_DVD; /* default map */
 

@@ -116,7 +116,7 @@
 
 	sound {
 		compatible = "simple-audio-card";
-		simple-audio-card,name = "HDMI";
+		simple-audio-card,name = "meson-gx-audio";
 
 		assigned-clocks = <&clkc CLKID_MPLL2>,
 				  <&clkc CLKID_MPLL0>,
@@ -129,7 +129,7 @@
 		simple-audio-card,dai-link@0 {
 			/* HDMI Output */
 			format = "i2s";
-			mclk-fs = <128>;
+			mclk-fs = <256>;
 			bitclock-master = <&aiu_i2s>;
 			frame-master = <&aiu_i2s>;
 
@@ -261,8 +261,7 @@
 	max-frequency = <100000000>;
 	disable-wp;
 
-	cd-gpios = <&gpio CARD_6 GPIO_ACTIVE_HIGH>;
-	cd-inverted;
+	cd-gpios = <&gpio CARD_6 GPIO_ACTIVE_LOW>;
 
 	vmmc-supply = <&vddao_3v3>;
 	vqmmc-supply = <&vcc_3v3>;

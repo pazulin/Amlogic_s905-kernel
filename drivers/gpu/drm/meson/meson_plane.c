@@ -306,10 +306,10 @@ static void meson_plane_atomic_update(struct drm_plane *plane,
 	priv->viu.osd1_height = fb->height;
 
 	if (!meson_plane->enabled) {
-		/* Reset OSD1 at updates on GXL+ SoCs */
+		/* Reset OSD1 before enabling it on GXL+ SoCs */
 		if (meson_vpu_is_compatible(priv, "amlogic,meson-gxm-vpu") ||
 		    meson_vpu_is_compatible(priv, "amlogic,meson-gxl-vpu"))
-			meson_viu_reset(priv);
+			meson_viu_osd1_reset(priv);
 
 		meson_plane->enabled = true;
 	}

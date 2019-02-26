@@ -161,19 +161,15 @@
 
 				map1 {
 					trip = <&cpu_alert1>;
-					cooling-device = <&gpio_fan 2 THERMAL_NO_LIMIT>;
-				};
-
-				map2 {
-					trip = <&cpu_alert1>;
-					cooling-device =
-						<&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
-				};
-
-				map3 {
-					trip = <&cpu_alert1>;
-					cooling-device =
-						<&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+					cooling-device = <&gpio_fan 2 THERMAL_NO_LIMIT>,
+							 <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
 				};
 			};
 		};
@@ -224,58 +220,6 @@
 		#clock-cells = <0>;
 		clock-frequency = <32768>;
 		pwms = <&pwm_ef 0 30518 0>; /* PWM_E at 32.768KHz */
-	};
-	dvb {
-		compatible = "amlogic,dvb";
-		reg = <0x0 0xc1108c40 0x0 0x20>,
-		      <0x0 0xc1105800 0x0 0x3c0>;
-		reg-names = "afifo", "stbtop";
-		dev_name = "avl6862";
-		status = "okay";
-		fec_reset_gpio-gpios0 = <&gpio GPIODV_12 GPIO_ACTIVE_HIGH>;
-		power_ctrl_gpio-gpios0 = <&gpio GPIODV_20 GPIO_ACTIVE_LOW>;
-		lock_led_gpio-gpios0 = <&gpio GPIODV_11 GPIO_ACTIVE_HIGH>;
-		//"parallel","serial","disable"
-		ts0 = "serial";
-		ts0_control = <0>;
-		ts0_invert = <0>;
-		dtv_demod0_i2c_adap_id = <0>;
-		pinctrl-0 = <&dvb_s_ts0_pins>;
-		pinctrl-1 = <&dvb_s_ts1_pins>;
-		pinctrl-names = "s_ts0", "s_ts1";
-		clocks = <&clkc CLKID_DEMUX>,
-			 <&clkc CLKID_ASYNC_FIFO>,
-			 <&clkc CLKID_AHB_ARB0>,
-			 <&clkc CLKID_DOS_PARSER>;
-		clock-names = "demux", "asyncfifo", "ahbarb0", "uparsertop";
-		resets = <&reset RESET_PERIPHS_ASYNC_0>,
-			<&reset RESET_PERIPHS_ASYNC_1>,
-			 <&reset RESET_DEMUX>,
-			 <&reset RESET_DEMUX_RESET_0>,
-			 <&reset RESET_DEMUX_RESET_1>;
-		reset-names = "async0", "async1", "demux", "demuxreset0", "demuxreset1";
-		interrupts = <GIC_SPI 23 IRQ_TYPE_EDGE_RISING>,
-			     <GIC_SPI 53 IRQ_TYPE_EDGE_RISING>,
-			     <GIC_SPI 19 IRQ_TYPE_EDGE_RISING>,
-			     <GIC_SPI 25 IRQ_TYPE_EDGE_RISING>;
-		interrupt-names = "demux0", "demux1", "asyncfifo0", "asyncfifo1";
-	};
-};
-
-&periphs {
-	pinctrl_periphs:pinctrl@4b0 {
-		dvb_s_ts0_pins: dvb_s_ts0 {
-			mux {
-				groups = "tsin_a_d_valid", "tsin_a_sop", "tsin_a_clk", "tsin_a_d0";
-				function = "tsin_a";
-			};
-		};
-		dvb_s_ts1_pins: dvb_s_ts1 {
-			mux {
-				groups = "tsin_b_d_valid", "tsin_b_sop", "tsin_b_clk", "tsin_b_d0";
-				function = "tsin_b";
-			};
-		};
 	};
 };
 
@@ -361,6 +305,7 @@
 	status = "okay";
 	pinctrl-0 = <&hdmi_hpd_pins>, <&hdmi_i2c_pins>;
 	pinctrl-names = "default";
+	hdmi-supply = <&hdmi_5v>;
 };
 
 &hdmi_tx_tmds_port {
@@ -379,7 +324,6 @@
 	status = "okay";
 	pinctrl-0 = <&i2c_b_pins>;
 	pinctrl-names = "default";
-	clock-frequency = <300000>;
 
 	rtc: rtc@51 {
 		/* has to be enabled manually when a battery is connected: */
@@ -452,8 +396,7 @@
 	max-frequency = <100000000>;
 	disable-wp;
 
-	cd-gpios = <&gpio CARD_6 GPIO_ACTIVE_HIGH>;
-	cd-inverted;
+	cd-gpios = <&gpio CARD_6 GPIO_ACTIVE_LOW>;
 
 	vmmc-supply = <&vddao_3v3>;
 	vqmmc-supply = <&vddio_boot>;

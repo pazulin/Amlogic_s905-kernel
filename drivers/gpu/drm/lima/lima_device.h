@@ -5,9 +5,9 @@
 #define __LIMA_DEVICE_H__
 
 #include <drm/drm_device.h>
+#include <linux/delay.h>
 
 #include "lima_sched.h"
-#include "lima_ttm.h"
 
 enum lima_gpu_id {
 	lima_gpu_mali400 = 0,
@@ -56,8 +56,6 @@ struct lima_ip {
 	int irq;
 
 	union {
-		/* pmu */
-		unsigned switch_delay;
 		/* gp/pp */
 		bool async_reset;
 		/* l2 cache */
@@ -88,8 +86,6 @@ struct lima_device {
 	struct lima_ip ip[lima_ip_num];
 	struct lima_sched_pipe pipe[lima_pipe_num];
 
-	struct lima_mman mman;
-
 	struct lima_vm *empty_vm;
 	uint64_t va_start;
 	uint64_t va_end;
@@ -104,15 +100,30 @@ to_lima_dev(struct drm_device *dev)
 	return dev->dev_private;
 }
 
-static inline struct lima_device *
-ttm_to_lima_dev(struct ttm_bo_device *dev)
-{
-	return container_of(dev, struct lima_device, mman.bdev);
-}
-
 int lima_device_init(struct lima_device *ldev);
 void lima_device_fini(struct lima_device *ldev);
 
 const char *lima_ip_name(struct lima_ip *ip);
+
+typedef int (*lima_poll_func_t)(struct lima_ip *);
+
+static inline int lima_poll_timeout(struct lima_ip *ip, lima_poll_func_t func,
+				    int sleep_us, int timeout_us)
+{
+	ktime_t timeout = ktime_add_us(ktime_get(), timeout_us);
+
+	might_sleep_if(sleep_us);
+	while (1) {
+		if (func(ip))
+			return 0;
+
+		if (timeout_us && ktime_compare(ktime_get(), timeout) > 0)
+			return -ETIMEDOUT;
+
+		if (sleep_us)
+			usleep_range((sleep_us >> 2) + 1, sleep_us);
+	}
+	return 0;
+}
 
 #endif

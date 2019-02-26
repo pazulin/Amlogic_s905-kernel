@@ -2,102 +2,127 @@
 /* Copyright 2018 Qiang Yu <yuq825@gmail.com> */
 
 #include <drm/drm_prime.h>
-#include <drm/drm_fourcc.h>
+#include <linux/pagemap.h>
+#include <linux/dma-mapping.h>
 
 #include "lima_object.h"
 
-static void lima_bo_init_placement(struct lima_bo *bo)
+void lima_bo_destroy(struct lima_bo *bo)
 {
-	struct ttm_placement *placement = &bo->placement;
-	struct ttm_place *place = &bo->place;
+        if (bo->sgt) {
+		if (bo->pages)
+			kfree(bo->pages);
 
-	place->fpfn = 0;
-	place->lpfn = 0;
-	place->flags = TTM_PL_FLAG_TT | TTM_PL_FLAG_WC;
+		drm_prime_gem_destroy(&bo->gem, bo->sgt);
+	}
+	else {
+		if (bo->pages_dma_addr) {
+			int i, npages = bo->gem.size >> PAGE_SHIFT;
 
-	/* pin all bo for now */
-	place->flags |= TTM_PL_FLAG_NO_EVICT;
+			for (i = 0; i < npages; i++) {
+				if (bo->pages_dma_addr[i])
+					dma_unmap_page(bo->gem.dev->dev,
+						       bo->pages_dma_addr[i],
+						       PAGE_SIZE, DMA_BIDIRECTIONAL);
+			}
+		}
 
-	placement->num_placement = 1;
-	placement->placement = place;
+		if (bo->pages)
+			drm_gem_put_pages(&bo->gem, bo->pages, true, true);
+	}
 
-	placement->num_busy_placement = 1;
-	placement->busy_placement = place;
-}
+	if (bo->pages_dma_addr)
+		kfree(bo->pages_dma_addr);
 
-static void lima_bo_destroy(struct ttm_buffer_object *tbo)
-{
-	struct lima_bo *bo = ttm_to_lima_bo(tbo);
-
-	if (bo->gem.import_attach)
-		drm_prime_gem_destroy(&bo->gem, bo->tbo.sg);
 	drm_gem_object_release(&bo->gem);
 	kfree(bo);
 }
 
-struct lima_bo *lima_bo_create(struct lima_device *dev, u64 size,
-			       u32 flags, enum ttm_bo_type type,
-			       struct sg_table *sg,
-			       struct reservation_object *resv)
+static struct lima_bo *lima_bo_create_struct(struct lima_device *dev, u32 size, u32 flags,
+					     struct reservation_object *resv)
 {
 	struct lima_bo *bo;
-	struct ttm_mem_type_manager *man;
-	size_t acc_size;
 	int err;
 
 	size = PAGE_ALIGN(size);
-	man = dev->mman.bdev.man + TTM_PL_TT;
-	if (size >= (man->size << PAGE_SHIFT))
-		return ERR_PTR(-ENOMEM);
-
-	acc_size = ttm_bo_dma_acc_size(&dev->mman.bdev, size,
-				       sizeof(struct lima_bo));
 
 	bo = kzalloc(sizeof(*bo), GFP_KERNEL);
 	if (!bo)
 		return ERR_PTR(-ENOMEM);
 
-	drm_gem_private_object_init(dev->ddev, &bo->gem, size);
-
+	mutex_init(&bo->lock);
 	INIT_LIST_HEAD(&bo->va);
+	bo->gem.resv = resv;
 
-	bo->tbo.bdev = &dev->mman.bdev;
+	err = drm_gem_object_init(dev->ddev, &bo->gem, size);
+	if (err) {
+		kfree(bo);
+		return ERR_PTR(err);
+	}
 
-	lima_bo_init_placement(bo);
+	return bo;
+}
 
-	err = ttm_bo_init(&dev->mman.bdev, &bo->tbo, size, type,
-			  &bo->placement, 0, type != ttm_bo_type_kernel,
-			  acc_size, sg, resv, &lima_bo_destroy);
-	if (err)
+struct lima_bo *lima_bo_create(struct lima_device *dev, u32 size,
+			       u32 flags, struct sg_table *sgt,
+			       struct reservation_object *resv)
+{
+	int i, err;
+	size_t npages;
+	struct lima_bo *bo, *ret;
+
+	bo = lima_bo_create_struct(dev, size, flags, resv);
+	if (IS_ERR(bo))
+		return bo;
+
+	npages = bo->gem.size >> PAGE_SHIFT;
+
+	bo->pages_dma_addr = kzalloc(npages * sizeof(dma_addr_t), GFP_KERNEL);
+	if (!bo->pages_dma_addr) {
+		ret = ERR_PTR(-ENOMEM);
 		goto err_out;
+	}
 
-	bo->modifier = DRM_FORMAT_MOD_INVALID;
+	if (sgt) {
+		bo->sgt = sgt;
+
+		bo->pages = kzalloc(npages * sizeof(*bo->pages), GFP_KERNEL);
+		if (!bo->pages) {
+			ret = ERR_PTR(-ENOMEM);
+			goto err_out;
+		}
+
+		err = drm_prime_sg_to_page_addr_arrays(
+			sgt, bo->pages, bo->pages_dma_addr, npages);
+		if (err) {
+			ret = ERR_PTR(err);
+			goto err_out;
+		}
+	}
+	else {
+		mapping_set_gfp_mask(bo->gem.filp->f_mapping, GFP_DMA32);
+	        bo->pages = drm_gem_get_pages(&bo->gem);
+		if (IS_ERR(bo->pages)) {
+			ret = ERR_CAST(bo->pages);
+			bo->pages = NULL;
+			goto err_out;
+		}
+
+		for (i = 0; i < npages; i++) {
+			dma_addr_t addr = dma_map_page(dev->dev, bo->pages[i], 0,
+						       PAGE_SIZE, DMA_BIDIRECTIONAL);
+			if (dma_mapping_error(dev->dev, addr)) {
+				ret = ERR_PTR(-EFAULT);
+				goto err_out;
+			}
+			bo->pages_dma_addr[i] = addr;
+		}
+
+	}
+
 	return bo;
 
 err_out:
-	kfree(bo);
-	return ERR_PTR(err);
-}
-
-dma_addr_t *lima_bo_get_pages(struct lima_bo *bo)
-{
-	struct lima_ttm_tt *ttm = (void *)bo->tbo.ttm;
-	return ttm->ttm.dma_address;
-}
-
-void *lima_bo_kmap(struct lima_bo *bo)
-{
-	bool is_iomem;
-	void *ret;
-	int err;
-
-	ret = ttm_kmap_obj_virtual(&bo->kmap, &is_iomem);
-	if (ret)
-		return ret;
-
-	err = ttm_bo_kmap(&bo->tbo, 0, bo->tbo.num_pages, &bo->kmap);
-	if (err)
-		return ERR_PTR(err);
-
-	return ttm_kmap_obj_virtual(&bo->kmap, &is_iomem);
+	lima_bo_destroy(bo);
+	return ret;
 }

@@ -963,9 +963,9 @@ static void lan743x_phy_link_status_change(struct net_device *netdev)
 		memset(&ksettings, 0, sizeof(ksettings));
 		phy_ethtool_get_link_ksettings(netdev, &ksettings);
 		local_advertisement =
-			ethtool_adv_to_mii_adv_t(phydev->advertising);
+			linkmode_adv_to_mii_adv_t(phydev->advertising);
 		remote_advertisement =
-			ethtool_adv_to_mii_adv_t(phydev->lp_advertising);
+			linkmode_adv_to_mii_adv_t(phydev->lp_advertising);
 
 		lan743x_phy_update_flowcontrol(adapter,
 					       ksettings.base.duplex,

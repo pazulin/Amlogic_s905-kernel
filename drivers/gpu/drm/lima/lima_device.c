@@ -292,14 +292,10 @@ int lima_device_init(struct lima_device *ldev)
 		goto err_out0;
 	}
 
-	err = lima_ttm_init(ldev);
-	if (err)
-		goto err_out1;
-
 	ldev->empty_vm = lima_vm_create(ldev);
 	if (!ldev->empty_vm) {
 		err = -ENOMEM;
-		goto err_out2;
+		goto err_out1;
 	}
 
 	ldev->va_start = 0;
@@ -310,7 +306,7 @@ int lima_device_init(struct lima_device *ldev)
 			&ldev->dlbu_dma, GFP_KERNEL);
 		if (!ldev->dlbu_cpu) {
 			err = -ENOMEM;
-			goto err_out3;
+			goto err_out2;
 		}
 	}
 	else
@@ -321,38 +317,36 @@ int lima_device_init(struct lima_device *ldev)
 	if (IS_ERR(ldev->iomem)) {
 		dev_err(ldev->dev, "fail to ioremap iomem\n");
 	        err = PTR_ERR(ldev->iomem);
-		goto err_out4;
+		goto err_out3;
 	}
 
 	for (i = 0; i < lima_ip_num; i++) {
 		err = lima_init_ip(ldev, i);
 		if (err)
-			goto err_out5;
+			goto err_out4;
 	}
 
 	err = lima_init_gp_pipe(ldev);
 	if (err)
-		goto err_out5;
+		goto err_out4;
 
 	err = lima_init_pp_pipe(ldev);
 	if (err)
-		goto err_out6;
+		goto err_out5;
 
 	return 0;
 
-err_out6:
-	lima_fini_gp_pipe(ldev);
 err_out5:
+	lima_fini_gp_pipe(ldev);
+err_out4:
 	while (--i >= 0)
 		lima_fini_ip(ldev, i);
-err_out4:
+err_out3:
 	if (ldev->dlbu_cpu)
 		dma_free_wc(ldev->dev, LIMA_PAGE_SIZE,
 			    ldev->dlbu_cpu, ldev->dlbu_dma);
-err_out3:
-	lima_vm_put(ldev->empty_vm);
 err_out2:
-	lima_ttm_fini(ldev);
+	lima_vm_put(ldev->empty_vm);
 err_out1:
 	lima_regulator_fini(ldev);
 err_out0:
@@ -375,8 +369,6 @@ void lima_device_fini(struct lima_device *ldev)
 			    ldev->dlbu_cpu, ldev->dlbu_dma);
 
 	lima_vm_put(ldev->empty_vm);
-
-	lima_ttm_fini(ldev);
 
 	lima_regulator_fini(ldev);
 

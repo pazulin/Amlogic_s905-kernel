@@ -9,8 +9,8 @@
 #include "lima_vm.h"
 #include "lima_regs.h"
 
-#define dlbu_write(reg, data) writel(data, ip->iomem + LIMA_DLBU_##reg)
-#define dlbu_read(reg) readl(ip->iomem + LIMA_DLBU_##reg)
+#define dlbu_write(reg, data) writel(data, ip->iomem + reg)
+#define dlbu_read(reg) readl(ip->iomem + reg)
 
 void lima_dlbu_enable(struct lima_device *dev, int num_pp)
 {
@@ -23,29 +23,29 @@ void lima_dlbu_enable(struct lima_device *dev, int num_pp)
 		mask |= 1 << (pp->id - lima_ip_pp0);
 	}
 
-	dlbu_write(PP_ENABLE_MASK, mask);
+	dlbu_write(LIMA_DLBU_PP_ENABLE_MASK, mask);
 }
 
 void lima_dlbu_disable(struct lima_device *dev)
 {
 	struct lima_ip *ip = dev->ip + lima_ip_dlbu;
-	dlbu_write(PP_ENABLE_MASK, 0);
+	dlbu_write(LIMA_DLBU_PP_ENABLE_MASK, 0);
 }
 
 void lima_dlbu_set_reg(struct lima_ip *ip, u32 *reg)
 {
-	dlbu_write(TLLIST_VBASEADDR, reg[0]);
-	dlbu_write(FB_DIM, reg[1]);
-	dlbu_write(TLLIST_CONF, reg[2]);
-	dlbu_write(START_TILE_POS, reg[3]);
+	dlbu_write(LIMA_DLBU_TLLIST_VBASEADDR, reg[0]);
+	dlbu_write(LIMA_DLBU_FB_DIM, reg[1]);
+	dlbu_write(LIMA_DLBU_TLLIST_CONF, reg[2]);
+	dlbu_write(LIMA_DLBU_START_TILE_POS, reg[3]);
 }
 
 int lima_dlbu_init(struct lima_ip *ip)
 {
 	struct lima_device *dev = ip->dev;
 
-	dlbu_write(MASTER_TLLIST_PHYS_ADDR, dev->dlbu_dma | 1);
-	dlbu_write(MASTER_TLLIST_VADDR, LIMA_VA_RESERVE_DLBU);
+	dlbu_write(LIMA_DLBU_MASTER_TLLIST_PHYS_ADDR, dev->dlbu_dma | 1);
+	dlbu_write(LIMA_DLBU_MASTER_TLLIST_VADDR, LIMA_VA_RESERVE_DLBU);
 
 	return 0;
 }

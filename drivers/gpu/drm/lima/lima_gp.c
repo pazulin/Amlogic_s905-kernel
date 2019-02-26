@@ -2,7 +2,7 @@
 /* Copyright 2017-2018 Qiang Yu <yuq825@gmail.com> */
 
 #include <linux/interrupt.h>
-#include <linux/io.h>
+#include <linux/iopoll.h>
 #include <linux/device.h>
 #include <linux/slab.h>
 
@@ -12,16 +12,16 @@
 #include "lima_gp.h"
 #include "lima_regs.h"
 
-#define gp_write(reg, data) writel(data, ip->iomem + LIMA_GP_##reg)
-#define gp_read(reg) readl(ip->iomem + LIMA_GP_##reg)
+#define gp_write(reg, data) writel(data, ip->iomem + reg)
+#define gp_read(reg) readl(ip->iomem + reg)
 
 static irqreturn_t lima_gp_irq_handler(int irq, void *data)
 {
 	struct lima_ip *ip = data;
 	struct lima_device *dev = ip->dev;
 	struct lima_sched_pipe *pipe = dev->pipe + lima_pipe_gp;
-	u32 state = gp_read(INT_STAT);
-	u32 status = gp_read(STATUS);
+	u32 state = gp_read(LIMA_GP_INT_STAT);
+	u32 status = gp_read(LIMA_GP_STATUS);
 	bool done = false;
 
 	/* for shared irq case */
@@ -33,7 +33,7 @@ static irqreturn_t lima_gp_irq_handler(int irq, void *data)
 			state, status);
 
 		/* mask all interrupts before hard reset */
-		gp_write(INT_MASK, 0);
+		gp_write(LIMA_GP_INT_MASK, 0);
 
 		pipe->error = true;
 		done = true;
@@ -46,7 +46,7 @@ static irqreturn_t lima_gp_irq_handler(int irq, void *data)
 		done = valid && !active;
 	}
 
-	gp_write(INT_CLEAR, state);
+	gp_write(LIMA_GP_INT_CLEAR, state);
 
 	if (done)
 		lima_sched_pipe_task_done(pipe);
@@ -59,31 +59,31 @@ static void lima_gp_soft_reset_async(struct lima_ip *ip)
 	if (ip->data.async_reset)
 		return;
 
-	gp_write(INT_MASK, 0);
-	gp_write(INT_CLEAR, LIMA_GP_IRQ_RESET_COMPLETED);
-	gp_write(CMD, LIMA_GP_CMD_SOFT_RESET);
+	gp_write(LIMA_GP_INT_MASK, 0);
+	gp_write(LIMA_GP_INT_CLEAR, LIMA_GP_IRQ_RESET_COMPLETED);
+	gp_write(LIMA_GP_CMD, LIMA_GP_CMD_SOFT_RESET);
 	ip->data.async_reset = true;
 }
 
 static int lima_gp_soft_reset_async_wait(struct lima_ip *ip)
 {
 	struct lima_device *dev = ip->dev;
-	int timeout;
+	int err;
+	u32 v;
 
 	if (!ip->data.async_reset)
 		return 0;
 
-	for (timeout = 1000; timeout > 0; timeout--) {
-		if (gp_read(INT_RAWSTAT) & LIMA_GP_IRQ_RESET_COMPLETED)
-			break;
-	}
-	if (!timeout) {
+	err = readl_poll_timeout(ip->iomem + LIMA_GP_INT_RAWSTAT, v,
+				 v & LIMA_GP_IRQ_RESET_COMPLETED,
+				 0, 100);
+	if (err) {
 		dev_err(dev->dev, "gp soft reset time out\n");
-		return -ETIMEDOUT;
+		return err;
 	}
 
-	gp_write(INT_CLEAR, LIMA_GP_IRQ_MASK_ALL);
-	gp_write(INT_MASK, LIMA_GP_IRQ_MASK_USED);
+	gp_write(LIMA_GP_INT_CLEAR, LIMA_GP_IRQ_MASK_ALL);
+	gp_write(LIMA_GP_INT_MASK, LIMA_GP_IRQ_MASK_USED);
 
 	ip->data.async_reset = false;
 	return 0;
@@ -135,31 +135,33 @@ static void lima_gp_task_run(struct lima_sched_pipe *pipe,
 	for (i = 0; i < LIMA_GP_FRAME_REG_NUM; i++)
 		writel(f[i], ip->iomem + LIMA_GP_VSCL_START_ADDR + i * 4);
 
-	gp_write(CMD, LIMA_GP_CMD_UPDATE_PLBU_ALLOC);
-	gp_write(CMD, cmd);
+	gp_write(LIMA_GP_CMD, LIMA_GP_CMD_UPDATE_PLBU_ALLOC);
+	gp_write(LIMA_GP_CMD, cmd);
+}
+
+static int lima_gp_hard_reset_poll(struct lima_ip *ip)
+{
+	gp_write(LIMA_GP_PERF_CNT_0_LIMIT, 0xC01A0000);
+	return gp_read(LIMA_GP_PERF_CNT_0_LIMIT) == 0xC01A0000;
 }
 
 static int lima_gp_hard_reset(struct lima_ip *ip)
 {
 	struct lima_device *dev = ip->dev;
-	int timeout;
+	int ret;
 
-	gp_write(PERF_CNT_0_LIMIT, 0xC0FFE000);
-	gp_write(INT_MASK, 0);
-	gp_write(CMD, LIMA_GP_CMD_RESET);
-	for (timeout = 1000; timeout > 0; timeout--) {
-		gp_write(PERF_CNT_0_LIMIT, 0xC01A0000);
-		if (gp_read(PERF_CNT_0_LIMIT) == 0xC01A0000)
-			break;
-	}
-	if (!timeout) {
+	gp_write(LIMA_GP_PERF_CNT_0_LIMIT, 0xC0FFE000);
+	gp_write(LIMA_GP_INT_MASK, 0);
+	gp_write(LIMA_GP_CMD, LIMA_GP_CMD_RESET);
+	ret = lima_poll_timeout(ip, lima_gp_hard_reset_poll, 10, 100);
+	if (ret) {
 		dev_err(dev->dev, "gp hard reset timeout\n");
-		return -ETIMEDOUT;
+		return ret;
 	}
 
-	gp_write(PERF_CNT_0_LIMIT, 0);
-	gp_write(INT_CLEAR, LIMA_GP_IRQ_MASK_ALL);
-	gp_write(INT_MASK, LIMA_GP_IRQ_MASK_USED);
+	gp_write(LIMA_GP_PERF_CNT_0_LIMIT, 0);
+	gp_write(LIMA_GP_INT_CLEAR, LIMA_GP_IRQ_MASK_ALL);
+	gp_write(LIMA_GP_INT_MASK, LIMA_GP_IRQ_MASK_USED);
 	return 0;
 }
 
@@ -173,7 +175,7 @@ static void lima_gp_task_error(struct lima_sched_pipe *pipe)
 	struct lima_ip *ip = pipe->processor[0];
 
 	dev_err(ip->dev->dev, "gp task error int_state=%x status=%x\n",
-		gp_read(INT_STAT), gp_read(STATUS));
+		gp_read(LIMA_GP_INT_STAT), gp_read(LIMA_GP_STATUS));
 
 	lima_gp_hard_reset(ip);
 }
@@ -188,7 +190,7 @@ static void lima_gp_print_version(struct lima_ip *ip)
 	u32 version, major, minor;
 	char *name;
 
-	version = gp_read(VERSION);
+	version = gp_read(LIMA_GP_VERSION);
 	major = (version >> 8) & 0xFF;
 	minor = version & 0xFF;
 	switch (version >> 16) {

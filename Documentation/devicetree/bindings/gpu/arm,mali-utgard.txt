@@ -11,6 +11,7 @@ Required properties:
       + allwinner,sun4i-a10-mali
       + allwinner,sun7i-a20-mali
       + allwinner,sun8i-h3-mali
+      + allwinner,sun50i-a64-mali
       + allwinner,sun50i-h5-mali
       + amlogic,meson-gxbb-mali
       + amlogic,meson-gxl-mali
@@ -58,10 +59,6 @@ Optional properties:
     A power domain consumer specifier as defined in
     Documentation/devicetree/bindings/power/power_domain.txt
 
-  - switch-delay:
-    This value is the number of Mali clock cycles it takes to
-    enable the power gates and turn on the power mesh.
-
 Vendor-specific bindings
 ------------------------
 
@@ -74,6 +71,10 @@ to specify one more vendor-specific compatible, among:
       * resets: phandle to the reset line for the GPU
 
   - allwinner,sun7i-a20-mali
+    Required properties:
+      * resets: phandle to the reset line for the GPU
+
+  - allwinner,sun50i-a64-mali
     Required properties:
       * resets: phandle to the reset line for the GPU
 

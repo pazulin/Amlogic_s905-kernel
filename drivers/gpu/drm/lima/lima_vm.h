@@ -4,7 +4,7 @@
 #ifndef __LIMA_VM_H__
 #define __LIMA_VM_H__
 
-#include <linux/rbtree.h>
+#include <drm/drm_mm.h>
 #include <linux/kref.h>
 
 #define LIMA_PAGE_SIZE    4096
@@ -19,26 +19,29 @@
 #define LIMA_VA_RESERVE_DLBU   LIMA_VA_RESERVE_START
 #define LIMA_VA_RESERVE_END    0x100000000
 
-struct lima_bo;
 struct lima_device;
 
+struct lima_vm_page {
+	u32 *cpu;
+	dma_addr_t dma;
+};
+
 struct lima_vm {
+	struct mutex lock;
 	struct kref refcount;
 
-	/* tree of virtual addresses mapped */
-	struct rb_root_cached va;
+	struct drm_mm mm;
 
 	struct lima_device *dev;
 
-	struct lima_bo *pd;
-	struct lima_bo *bts[LIMA_VM_NUM_BT];
+	struct lima_vm_page pd;
+	struct lima_vm_page bts[LIMA_VM_NUM_BT];
 };
 
-int lima_vm_bo_map(struct lima_vm *vm, struct lima_bo *bo, u32 start);
-int lima_vm_bo_unmap(struct lima_vm *vm, struct lima_bo *bo, u32 start);
-
 int lima_vm_bo_add(struct lima_vm *vm, struct lima_bo *bo);
-int lima_vm_bo_del(struct lima_vm *vm, struct lima_bo *bo);
+void lima_vm_bo_del(struct lima_vm *vm, struct lima_bo *bo);
+
+u32 lima_vm_get_va(struct lima_vm *vm, struct lima_bo *bo);
 
 struct lima_vm *lima_vm_create(struct lima_device *dev);
 void lima_vm_release(struct kref *kref);

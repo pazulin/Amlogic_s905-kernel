@@ -9,6 +9,7 @@
 #include "lima_vm.h"
 #include "lima_mmu.h"
 #include "lima_l2_cache.h"
+#include "lima_object.h"
 
 struct lima_fence {
 	struct dma_fence base;
@@ -106,21 +107,45 @@ static inline struct lima_sched_pipe *to_lima_pipe(struct drm_gpu_scheduler *sch
 
 int lima_sched_task_init(struct lima_sched_task *task,
 			 struct lima_sched_context *context,
+			 struct lima_bo **bos, int num_bos,
 			 struct lima_vm *vm)
 {
 	int err;
 
-	err = drm_sched_job_init(&task->base, &context->base, vm);
-	if (err)
-		return err;
+	task->bos = kmalloc(sizeof(*bos) * num_bos, GFP_KERNEL);
+	if (!task->bos)
+		return -ENOMEM;
+	memcpy(task->bos, bos, sizeof(*bos) * num_bos);
 
+	err = drm_sched_job_init(&task->base, &context->base, vm);
+	if (err) {
+		kfree(task->bos);
+		return err;
+	}
+
+	task->num_bos = num_bos;
 	task->vm = lima_vm_get(vm);
 	return 0;
 }
 
 void lima_sched_task_fini(struct lima_sched_task *task)
 {
-	dma_fence_put(&task->base.s_fence->finished);
+	int i;
+
+	drm_sched_job_cleanup(&task->base);
+
+	for (i = 0; i < task->num_dep; i++) {
+		if (task->dep[i])
+			dma_fence_put(task->dep[i]);
+	}
+
+	if (task->dep)
+		kfree(task->dep);
+
+	if (task->bos)
+		kfree(task->bos);
+
+	lima_vm_put(task->vm);
 }
 
 int lima_sched_task_add_dep(struct lima_sched_task *task, struct dma_fence *fence)
@@ -162,113 +187,23 @@ int lima_sched_context_init(struct lima_sched_pipe *pipe,
 			    atomic_t *guilty)
 {
 	struct drm_sched_rq *rq = pipe->base.sched_rq + DRM_SCHED_PRIORITY_NORMAL;
-	int err;
 
-	context->fences =
-		kzalloc(sizeof(*context->fences) * lima_sched_max_tasks, GFP_KERNEL);
-	if (!context->fences)
-		return -ENOMEM;
-
-	mutex_init(&context->lock);
-	err = drm_sched_entity_init(&context->base, &rq, 1, guilty);
-	if (err) {
-		kfree(context->fences);
-		context->fences = NULL;
-		return err;
-	}
-
-	return 0;
+	return drm_sched_entity_init(&context->base, &rq, 1, guilty);
 }
 
 void lima_sched_context_fini(struct lima_sched_pipe *pipe,
 			     struct lima_sched_context *context)
 {
 	drm_sched_entity_fini(&context->base);
-
-	mutex_destroy(&context->lock);
-
-	if (context->fences) {
-		int i;
-		for (i = 0; i < lima_sched_max_tasks; i++)
-			dma_fence_put(context->fences[i]);
-		kfree(context->fences);
-	}
 }
 
-static uint32_t lima_sched_context_add_fence(struct lima_sched_context *context,
-					     struct dma_fence *fence,
-					     uint32_t *done)
+struct dma_fence *lima_sched_context_queue_task(struct lima_sched_context *context,
+						struct lima_sched_task *task)
 {
-	uint32_t seq, idx, i;
-	struct dma_fence *other;
+	struct dma_fence *fence = dma_fence_get(&task->base.s_fence->finished);
 
-	mutex_lock(&context->lock);
-
-	seq = context->sequence;
-	idx = seq & (lima_sched_max_tasks - 1);
-	other = context->fences[idx];
-
-	if (other) {
-		int err = dma_fence_wait(other, false);
-		if (err)
-			DRM_ERROR("Error %d waiting context fence\n", err);
-	}
-
-	context->fences[idx] = dma_fence_get(fence);
-	context->sequence++;
-
-	/* get finished fence offset from seq */
-	for (i = 1; i < lima_sched_max_tasks; i++) {
-		idx = (seq - i) & (lima_sched_max_tasks - 1);
-		if (!context->fences[idx] ||
-		    dma_fence_is_signaled(context->fences[idx]))
-			break;
-	}
-
-	mutex_unlock(&context->lock);
-
-	dma_fence_put(other);
-
-	*done = i;
-	return seq;
-}
-
-struct dma_fence *lima_sched_context_get_fence(
-	struct lima_sched_context *context, uint32_t seq)
-{
-	struct dma_fence *fence;
-	int idx;
-	uint32_t max, min;
-
-	mutex_lock(&context->lock);
-
-	max = context->sequence - 1;
-	min = context->sequence - lima_sched_max_tasks;
-
-	/* handle overflow case */
-	if ((min < max && (seq < min || seq > max)) ||
-	    (min > max && (seq < min && seq > max))) {
-		    fence = NULL;
-		    goto out;
-	}
-
-	idx = seq & (lima_sched_max_tasks - 1);
-	fence = dma_fence_get(context->fences[idx]);
-
-out:
-	mutex_unlock(&context->lock);
-
-	return fence;
-}
-
-uint32_t lima_sched_context_queue_task(struct lima_sched_context *context,
-				       struct lima_sched_task *task,
-				       uint32_t *done)
-{
-	uint32_t seq = lima_sched_context_add_fence(
-		context, &task->base.s_fence->finished, done);
 	drm_sched_entity_push_job(&task->base, &context->base);
-	return seq;
+	return fence;
 }
 
 static struct dma_fence *lima_sched_dependency(struct drm_sched_job *job,
@@ -398,19 +333,18 @@ static void lima_sched_free_job(struct drm_sched_job *job)
 {
 	struct lima_sched_task *task = to_lima_task(job);
 	struct lima_sched_pipe *pipe = to_lima_pipe(job->sched);
+	struct lima_vm *vm = task->vm;
+	struct lima_bo **bos = task->bos;
 	int i;
 
 	dma_fence_put(task->fence);
 
-	for (i = 0; i < task->num_dep; i++) {
-		if (task->dep[i])
-			dma_fence_put(task->dep[i]);
+	for (i = 0; i < task->num_bos; i++) {
+		lima_vm_bo_del(vm, bos[i]);
+		drm_gem_object_put_unlocked(&bos[i]->gem);
 	}
 
-	if (task->dep)
-		kfree(task->dep);
-
-	lima_vm_put(task->vm);
+	lima_sched_task_fini(task);
 	kmem_cache_free(pipe->task_slab, task);
 }
 
@@ -450,27 +384,6 @@ int lima_sched_pipe_init(struct lima_sched_pipe *pipe, const char *name)
 void lima_sched_pipe_fini(struct lima_sched_pipe *pipe)
 {
 	drm_sched_fini(&pipe->base);
-}
-
-unsigned long lima_timeout_to_jiffies(u64 timeout_ns)
-{
-	unsigned long timeout_jiffies;
-	ktime_t timeout;
-
-	/* clamp timeout if it's to large */
-	if (((s64)timeout_ns) < 0)
-		return MAX_SCHEDULE_TIMEOUT;
-
-	timeout = ktime_sub(ns_to_ktime(timeout_ns), ktime_get());
-	if (ktime_to_ns(timeout) < 0)
-		return 0;
-
-	timeout_jiffies = nsecs_to_jiffies(ktime_to_ns(timeout));
-	/*  clamp timeout to avoid unsigned-> signed overflow */
-	if (timeout_jiffies > MAX_SCHEDULE_TIMEOUT )
-		return MAX_SCHEDULE_TIMEOUT;
-
-	return timeout_jiffies;
 }
 
 void lima_sched_pipe_task_done(struct lima_sched_pipe *pipe)

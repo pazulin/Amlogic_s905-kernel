@@ -18,15 +18,15 @@ struct lima_sched_task {
 	int num_dep;
 	int max_dep;
 
+	struct lima_bo **bos;
+	int num_bos;
+
 	/* pipe fence */
 	struct dma_fence *fence;
 };
 
 struct lima_sched_context {
 	struct drm_sched_entity base;
-	struct mutex lock;
-	struct dma_fence **fences;
-	uint32_t sequence;
 };
 
 #define LIMA_SCHED_PIPE_MAX_MMU       8
@@ -75,6 +75,7 @@ struct lima_sched_pipe {
 
 int lima_sched_task_init(struct lima_sched_task *task,
 			 struct lima_sched_context *context,
+			 struct lima_bo **bos, int num_bos,
 			 struct lima_vm *vm);
 void lima_sched_task_fini(struct lima_sched_task *task);
 int lima_sched_task_add_dep(struct lima_sched_task *task, struct dma_fence *fence);
@@ -84,11 +85,8 @@ int lima_sched_context_init(struct lima_sched_pipe *pipe,
 			    atomic_t *guilty);
 void lima_sched_context_fini(struct lima_sched_pipe *pipe,
 			     struct lima_sched_context *context);
-uint32_t lima_sched_context_queue_task(struct lima_sched_context *context,
-				       struct lima_sched_task *task,
-				       uint32_t *done);
-struct dma_fence *lima_sched_context_get_fence(
-	struct lima_sched_context *context, uint32_t seq);
+struct dma_fence *lima_sched_context_queue_task(struct lima_sched_context *context,
+						struct lima_sched_task *task);
 
 int lima_sched_pipe_init(struct lima_sched_pipe *pipe, const char *name);
 void lima_sched_pipe_fini(struct lima_sched_pipe *pipe);
@@ -102,7 +100,5 @@ static inline void lima_sched_pipe_mmu_error(struct lima_sched_pipe *pipe)
 
 int lima_sched_slab_init(void);
 void lima_sched_slab_fini(void);
-
-unsigned long lima_timeout_to_jiffies(u64 timeout_ns);
 
 #endif

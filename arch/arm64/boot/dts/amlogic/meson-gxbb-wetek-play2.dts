@@ -8,6 +8,7 @@
 
 #include "meson-gxbb-wetek.dtsi"
 #include <dt-bindings/input/input.h>
+
 / {
 	compatible = "wetek,play2", "amlogic,meson-gxbb";
 	model = "WeTek Play 2";
@@ -38,66 +39,10 @@
 			gpios = <&gpio_ao GPIOAO_3 GPIO_ACTIVE_LOW>;
 		};
 	};
-	clock: meson_clock {
-		compatible = "amlogic, gxbb-clock";
-		reg = <0x0 0xc883c000 0x0 0x1000>,   /* HIU BUS*/
-		          <0x0 0xc8100000 0x0 0x1000>;   //AOBUS
-		#clock-cells = <1>;
-		#reset-cells = <1>;
-		sys_max = <1536000000>;
-	};
-	dvb {
-		compatible = "amlogic,dvb";
-		reg = <0x0 0xc1108c40 0x0 0x20>,
-		      <0x0 0xc1105800 0x0 0x3c0>;
-		reg-names = "afifo", "stbtop";
-		dev_name = "wetek-dvb";
-		status = "okay";
-		fec_reset_gpio-gpios0 = <&gpio GPIOY_13 GPIO_ACTIVE_HIGH>;
-		power_ctrl_gpio-gpios0 = <&gpio GPIOY_15 GPIO_ACTIVE_LOW>;
-		//"parallel","serial","disable"
-		ts0 = "parallel";
-		ts0_control = <0>;
-		ts0_invert = <0>;
-		dtv_demod0_i2c_adap_id = <0>;
-		pinctrl-0 = <&dvb_p_ts0_pins>;
-		pinctrl-1 = <&dvb_s_ts0_pins>;
-		pinctrl-names = "p_ts0", "s_ts0";
-		clocks = <&clkc CLKID_DEMUX>,
-			 <&clkc CLKID_ASYNC_FIFO>,
-			 <&clkc CLKID_AHB_ARB0>,
-			 <&clkc CLKID_DOS_PARSER>;
-		clock-names = "demux", "asyncfifo", "ahbarb0", "uparsertop";
-		resets = <&reset RESET_PERIPHS_ASYNC_0>,
-			 <&reset RESET_DEMUX>,
-			 <&reset RESET_DEMUX_RESET_0>;
-		reset-names = "async0", "demux", "demuxreset0";
-		interrupts = <GIC_SPI 23 IRQ_TYPE_EDGE_RISING>,
-			     <GIC_SPI 19 IRQ_TYPE_EDGE_RISING>;
-		interrupt-names = "demux0", "asyncfifo0";
-	};
-};
-
-&periphs {
-	pinctrl_periphs:pinctrl@4b0 {
-		dvb_p_ts0_pins: dvb_p_ts0 {
-			mux {
-				groups = "tsin_a_d_valid", "tsin_a_sop", "tsin_a_clk", "tsin_a_d0", "tsin_a_dp";
-				function = "tsin_a";
-			};
-		};
-		dvb_s_ts0_pins: dvb_s_ts0 {
-			mux {
-				groups = "tsin_a_d_valid", "tsin_a_sop", "tsin_a_clk", "tsin_a_d0"; 
-				function = "tsin_a";
-			};
-		};
-	};
 };
 
 &i2c_A {
 	status = "okay";
-	clock-frequency = <300000>;
 	pinctrl-0 = <&i2c_a_pins>;
 	pinctrl-names = "default";
 };
@@ -108,8 +53,4 @@
 
 &usb1 {
 	status = "okay";
-};
-
-&usb_pwr {
-		gpio = <>;
 };
