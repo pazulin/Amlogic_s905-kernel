@@ -87,7 +87,7 @@ static int btsdio_tx_packet(struct btsdio_data *data, struct sk_buff *skb)
 	skb->data[0] = (skb->len & 0x0000ff);
 	skb->data[1] = (skb->len & 0x00ff00) >> 8;
 	skb->data[2] = (skb->len & 0xff0000) >> 16;
-	skb->data[3] = hci_skb_pkt_type(skb);
+	skb->data[3] = bt_cb(skb)->pkt_type;
 
 	err = sdio_writesb(data->func, REG_TDAT, skb->data, skb->len);
 	if (err < 0) {
@@ -145,8 +145,7 @@ static int btsdio_rx_packet(struct btsdio_data *data)
 	if (!skb) {
 		/* Out of memory. Prepare a read retry and just
 		 * return with the expectation that the next time
-		 * we're called we'll have more memory.
-		 */
+		 * we're called we'll have more memory. */
 		return -ENOMEM;
 	}
 
@@ -160,7 +159,7 @@ static int btsdio_rx_packet(struct btsdio_data *data)
 
 	data->hdev->stat.byte_rx += len;
 
-	hci_skb_pkt_type(skb) = hdr[3];
+	bt_cb(skb)->pkt_type = hdr[3];
 
 	err = hci_recv_frame(data->hdev, skb);
 	if (err < 0)
@@ -254,7 +253,7 @@ static int btsdio_send_frame(struct hci_dev *hdev, struct sk_buff *skb)
 
 	BT_DBG("%s", hdev->name);
 
-	switch (hci_skb_pkt_type(skb)) {
+	switch (bt_cb(skb)->pkt_type) {
 	case HCI_COMMAND_PKT:
 		hdev->stat.cmd_tx++;
 		break;
@@ -293,17 +292,13 @@ static int btsdio_probe(struct sdio_func *func,
 		tuple = tuple->next;
 	}
 
-	/* Broadcom devices soldered onto the PCB (non-removable) use an
-	 * UART connection for Bluetooth, ignore the BT SDIO interface.
+	/* BCM43341 devices soldered onto the PCB (non-removable) use an
+	 * uart connection for bluetooth, ignore the BT SDIO interface.
 	 */
 	if (func->vendor == SDIO_VENDOR_ID_BROADCOM &&
-	    !mmc_card_is_removable(func->card->host)) {
-		switch (func->device) {
-		case SDIO_DEVICE_ID_BROADCOM_43341:
-		case SDIO_DEVICE_ID_BROADCOM_43430:
-			return -ENODEV;
-		}
-	}
+	    func->device == SDIO_DEVICE_ID_BROADCOM_43341 &&
+	    !mmc_card_is_removable(func->card->host))
+		return -ENODEV;
 
 	data = devm_kzalloc(&func->dev, sizeof(*data), GFP_KERNEL);
 	if (!data)
@@ -325,7 +320,7 @@ static int btsdio_probe(struct sdio_func *func,
 	if (id->class == SDIO_CLASS_BT_AMP)
 		hdev->dev_type = HCI_AMP;
 	else
-		hdev->dev_type = HCI_PRIMARY;
+		hdev->dev_type = HCI_BREDR;
 
 	data->hdev = hdev;
 
