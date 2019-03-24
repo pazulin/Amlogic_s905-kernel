@@ -381,9 +381,15 @@ struct page **drm_gem_get_pages(struct drm_gem_object *obj);
 void drm_gem_put_pages(struct drm_gem_object *obj, struct page **pages,
 		bool dirty, bool accessed);
 
+int drm_gem_objects_lookup(struct drm_file *filp, u32 *handle, int count,
+			   struct drm_gem_object **objs);
 struct drm_gem_object *drm_gem_object_lookup(struct drm_file *filp, u32 handle);
 long drm_gem_reservation_object_wait(struct drm_file *filep, u32 handle,
 				    bool wait_all, unsigned long timeout);
+int drm_gem_lock_reservations(struct drm_gem_object **objs, int count,
+			      struct ww_acquire_ctx *acquire_ctx);
+void drm_gem_unlock_reservations(struct drm_gem_object **objs, int count,
+				 struct ww_acquire_ctx *acquire_ctx);
 int drm_gem_dumb_map_offset(struct drm_file *file, struct drm_device *dev,
 			    u32 handle, u64 *offset);
 int drm_gem_dumb_destroy(struct drm_file *file,
