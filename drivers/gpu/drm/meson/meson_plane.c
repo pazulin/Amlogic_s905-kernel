@@ -38,6 +38,7 @@
 #include "meson_plane.h"
 #include "meson_vpp.h"
 #include "meson_viu.h"
+#include "meson_canvas.h"
 #include "meson_registers.h"
 
 /* OSD_SCI_WH_M1 */
@@ -147,7 +148,10 @@ static void meson_plane_atomic_update(struct drm_plane *plane,
 				   (0xFF << OSD_GLOBAL_ALPHA_SHIFT) |
 				   OSD_BLK0_ENABLE;
 
-	canvas_id_osd1 = priv->canvas_id_osd1;
+	if (priv->canvas)
+		canvas_id_osd1 = priv->canvas_id_osd1;
+	else
+		canvas_id_osd1 = MESON_CANVAS_ID_OSD1;
 
 	/* Set up BLK0 to point to the right canvas */
 	priv->viu.osd1_blk0_cfg[0] = ((canvas_id_osd1 << OSD_CANVAS_SEL) |
@@ -294,13 +298,6 @@ static void meson_plane_atomic_update(struct drm_plane *plane,
 	priv->viu.osd1_blk0_cfg[3] = ((dest.x2 - 1) << 16) | dest.x1;
 	priv->viu.osd1_blk0_cfg[4] = ((dest.y2 - 1) << 16) | dest.y1;
 
-	if (meson_vpu_is_compatible(priv, "amlogic,meson-g12a-vpu")) {
-		priv->viu.osd_blend_din0_scope_h = ((dest.x2 - 1) << 16) | dest.x1;
-		priv->viu.osd_blend_din0_scope_v = ((dest.y2 - 1) << 16) | dest.y1;
-		priv->viu.osb_blend0_size = dst_h << 16 | dst_w;
-		priv->viu.osb_blend1_size = dst_h << 16 | dst_w;
-	}
-
 	/* Update Canvas with buffer address */
 	gem = drm_fb_cma_get_gem_obj(fb, 0);
 
@@ -327,12 +324,8 @@ static void meson_plane_atomic_disable(struct drm_plane *plane,
 	struct meson_drm *priv = meson_plane->priv;
 
 	/* Disable OSD1 */
-	if (meson_vpu_is_compatible(priv, "amlogic,meson-g12a-vpu"))
-		writel_bits_relaxed(BIT(0) | BIT(21), 0,
-			priv->io_base + _REG(VIU_OSD1_CTRL_STAT));
-	else
-		writel_bits_relaxed(VPP_OSD1_POSTBLEND, 0,
-				    priv->io_base + _REG(VPP_MISC));
+	writel_bits_relaxed(VPP_OSD1_POSTBLEND, 0,
+			    priv->io_base + _REG(VPP_MISC));
 
 	meson_plane->enabled = false;
 
