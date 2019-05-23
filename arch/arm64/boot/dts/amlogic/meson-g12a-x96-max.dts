@@ -29,19 +29,10 @@
 	chosen {
 		stdout-path = "serial0:115200n8";
 	};
+
 	memory@0 {
 		device_type = "memory";
 		reg = <0x0 0x0 0x0 0x40000000>;
-	};
-
-	cvbs-connector {
-		compatible = "composite-video-connector";
-
-		port {
-			cvbs_connector_in: endpoint {
-				remote-endpoint = <&cvbs_vdac_out>;
-			};
-		};
 	};
 
 	hdmi-connector {
@@ -51,6 +42,16 @@
 		port {
 			hdmi_connector_in: endpoint {
 				remote-endpoint = <&hdmi_tx_tmds_out>;
+			};
+		};
+	};
+
+	cvbs-connector {
+		compatible = "composite-video-connector";
+
+		port {
+			cvbs_connector_in: endpoint {
+				remote-endpoint = <&cvbs_vdac_out>;
 			};
 		};
 	};
