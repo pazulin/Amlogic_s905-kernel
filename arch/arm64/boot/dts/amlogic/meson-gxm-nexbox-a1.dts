@@ -57,6 +57,7 @@
 
 	cvbs-connector {
 		compatible = "composite-video-connector";
+		status = "disabled";
 
 		port {
 			cvbs_connector_in: endpoint {
@@ -92,15 +93,11 @@
 			/* HDMI Output */
 			format = "i2s";
 			mclk-fs = <256>;
-			bitclock-master = <&i2s_dai>;
-			frame-master = <&i2s_dai>;
-
-			plat {
-				sound-dai = <&aiu_i2s_dma>;
-			};
+			bitclock-master = <&aiu_i2s>;
+			frame-master = <&aiu_i2s>;
 
 			cpu {
-				sound-dai = <&i2s_dai>;
+				sound-dai = <&aiu_i2s>;
 			};
 
 			codec {
@@ -121,7 +118,7 @@
 	status = "okay";
 };
 
-&aiu_i2s_dma {
+&aiu_i2s {
 	status = "okay";
 };
 
@@ -170,10 +167,6 @@
 	};
 };
 
-&i2s_dai {
-	status = "okay";
-};
-
 &ir {
 	status = "okay";
 	pinctrl-0 = <&remote_input_ao_pins>;
@@ -192,8 +185,7 @@
 	max-frequency = <100000000>;
 	disable-wp;
 
-	cd-gpios = <&gpio CARD_6 GPIO_ACTIVE_HIGH>;
-	cd-inverted;
+	cd-gpios = <&gpio CARD_6 GPIO_ACTIVE_LOW>;
 
 	vmmc-supply = <&vddao_3v3>;
 	vqmmc-supply = <&vddio_boot>;
@@ -223,4 +215,8 @@
 	status = "okay";
 	pinctrl-0 = <&uart_ao_a_pins>;
 	pinctrl-names = "default";
+};
+
+&usb0 {
+	status = "okay";
 };

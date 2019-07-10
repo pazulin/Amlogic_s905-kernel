@@ -18,7 +18,6 @@
 
 	aliases {
 		serial0 = &uart_AO;
-		serial1 = &uart_A;
 		serial2 = &uart_AO_B;
 	};
 
@@ -63,8 +62,6 @@
 
 	gpio-keys-polled {
 		compatible = "gpio-keys-polled";
-		#address-cells = <1>;
-		#size-cells = <0>;
 		poll-interval = <100>;
 
 		button@0 {
@@ -87,7 +84,7 @@
 
 	sound {
 		compatible = "simple-audio-card";
-		simple-audio-card,name = "meson-gx-audio";
+		simple-audio-card,name = "HDMI";
 
 		assigned-clocks = <&clkc CLKID_MPLL2>,
 				  <&clkc CLKID_MPLL0>,
@@ -101,15 +98,11 @@
 			/* HDMI Output */
 			format = "i2s";
 			mclk-fs = <256>;
-			bitclock-master = <&i2s_dai>;
-			frame-master = <&i2s_dai>;
-
-			plat {
-				sound-dai = <&aiu_i2s_dma>;
-			};
+			bitclock-master = <&aiu_i2s>;
+			frame-master = <&aiu_i2s>;
 
 			cpu {
-				sound-dai = <&i2s_dai>;
+				sound-dai = <&aiu_i2s>;
 			};
 
 			codec {
@@ -165,19 +158,15 @@
 
 				map1 {
 					trip = <&cpu_alert1>;
-					cooling-device = <&gpio_fan 2 THERMAL_NO_LIMIT>;
-				};
-
-				map2 {
-					trip = <&cpu_alert1>;
-					cooling-device =
-						<&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
-				};
-
-				map3 {
-					trip = <&cpu_alert1>;
-					cooling-device =
-						<&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
+					cooling-device = <&gpio_fan 2 THERMAL_NO_LIMIT>,
+							 <&cpu0 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&cpu1 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&cpu2 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&cpu3 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&cpu4 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&cpu5 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&cpu6 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>,
+							 <&cpu7 THERMAL_NO_LIMIT THERMAL_NO_LIMIT>;
 				};
 			};
 		};
@@ -229,6 +218,58 @@
 		clock-frequency = <32768>;
 		pwms = <&pwm_ef 0 30518 0>; /* PWM_E at 32.768KHz */
 	};
+	dvb {
+		compatible = "amlogic,dvb";
+		reg = <0x0 0xc1108c40 0x0 0x20>,
+		      <0x0 0xc1105800 0x0 0x3c0>;
+		reg-names = "afifo", "stbtop";
+		dev_name = "avl6862";
+		status = "okay";
+		fec_reset_gpio-gpios = <&gpio GPIODV_12 GPIO_ACTIVE_HIGH>;
+		power_ctrl_gpio-gpios = <&gpio GPIODV_20 GPIO_ACTIVE_LOW>;
+		lock_led_gpio-gpios = <&gpio GPIODV_11 GPIO_ACTIVE_HIGH>;
+		//"parallel","serial","disable"
+		ts0 = "serial";
+		ts0_control = <0>;
+		ts0_invert = <0>;
+		dtv_demod0_i2c_adap_id = <1>;
+		pinctrl-0 = <&dvb_s_ts0_pins>;
+		pinctrl-1 = <&dvb_s_ts1_pins>;
+		pinctrl-names = "s_ts0", "s_ts1";
+		clocks = <&clkc CLKID_DEMUX>,
+			 <&clkc CLKID_ASYNC_FIFO>,
+			 <&clkc CLKID_AHB_ARB0>,
+			 <&clkc CLKID_DOS_PARSER>;
+		clock-names = "demux", "asyncfifo", "ahbarb0", "uparsertop";
+		resets = <&reset RESET_PERIPHS_ASYNC_0>,
+			<&reset RESET_PERIPHS_ASYNC_1>,
+			 <&reset RESET_DEMUX>,
+			 <&reset RESET_DEMUX_RESET_0>,
+			 <&reset RESET_DEMUX_RESET_1>;
+		reset-names = "async0", "async1", "demux", "demuxreset0", "demuxreset1";
+		interrupts = <GIC_SPI 23 IRQ_TYPE_EDGE_RISING>,
+			     <GIC_SPI 53 IRQ_TYPE_EDGE_RISING>,
+			     <GIC_SPI 19 IRQ_TYPE_EDGE_RISING>,
+			     <GIC_SPI 25 IRQ_TYPE_EDGE_RISING>;
+		interrupt-names = "demux0", "demux1", "asyncfifo0", "asyncfifo1";
+	};
+};
+
+&periphs {
+	pinctrl_periphs:pinctrl@4b0 {
+		dvb_s_ts0_pins: dvb_s_ts0 {
+			mux {
+				groups = "tsin_a_d_valid", "tsin_a_sop", "tsin_a_clk", "tsin_a_d0";
+				function = "tsin_a";
+			};
+		};
+		dvb_s_ts1_pins: dvb_s_ts1 {
+			mux {
+				groups = "tsin_b_d_valid", "tsin_b_sop", "tsin_b_clk", "tsin_b_d0";
+				function = "tsin_b";
+			};
+		};
+	};
 };
 
 &cec_AO {
@@ -242,7 +283,7 @@
 	status = "okay";
 };
 
-&aiu_i2s_dma {
+&aiu_i2s {
 	status = "okay";
 };
 
@@ -305,6 +346,7 @@
 		interrupt-parent = <&gpio_intc>;
 		/* MAC_INTR on GPIOZ_15 */
 		interrupts = <25 IRQ_TYPE_LEVEL_LOW>;
+		eee-broken-1000t;
 	};
 };
 
@@ -321,10 +363,6 @@
 	};
 };
 
-&i2s_dai {
-	status = "okay";
-};
-
 &i2c_A {
 	status = "okay";
 	pinctrl-0 = <&i2c_a_pins>;
@@ -335,6 +373,7 @@
 	status = "okay";
 	pinctrl-0 = <&i2c_b_pins>;
 	pinctrl-names = "default";
+	clock-frequency = <300000>;
 
 	rtc: rtc@51 {
 		/* has to be enabled manually when a battery is connected: */
@@ -405,8 +444,7 @@
 	max-frequency = <100000000>;
 	disable-wp;
 
-	cd-gpios = <&gpio CARD_6 GPIO_ACTIVE_HIGH>;
-	cd-inverted;
+	cd-gpios = <&gpio CARD_6 GPIO_ACTIVE_LOW>;
 
 	vmmc-supply = <&vddao_3v3>;
 	vqmmc-supply = <&vddio_boot>;
@@ -454,8 +492,17 @@
 /* This one is connected to the Bluetooth module */
 &uart_A {
 	status = "okay";
-	pinctrl-0 = <&uart_a_pins>;
+	pinctrl-0 = <&uart_a_pins>, <&uart_a_cts_rts_pins>;
 	pinctrl-names = "default";
+	uart-has-rtscts;
+
+	bluetooth {
+		compatible = "brcm,bcm43438-bt";
+		shutdown-gpios = <&gpio GPIOX_17 GPIO_ACTIVE_HIGH>;
+		max-speed = <2000000>;
+		clocks = <&wifi32k>;
+		clock-names = "lpo";
+	};
 };
 
 /* This is brought out on the Linux_RX (18) and Linux_TX (19) pins: */

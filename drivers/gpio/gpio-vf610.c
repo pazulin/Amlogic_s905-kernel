@@ -1,23 +1,15 @@
+// SPDX-License-Identifier: GPL-2.0+
 /*
  * Freescale vf610 GPIO support through PORT and GPIO
  *
  * Copyright (c) 2014 Toradex AG.
  *
  * Author: Stefan Agner <stefan@agner.ch>.
- *
- * This program is free software; you can redistribute it and/or
- * modify it under the terms of the GNU General Public License
- * as published by the Free Software Foundation; either version 2
- * of the License, or (at your option) any later version.
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
  */
-
 #include <linux/bitops.h>
+#include <linux/clk.h>
 #include <linux/err.h>
-#include <linux/gpio.h>
+#include <linux/gpio/driver.h>
 #include <linux/init.h>
 #include <linux/interrupt.h>
 #include <linux/io.h>
@@ -37,10 +29,13 @@ struct fsl_gpio_soc_data {
 
 struct vf610_gpio_port {
 	struct gpio_chip gc;
+	struct irq_chip ic;
 	void __iomem *base;
 	void __iomem *gpio_base;
 	const struct fsl_gpio_soc_data *sdata;
 	u8 irqc[VF610_GPIO_PER_PORT];
+	struct clk *clk_port;
+	struct clk *clk_gpio;
 	int irq;
 };
 
@@ -65,8 +60,6 @@ struct vf610_gpio_port {
 #define PORT_INT_FALLING_EDGE	0xa
 #define PORT_INT_EITHER_EDGE	0xb
 #define PORT_INT_LOGIC_ONE	0xc
-
-static struct irq_chip vf610_gpio_irq_chip;
 
 static const struct fsl_gpio_soc_data imx_data = {
 	.have_paddr = true,
@@ -243,15 +236,6 @@ static int vf610_gpio_irq_set_wake(struct irq_data *d, u32 enable)
 	return 0;
 }
 
-static struct irq_chip vf610_gpio_irq_chip = {
-	.name		= "gpio-vf610",
-	.irq_ack	= vf610_gpio_irq_ack,
-	.irq_mask	= vf610_gpio_irq_mask,
-	.irq_unmask	= vf610_gpio_irq_unmask,
-	.irq_set_type	= vf610_gpio_irq_set_type,
-	.irq_set_wake	= vf610_gpio_irq_set_wake,
-};
-
 static int vf610_gpio_probe(struct platform_device *pdev)
 {
 	struct device *dev = &pdev->dev;
@@ -259,6 +243,8 @@ static int vf610_gpio_probe(struct platform_device *pdev)
 	struct vf610_gpio_port *port;
 	struct resource *iores;
 	struct gpio_chip *gc;
+	struct irq_chip *ic;
+	int i;
 	int ret;
 
 	port = devm_kzalloc(&pdev->dev, sizeof(*port), GFP_KERNEL);
@@ -280,6 +266,33 @@ static int vf610_gpio_probe(struct platform_device *pdev)
 	if (port->irq < 0)
 		return port->irq;
 
+	port->clk_port = devm_clk_get(&pdev->dev, "port");
+	if (!IS_ERR(port->clk_port)) {
+		ret = clk_prepare_enable(port->clk_port);
+		if (ret)
+			return ret;
+	} else if (port->clk_port == ERR_PTR(-EPROBE_DEFER)) {
+		/*
+		 * Percolate deferrals, for anything else,
+		 * just live without the clocking.
+		 */
+		return PTR_ERR(port->clk_port);
+	}
+
+	port->clk_gpio = devm_clk_get(&pdev->dev, "gpio");
+	if (!IS_ERR(port->clk_gpio)) {
+		ret = clk_prepare_enable(port->clk_gpio);
+		if (ret) {
+			clk_disable_unprepare(port->clk_port);
+			return ret;
+		}
+	} else if (port->clk_gpio == ERR_PTR(-EPROBE_DEFER)) {
+		clk_disable_unprepare(port->clk_port);
+		return PTR_ERR(port->clk_gpio);
+	}
+
+	platform_set_drvdata(pdev, port);
+
 	gc = &port->gc;
 	gc->of_node = np;
 	gc->parent = dev;
@@ -294,22 +307,46 @@ static int vf610_gpio_probe(struct platform_device *pdev)
 	gc->direction_output = vf610_gpio_direction_output;
 	gc->set = vf610_gpio_set;
 
+	ic = &port->ic;
+	ic->name = "gpio-vf610";
+	ic->irq_ack = vf610_gpio_irq_ack;
+	ic->irq_mask = vf610_gpio_irq_mask;
+	ic->irq_unmask = vf610_gpio_irq_unmask;
+	ic->irq_set_type = vf610_gpio_irq_set_type;
+	ic->irq_set_wake = vf610_gpio_irq_set_wake;
+
 	ret = gpiochip_add_data(gc, port);
 	if (ret < 0)
 		return ret;
 
+	/* Mask all GPIO interrupts */
+	for (i = 0; i < gc->ngpio; i++)
+		vf610_gpio_writel(0, port->base + PORT_PCR(i));
+
 	/* Clear the interrupt status register for all GPIO's */
 	vf610_gpio_writel(~0, port->base + PORT_ISFR);
 
-	ret = gpiochip_irqchip_add(gc, &vf610_gpio_irq_chip, 0,
-				   handle_edge_irq, IRQ_TYPE_NONE);
+	ret = gpiochip_irqchip_add(gc, ic, 0, handle_edge_irq, IRQ_TYPE_NONE);
 	if (ret) {
 		dev_err(dev, "failed to add irqchip\n");
 		gpiochip_remove(gc);
 		return ret;
 	}
-	gpiochip_set_chained_irqchip(gc, &vf610_gpio_irq_chip, port->irq,
+	gpiochip_set_chained_irqchip(gc, ic, port->irq,
 				     vf610_gpio_irq_handler);
+
+	return 0;
+}
+
+static int vf610_gpio_remove(struct platform_device *pdev)
+{
+	struct vf610_gpio_port *port = platform_get_drvdata(pdev);
+
+	gpiochip_remove(&port->gc);
+	if (!IS_ERR(port->clk_port))
+		clk_disable_unprepare(port->clk_port);
+	if (!IS_ERR(port->clk_gpio))
+		clk_disable_unprepare(port->clk_gpio);
 
 	return 0;
 }
@@ -320,6 +357,7 @@ static struct platform_driver vf610_gpio_driver = {
 		.of_match_table = vf610_gpio_dt_ids,
 	},
 	.probe		= vf610_gpio_probe,
+	.remove		= vf610_gpio_remove,
 };
 
 builtin_platform_driver(vf610_gpio_driver);

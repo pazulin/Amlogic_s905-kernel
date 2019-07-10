@@ -45,8 +45,7 @@
 		blue {
 			label = "c2:blue:alive";
 			gpios = <&gpio_ao GPIOAO_13 GPIO_ACTIVE_LOW>;
-			linux,default-trigger = "heartbeat";
-			default-state = "off";
+			default-state = "on";
 		};
 	};
 
@@ -127,48 +126,18 @@
 			/* HDMI Output */
 			format = "i2s";
 			mclk-fs = <256>;
-			bitclock-master = <&i2s_dai>;
-			frame-master = <&i2s_dai>;
-
-			plat {
-				sound-dai = <&aiu_i2s_dma>;
-			};
+			bitclock-master = <&aiu_i2s>;
+			frame-master = <&aiu_i2s>;
 
 			cpu {
-				sound-dai = <&i2s_dai>;
+				sound-dai = <&aiu_i2s>;
 			};
 
 			codec {
 				sound-dai = <&hdmi_tx>;
 			};
 		};
-	};
-
-	spi-gpio {
-		compatible = "spi-gpio";
-		#address-cells = <0x1>;
-		#size-cells = <0x0>;
-		ranges;
-		status = "ok";
-		sck-gpios  = <&gpio GPIOX_2 0>;
-		miso-gpios = <&gpio GPIOX_4 0>;
-		mosi-gpios = <&gpio GPIOX_7 0>;
-		cs-gpios  = <&gpio GPIOX_1 0
-			     &gpio GPIOY_14 0>;
-		num-chipselects = <2>;
-
-		/* clients */
-		spidev0@0 {
-			compatible = "spidev";
-			reg = <0>;
-			spi-max-frequency = <500000>;
-		};
-		spidev0@1 {
-			compatible = "spidev";
-			reg = <1>;
-			spi-max-frequency = <500000>;
-		};
-	};
+	};	
 };
 
 &cec_AO {
@@ -182,7 +151,7 @@
 	status = "okay";
 };
 
-&aiu_i2s_dma {
+&aiu_i2s {
 	status = "okay";
 };
 
@@ -210,7 +179,6 @@
 			interrupt-parent = <&gpio_intc>;
 			/* MAC_INTR on GPIOZ_15 */
 			interrupts = <29 IRQ_TYPE_LEVEL_LOW>;
-			eee-broken-1000t;
 		};
 	};
 };
@@ -248,14 +216,11 @@
 	pinctrl-names = "default";
 };
 
-&i2s_dai {
-	status = "okay";
-};
-
 &ir {
 	status = "okay";
 	pinctrl-0 = <&remote_input_ao_pins>;
 	pinctrl-names = "default";
+	linux,rc-map-name = "rc-odroid";
 };
 
 &gpio_ao {
@@ -315,8 +280,7 @@
 };
 
 &scpi_clocks {
-	/* Works only with new blobs that have limited DVFS table */
-	status = "okay";
+	status = "disabled";
 };
 
 /* SD */
@@ -331,8 +295,7 @@
 	max-frequency = <100000000>;
 	disable-wp;
 
-	cd-gpios = <&gpio CARD_6 GPIO_ACTIVE_HIGH>;
-	cd-inverted;
+	cd-gpios = <&gpio CARD_6 GPIO_ACTIVE_LOW>;
 
 	vmmc-supply = <&tflash_vdd>;
 	vqmmc-supply = <&tf_io>;

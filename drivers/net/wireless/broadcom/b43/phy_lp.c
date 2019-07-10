@@ -23,6 +23,7 @@
 
 */
 
+#include <linux/cordic.h>
 #include <linux/slab.h>
 
 #include "b43.h"
@@ -1780,9 +1781,9 @@ static void lpphy_start_tx_tone(struct b43_wldev *dev, s32 freq, u16 max)
 {
 	struct b43_phy_lp *lpphy = dev->phy.lp;
 	u16 buf[64];
-	int i, samples = 0, angle = 0;
+	int i, samples = 0, theta = 0;
 	int rotation = (((36 * freq) / 20) << 16) / 100;
-	struct b43_c32 sample;
+	struct cordic_iq sample;
 
 	lpphy->tx_tone_freq = freq;
 
@@ -1798,10 +1799,10 @@ static void lpphy_start_tx_tone(struct b43_wldev *dev, s32 freq, u16 max)
 	}
 
 	for (i = 0; i < samples; i++) {
-		sample = b43_cordic(angle);
-		angle += rotation;
-		buf[i] = CORDIC_CONVERT((sample.i * max) & 0xFF) << 8;
-		buf[i] |= CORDIC_CONVERT((sample.q * max) & 0xFF);
+		sample = cordic_calc_iq(CORDIC_FIXED(theta));
+		theta += rotation;
+		buf[i] = CORDIC_FLOAT((sample.i * max) & 0xFF) << 8;
+		buf[i] |= CORDIC_FLOAT((sample.q * max) & 0xFF);
 	}
 
 	b43_lptab_write_bulk(dev, B43_LPTAB16(5, 0), samples, buf);
@@ -1834,7 +1835,7 @@ static void lpphy_papd_cal(struct b43_wldev *dev, struct lpphy_tx_gains gains,
 static void lpphy_papd_cal_txpwr(struct b43_wldev *dev)
 {
 	struct b43_phy_lp *lpphy = dev->phy.lp;
-	struct lpphy_tx_gains gains, oldgains;
+	struct lpphy_tx_gains oldgains;
 	int old_txpctl, old_afe_ovr, old_rf, old_bbmult;
 
 	lpphy_read_tx_pctl_mode_from_hardware(dev);
@@ -1848,9 +1849,9 @@ static void lpphy_papd_cal_txpwr(struct b43_wldev *dev)
 	lpphy_set_tx_power_control(dev, B43_LPPHY_TXPCTL_OFF);
 
 	if (dev->dev->chip_id == 0x4325 && dev->dev->chip_rev == 0)
-		lpphy_papd_cal(dev, gains, 0, 1, 30);
+		lpphy_papd_cal(dev, oldgains, 0, 1, 30);
 	else
-		lpphy_papd_cal(dev, gains, 0, 1, 65);
+		lpphy_papd_cal(dev, oldgains, 0, 1, 65);
 
 	if (old_afe_ovr)
 		lpphy_set_tx_gains(dev, oldgains);

@@ -49,15 +49,11 @@
 			/* HDMI Output */
 			format = "i2s";
 			mclk-fs = <256>;
-			bitclock-master = <&i2s_dai>;
-			frame-master = <&i2s_dai>;
-
-			plat {
-				sound-dai = <&aiu_i2s_dma>;
-			};
+			bitclock-master = <&aiu_i2s>;
+			frame-master = <&aiu_i2s>;
 
 			cpu {
-				sound-dai = <&i2s_dai>;
+				sound-dai = <&aiu_i2s>;
 			};
 
 			codec {
@@ -78,7 +74,7 @@
 	status = "okay";
 };
 
-&aiu_i2s_dma {
+&aiu_i2s {
 	status = "okay";
 };
 
@@ -86,10 +82,6 @@
 	cvbs_vdac_out: endpoint {
 		remote-endpoint = <&cvbs_connector_in>;
 	};
-};
-
-&i2s_dai {
-	status = "okay";
 };
 
 &hdmi_tx {

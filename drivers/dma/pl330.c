@@ -448,6 +448,7 @@ struct dma_pl330_chan {
 	/* DMA-mapped view of the FIFO; may differ if an IOMMU is present */
 	dma_addr_t fifo_dma;
 	enum dma_data_direction dir;
+	struct dma_slave_config slave_config;
 
 	/* for cyclic capability */
 	bool cyclic;
@@ -541,6 +542,10 @@ struct _xfer_spec {
 	u32 ccr;
 	struct dma_pl330_desc *desc;
 };
+
+static int pl330_config_write(struct dma_chan *chan,
+			struct dma_slave_config *slave_config,
+			enum dma_transfer_direction direction);
 
 static inline bool _queue_full(struct pl330_thread *thrd)
 {
@@ -961,6 +966,7 @@ static void _stop(struct pl330_thread *thrd)
 {
 	void __iomem *regs = thrd->dmac->base;
 	u8 insn[6] = {0, 0, 0, 0, 0, 0};
+	u32 inten = readl(regs + INTEN);
 
 	if (_state(thrd) == PL330_STATE_FAULT_COMPLETING)
 		UNTIL(thrd, PL330_STATE_FAULTING | PL330_STATE_KILLING);
@@ -973,10 +979,13 @@ static void _stop(struct pl330_thread *thrd)
 
 	_emit_KILL(0, insn);
 
-	/* Stop generating interrupts for SEV */
-	writel(readl(regs + INTEN) & ~(1 << thrd->ev), regs + INTEN);
-
 	_execute_DBGINSN(thrd, insn, is_manager(thrd));
+
+	/* clear the event */
+	if (inten & (1 << thrd->ev))
+		writel(1 << thrd->ev, regs + INTCLR);
+	/* Stop generating interrupts for SEV */
+	writel(inten & ~(1 << thrd->ev), regs + INTEN);
 }
 
 /* Start doing req 'idx' of thread 'thrd' */
@@ -2220,20 +2229,21 @@ static int fixup_burst_len(int max_burst_len, int quirks)
 		return max_burst_len;
 }
 
-static int pl330_config(struct dma_chan *chan,
-			struct dma_slave_config *slave_config)
+static int pl330_config_write(struct dma_chan *chan,
+			struct dma_slave_config *slave_config,
+			enum dma_transfer_direction direction)
 {
 	struct dma_pl330_chan *pch = to_pchan(chan);
 
 	pl330_unprep_slave_fifo(pch);
-	if (slave_config->direction == DMA_MEM_TO_DEV) {
+	if (direction == DMA_MEM_TO_DEV) {
 		if (slave_config->dst_addr)
 			pch->fifo_addr = slave_config->dst_addr;
 		if (slave_config->dst_addr_width)
 			pch->burst_sz = __ffs(slave_config->dst_addr_width);
 		pch->burst_len = fixup_burst_len(slave_config->dst_maxburst,
 			pch->dmac->quirks);
-	} else if (slave_config->direction == DMA_DEV_TO_MEM) {
+	} else if (direction == DMA_DEV_TO_MEM) {
 		if (slave_config->src_addr)
 			pch->fifo_addr = slave_config->src_addr;
 		if (slave_config->src_addr_width)
@@ -2245,13 +2255,22 @@ static int pl330_config(struct dma_chan *chan,
 	return 0;
 }
 
+static int pl330_config(struct dma_chan *chan,
+			struct dma_slave_config *slave_config)
+{
+	struct dma_pl330_chan *pch = to_pchan(chan);
+
+	memcpy(&pch->slave_config, slave_config, sizeof(*slave_config));
+
+	return 0;
+}
+
 static int pl330_terminate_all(struct dma_chan *chan)
 {
 	struct dma_pl330_chan *pch = to_pchan(chan);
 	struct dma_pl330_desc *desc;
 	unsigned long flags;
 	struct pl330_dmac *pl330 = pch->dmac;
-	LIST_HEAD(list);
 	bool power_down = false;
 
 	pm_runtime_get_sync(pl330->ddma.dev);
@@ -2661,6 +2680,8 @@ static struct dma_async_tx_descriptor *pl330_prep_dma_cyclic(
 		return NULL;
 	}
 
+	pl330_config_write(chan, &pch->slave_config, direction);
+
 	if (!pl330_prep_slave_fifo(pch, direction))
 		return NULL;
 
@@ -2814,6 +2835,8 @@ pl330_prep_slave_sg(struct dma_chan *chan, struct scatterlist *sgl,
 
 	if (unlikely(!pch || !sgl || !sg_len))
 		return NULL;
+
+	pl330_config_write(chan, &pch->slave_config, direction);
 
 	if (!pl330_prep_slave_fifo(pch, direction))
 		return NULL;

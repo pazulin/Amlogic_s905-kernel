@@ -4,8 +4,8 @@
 /**
  * DOC: Interrupt management for the V3D engine
  *
- * When we take a binning or rendering flush done interrupt, we need
- * to signal the fence for that job so that the scheduler can queue up
+ * When we take a bin, render, or TFU done interrupt, we need to
+ * signal the fence for that job so that the scheduler can queue up
  * the next one and unblock any waiters.
  *
  * When we take the binner out of memory interrupt, we need to
@@ -15,6 +15,7 @@
 
 #include "v3d_drv.h"
 #include "v3d_regs.h"
+#include "v3d_trace.h"
 
 #define V3D_CORE_IRQS ((u32)(V3D_INT_OUTOMEM |	\
 			     V3D_INT_FLDONE |	\
@@ -23,7 +24,8 @@
 
 #define V3D_HUB_IRQS ((u32)(V3D_HUB_INT_MMU_WRV |	\
 			    V3D_HUB_INT_MMU_PTI |	\
-			    V3D_HUB_INT_MMU_CAP))
+			    V3D_HUB_INT_MMU_CAP |	\
+			    V3D_HUB_INT_TFUC))
 
 static void
 v3d_overflow_mem_work(struct work_struct *work)
@@ -87,12 +89,20 @@ v3d_irq(int irq, void *arg)
 	}
 
 	if (intsts & V3D_INT_FLDONE) {
-		dma_fence_signal(v3d->bin_job->bin.done_fence);
+		struct v3d_fence *fence =
+			to_v3d_fence(v3d->bin_job->bin.done_fence);
+
+		trace_v3d_bcl_irq(&v3d->drm, fence->seqno);
+		dma_fence_signal(&fence->base);
 		status = IRQ_HANDLED;
 	}
 
 	if (intsts & V3D_INT_FRDONE) {
-		dma_fence_signal(v3d->render_job->render.done_fence);
+		struct v3d_fence *fence =
+			to_v3d_fence(v3d->render_job->render.done_fence);
+
+		trace_v3d_rcl_irq(&v3d->drm, fence->seqno);
+		dma_fence_signal(&fence->base);
 		status = IRQ_HANDLED;
 	}
 
@@ -117,6 +127,15 @@ v3d_hub_irq(int irq, void *arg)
 	/* Acknowledge the interrupts we're handling here. */
 	V3D_WRITE(V3D_HUB_INT_CLR, intsts);
 
+	if (intsts & V3D_HUB_INT_TFUC) {
+		struct v3d_fence *fence =
+			to_v3d_fence(v3d->tfu_job->done_fence);
+
+		trace_v3d_tfu_irq(&v3d->drm, fence->seqno);
+		dma_fence_signal(&fence->base);
+		status = IRQ_HANDLED;
+	}
+
 	if (intsts & (V3D_HUB_INT_MMU_WRV |
 		      V3D_HUB_INT_MMU_PTI |
 		      V3D_HUB_INT_MMU_CAP)) {
@@ -137,7 +156,7 @@ v3d_hub_irq(int irq, void *arg)
 	return status;
 }
 
-void
+int
 v3d_irq_init(struct v3d_dev *v3d)
 {
 	int ret, core;
@@ -154,13 +173,22 @@ v3d_irq_init(struct v3d_dev *v3d)
 	ret = devm_request_irq(v3d->dev, platform_get_irq(v3d->pdev, 0),
 			       v3d_hub_irq, IRQF_SHARED,
 			       "v3d_hub", v3d);
+	if (ret)
+		goto fail;
+
 	ret = devm_request_irq(v3d->dev, platform_get_irq(v3d->pdev, 1),
 			       v3d_irq, IRQF_SHARED,
 			       "v3d_core0", v3d);
 	if (ret)
-		dev_err(v3d->dev, "IRQ setup failed: %d\n", ret);
+		goto fail;
 
 	v3d_irq_enable(v3d);
+	return 0;
+
+fail:
+	if (ret != -EPROBE_DEFER)
+		dev_err(v3d->dev, "IRQ setup failed: %d\n", ret);
+	return ret;
 }
 
 void

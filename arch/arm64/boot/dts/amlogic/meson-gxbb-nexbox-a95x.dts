@@ -135,15 +135,11 @@
 			/* HDMI Output */
 			format = "i2s";
 			mclk-fs = <256>;
-			bitclock-master = <&i2s_dai>;
-			frame-master = <&i2s_dai>;
-
-			plat {
-				sound-dai = <&aiu_i2s_dma>;
-			};
+			bitclock-master = <&aiu_i2s>;
+			frame-master = <&aiu_i2s>;
 
 			cpu {
-				sound-dai = <&i2s_dai>;
+				sound-dai = <&aiu_i2s>;
 			};
 
 			codec {
@@ -151,7 +147,7 @@
 			};
 		};
 	};
-
+	
 	cvbs-connector {
 		compatible = "composite-video-connector";
 
@@ -191,7 +187,7 @@
 	status = "okay";
 };
 
-&aiu_i2s_dma {
+&aiu_i2s {
 	status = "okay";
 };
 
@@ -229,10 +225,6 @@
 	hdmi_tx_tmds_out: endpoint {
 		remote-endpoint = <&hdmi_connector_in>;
 	};
-};
-
-&i2s_dai {
-	status = "okay";
 };
 
 &ir {
@@ -283,8 +275,7 @@
 	max-frequency = <100000000>;
 	disable-wp;
 
-	cd-gpios = <&gpio CARD_6 GPIO_ACTIVE_HIGH>;
-	cd-inverted;
+	cd-gpios = <&gpio CARD_6 GPIO_ACTIVE_LOW>;
 
 	vmmc-supply = <&vddao_3v3>;
 	vqmmc-supply = <&vddio_card>;

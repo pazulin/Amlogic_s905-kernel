@@ -21,11 +21,11 @@
 #define BTRFS_BDEV_BLOCKSIZE	(4096)
 
 enum btrfs_wq_endio_type {
-	BTRFS_WQ_ENDIO_DATA = 0,
-	BTRFS_WQ_ENDIO_METADATA = 1,
-	BTRFS_WQ_ENDIO_FREE_SPACE = 2,
-	BTRFS_WQ_ENDIO_RAID56 = 3,
-	BTRFS_WQ_ENDIO_DIO_REPAIR = 4,
+	BTRFS_WQ_ENDIO_DATA,
+	BTRFS_WQ_ENDIO_METADATA,
+	BTRFS_WQ_ENDIO_FREE_SPACE,
+	BTRFS_WQ_ENDIO_RAID56,
+	BTRFS_WQ_ENDIO_DIO_REPAIR,
 };
 
 static inline u64 btrfs_sb_offset(int mirror)
@@ -39,6 +39,9 @@ static inline u64 btrfs_sb_offset(int mirror)
 struct btrfs_device;
 struct btrfs_fs_devices;
 
+int btrfs_verify_level_key(struct btrfs_fs_info *fs_info,
+			   struct extent_buffer *eb, int level,
+			   struct btrfs_key *first_key, u64 parent_transid);
 struct extent_buffer *read_tree_block(struct btrfs_fs_info *fs_info, u64 bytenr,
 				      u64 parent_transid, int level,
 				      struct btrfs_key *first_key);

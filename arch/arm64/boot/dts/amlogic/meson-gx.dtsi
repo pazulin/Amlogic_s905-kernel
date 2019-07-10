@@ -41,12 +41,40 @@
 			no-map;
 		};
 
+		/* 32 MiB reserved for ARM Trusted Firmware (BL32) */
+		secmon_reserved_bl32: secmon@5300000 {
+			reg = <0x0 0x05300000 0x0 0x2000000>;
+			no-map;
+		};
+
 		linux,cma {
 			compatible = "shared-dma-pool";
 			reusable;
-			size = <0x0 0xbc00000>;
+			size = <0x0 0x38000000>;
 			alignment = <0x0 0x400000>;
 			linux,cma-default;
+		};
+	};
+
+	chosen {
+		#address-cells = <2>;
+		#size-cells = <2>;
+		ranges;
+
+		simplefb_cvbs: framebuffer-cvbs {
+			compatible = "amlogic,simple-framebuffer",
+				     "simple-framebuffer";
+			amlogic,pipeline = "vpu-cvbs";
+			power-domains = <&pwrc_vpu>;
+			status = "disabled";
+		};
+
+		simplefb_hdmi: framebuffer-hdmi {
+			compatible = "amlogic,simple-framebuffer",
+				     "simple-framebuffer";
+			amlogic,pipeline = "vpu-hdmi";
+			power-domains = <&pwrc_vpu>;
+			status = "disabled";
 		};
 	};
 
@@ -56,7 +84,7 @@
 
 		cpu0: cpu@0 {
 			device_type = "cpu";
-			compatible = "arm,cortex-a53", "arm,armv8";
+			compatible = "arm,cortex-a53";
 			reg = <0x0 0x0>;
 			enable-method = "psci";
 			next-level-cache = <&l2>;
@@ -65,7 +93,7 @@
 
 		cpu1: cpu@1 {
 			device_type = "cpu";
-			compatible = "arm,cortex-a53", "arm,armv8";
+			compatible = "arm,cortex-a53";
 			reg = <0x0 0x1>;
 			enable-method = "psci";
 			next-level-cache = <&l2>;
@@ -74,7 +102,7 @@
 
 		cpu2: cpu@2 {
 			device_type = "cpu";
-			compatible = "arm,cortex-a53", "arm,armv8";
+			compatible = "arm,cortex-a53";
 			reg = <0x0 0x2>;
 			enable-method = "psci";
 			next-level-cache = <&l2>;
@@ -83,7 +111,7 @@
 
 		cpu3: cpu@3 {
 			device_type = "cpu";
-			compatible = "arm,cortex-a53", "arm,armv8";
+			compatible = "arm,cortex-a53";
 			reg = <0x0 0x3>;
 			enable-method = "psci";
 			next-level-cache = <&l2>;
@@ -204,35 +232,23 @@
 			};
 
 			audio: audio@5400 {
-				compatible = "amlogic,meson-audio-core";
+				compatible = "amlogic,meson-gx-audio-core";
 				reg = <0x0 0x5400 0x0 0x2ac>,
 				      <0x0 0xa000 0x0 0x304>;
 				reg-names = "aiu", "audin";
 				status = "disabled";
 
-				aiu_i2s_dma: aiu_i2s_dma {
+				aiu_i2s: audio-controller-0 {
 					#sound-dai-cells = <0>;
-					compatible = "amlogic,meson-aiu-i2s-dma";
+					compatible = "amlogic,meson-aiu-i2s";
 					interrupts = <GIC_SPI 48 IRQ_TYPE_EDGE_RISING>;
 					status = "disabled";
 				};
 
-				aiu_spdif_dma: aiu_spdif_dma {
+				aiu_spdif: audio-controller-1 {
 					#sound-dai-cells = <0>;
-					compatible = "amlogic,meson-aiu-spdif-dma";
+					compatible = "amlogic,meson-aiu-spdif";
 					interrupts = <GIC_SPI 50 IRQ_TYPE_EDGE_RISING>;
-					status = "disabled";
-				};
-
-				i2s_dai: i2s_dai {
-					#sound-dai-cells = <0>;
-					compatible = "amlogic,meson-i2s-dai";
-					status = "disabled";
-				};
-
-				spdif_dai: spdif_dai {
-					#sound-dai-cells = <0>;
-					compatible = "amlogic,meson-spdif-dai";
 					status = "disabled";
 				};
 
@@ -295,6 +311,11 @@
 				reg = <0x0 0x8700 0x0 0x18>;
 				interrupts = <GIC_SPI 93 IRQ_TYPE_EDGE_RISING>;
 				status = "disabled";
+			};
+
+			clock-measure@8758 {
+				compatible = "amlogic,meson-gx-clk-measure";
+				reg = <0x0 0x8758 0x0 0x10>;
 			};
 
 			i2c_B: i2c@87c0 {
@@ -379,7 +400,7 @@
 			ranges = <0x0 0x0 0x0 0xc8100000 0x0 0x100000>;
 
 			sysctrl_AO: sys-ctrl@0 {
-				compatible = "amlogic,meson-gx-ao-sysctrl", "syscon", "simple-mfd";
+				compatible = "amlogic,meson-gx-ao-sysctrl", "simple-mfd", "syscon";
 				reg =  <0x0 0x0 0x0 0x100>;
 
 				pwrc_vpu: power-controller-vpu {
@@ -493,7 +514,7 @@
 			ranges = <0x0 0x0 0x0 0xc883c000 0x0 0x2000>;
 
 			sysctrl: system-controller@0 {
-				compatible = "amlogic,meson-gx-hhi-sysctrl", "syscon", "simple-mfd";
+				compatible = "amlogic,meson-gx-hhi-sysctrl", "simple-mfd", "syscon";
 				reg = <0 0 0 0x400>;
 			};
 
@@ -508,7 +529,7 @@
 		};
 
 		ethmac: ethernet@c9410000 {
-			compatible = "amlogic,meson-gx-dwmac", "amlogic,meson-gxbb-dwmac", "snps,dwmac";
+			compatible = "amlogic,meson-gxbb-dwmac", "snps,dwmac-3.710", "snps,dwmac";
 			reg = <0x0 0xc9410000 0x0 0x10000
 			       0x0 0xc8834540 0x0 0x4>;
 			interrupts = <GIC_SPI 8 IRQ_TYPE_LEVEL_HIGH>;

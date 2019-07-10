@@ -64,7 +64,7 @@ void task_mem(struct seq_file *m, struct mm_struct *mm)
 	else
 		bytes += kobjsize(current->files);
 
-	if (current->sighand && atomic_read(&current->sighand->count) > 1)
+	if (current->sighand && refcount_read(&current->sighand->count) > 1)
 		sbytes += kobjsize(current->sighand);
 	else
 		bytes += kobjsize(current->sighand);
@@ -155,10 +155,7 @@ static int nommu_vma_show(struct seq_file *m, struct vm_area_struct *vma)
 	file = vma->vm_file;
 
 	if (file) {
-		struct inode *inode;
-
-		file = vma_pr_or_file(vma);
-		inode = file_inode(file);
+		struct inode *inode = file_inode(vma->vm_file);
 		dev = inode->i_sb->s_dev;
 		ino = inode->i_ino;
 		pgoff = (loff_t)vma->vm_pgoff << PAGE_SHIFT;
@@ -181,7 +178,7 @@ static int nommu_vma_show(struct seq_file *m, struct vm_area_struct *vma)
 		seq_file_path(m, file, "");
 	} else if (mm && is_stack(vma)) {
 		seq_pad(m, ' ');
-		seq_printf(m, "[stack]");
+		seq_puts(m, "[stack]");
 	}
 
 	seq_putc(m, '\n');

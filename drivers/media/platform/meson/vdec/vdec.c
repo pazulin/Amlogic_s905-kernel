@@ -116,6 +116,7 @@ static void vdec_poweroff(struct amvdec_session *sess)
 	struct amvdec_ops *vdec_ops = sess->fmt_out->vdec_ops;
 	struct amvdec_codec_ops *codec_ops = sess->fmt_out->codec_ops;
 
+	sess->should_stop = 1;
 	vdec_wait_inactive(sess);
 	if (codec_ops->drain)
 		codec_ops->drain(sess);
@@ -157,14 +158,35 @@ static const struct v4l2_m2m_ops vdec_m2m_ops = {
 	.job_abort = vdec_m2m_job_abort,
 };
 
+static void process_num_buffers(struct vb2_queue *q,
+				struct amvdec_session *sess,
+				unsigned int *num_buffers,
+				bool is_reqbufs)
+{
+	const struct amvdec_format *fmt_out = sess->fmt_out;
+	unsigned int buffers_total = q->num_buffers + *num_buffers;
+
+	if (is_reqbufs && buffers_total < fmt_out->min_buffers)
+		*num_buffers = fmt_out->min_buffers - q->num_buffers;
+	if (buffers_total > fmt_out->max_buffers)
+		*num_buffers = fmt_out->max_buffers - q->num_buffers;
+
+	/* We need to program the complete CAPTURE buffer list
+	 * in registers during start_streaming, and the firmwares
+	 * are free to choose any of them to write frames to. As such,
+	 * we need all of them to be queued into the driver
+	 */
+	sess->num_dst_bufs = q->num_buffers + *num_buffers;
+	q->min_buffers_needed = max(fmt_out->min_buffers, sess->num_dst_bufs);
+}
+
 static int vdec_queue_setup(struct vb2_queue *q,
 		unsigned int *num_buffers, unsigned int *num_planes,
 		unsigned int sizes[], struct device *alloc_devs[])
 {
 	struct amvdec_session *sess = vb2_get_drv_priv(q);
-	const struct amvdec_format *fmt_out = sess->fmt_out;
 	u32 output_size = amvdec_get_output_size(sess);
-	u32 buffers_total;
+	u32 am21c_size = amvdec_am21c_size(sess->width, sess->height);
 
 	if (*num_planes) {
 		switch (q->type) {
@@ -187,9 +209,15 @@ static int vdec_queue_setup(struct vb2_queue *q,
 				    sizes[2] < output_size / 4)
 					return -EINVAL;
 				break;
+			case V4L2_PIX_FMT_AM21C:
+				if (*num_planes != 1 || sizes[0] < am21c_size)
+					return -EINVAL;
+				break;
 			default:
 				return -EINVAL;
 			}
+
+			process_num_buffers(q, sess, num_buffers, false);
 			break;
 		}
 
@@ -214,24 +242,14 @@ static int vdec_queue_setup(struct vb2_queue *q,
 			sizes[2] = output_size / 4;
 			*num_planes = 3;
 			break;
+		case V4L2_PIX_FMT_AM21C:
+			sizes[0] = am21c_size;
+			*num_planes = 1;
 		default:
 			return -EINVAL;
 		}
 
-		buffers_total = q->num_buffers + *num_buffers;
-
-		if (buffers_total < fmt_out->min_buffers)
-			*num_buffers = fmt_out->min_buffers - q->num_buffers;
-		if (buffers_total > fmt_out->max_buffers)
-			*num_buffers = fmt_out->max_buffers - q->num_buffers;
-
-		/* We need to program the complete CAPTURE buffer list
-		 * in registers during start_streaming, and the firmwares
-		 * are free to choose any of them to write frames to. As such,
-		 * we need all of them to be queued into the driver
-		 */
-		sess->num_dst_bufs = q->num_buffers + *num_buffers;
-		q->min_buffers_needed = sess->num_dst_bufs;
+		process_num_buffers(q, sess, num_buffers, true);
 		break;
 	default:
 		return -EINVAL;
@@ -300,7 +318,7 @@ static int vdec_start_streaming(struct vb2_queue *q, unsigned int count)
 	sess->keyframe_found = 0;
 	sess->last_offset = 0;
 	sess->wrap_count = 0;
-	sess->dpb_size = 0;
+	sess->dpb_size = 1;
 	sess->pixelaspect.numerator = 1;
 	sess->pixelaspect.denominator = 1;
 	atomic_set(&sess->esparser_queued_bufs, 0);
@@ -498,6 +516,10 @@ vdec_try_fmt_common(struct amvdec_session *sess, u32 size,
 			      get_output_size(pixmp->width, pixmp->height) / 4;
 			pfmt[2].bytesperline = ALIGN(pixmp->width, 64) / 2;
 			pixmp->num_planes = 3;
+		} else if (pixmp->pixelformat == V4L2_PIX_FMT_AM21C) {
+			pfmt[0].sizeimage =
+				amvdec_am21c_size(pixmp->width, pixmp->height);
+			pfmt[0].bytesperline = 0;
 		}
 	} else {
 		return NULL;
@@ -651,7 +673,7 @@ static int vdec_enum_framesizes(struct file *file, void *fh,
 	if (!fmt || fsize->index)
 		return -EINVAL;
 
-	fsize->type = V4L2_FRMSIZE_TYPE_STEPWISE;
+	fsize->type = V4L2_FRMSIZE_TYPE_CONTINUOUS;
 
 	fsize->stepwise.min_width = 256;
 	fsize->stepwise.max_width = fmt->max_width;
@@ -719,21 +741,23 @@ static int vdec_subscribe_event(struct v4l2_fh *fh,
 		return v4l2_event_subscribe(fh, sub, 2, NULL);
 	case V4L2_EVENT_SOURCE_CHANGE:
 		return v4l2_src_change_event_subscribe(fh, sub);
+	case V4L2_EVENT_CTRL:
+		return v4l2_ctrl_subscribe_event(fh, sub);
 	default:
 		return -EINVAL;
 	}
 }
 
-static int vdec_cropcap(struct file *file, void *fh,
-			struct v4l2_cropcap *crop)
+static int vdec_g_pixelaspect(struct file *file, void *fh, int type,
+			      struct v4l2_fract *f)
 {
 	struct amvdec_session *sess =
 		container_of(file->private_data, struct amvdec_session, fh);
 
-	if (crop->type != V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE)
+	if (type != V4L2_BUF_TYPE_VIDEO_CAPTURE_MPLANE)
 		return -EINVAL;
 
-	crop->pixelaspect = sess->pixelaspect;
+	*f = sess->pixelaspect;
 	return 0;
 }
 
@@ -753,6 +777,7 @@ static const struct v4l2_ioctl_ops vdec_ioctl_ops = {
 	.vidioc_qbuf = v4l2_m2m_ioctl_qbuf,
 	.vidioc_expbuf = v4l2_m2m_ioctl_expbuf,
 	.vidioc_dqbuf = v4l2_m2m_ioctl_dqbuf,
+	.vidioc_create_bufs = v4l2_m2m_ioctl_create_bufs,
 	.vidioc_streamon = v4l2_m2m_ioctl_streamon,
 	.vidioc_streamoff = v4l2_m2m_ioctl_streamoff,
 	.vidioc_enum_framesizes = vdec_enum_framesizes,
@@ -760,7 +785,7 @@ static const struct v4l2_ioctl_ops vdec_ioctl_ops = {
 	.vidioc_unsubscribe_event = v4l2_event_unsubscribe,
 	.vidioc_try_decoder_cmd = vdec_try_decoder_cmd,
 	.vidioc_decoder_cmd = vdec_decoder_cmd,
-	.vidioc_cropcap = vdec_cropcap,
+	.vidioc_g_pixelaspect = vdec_g_pixelaspect,
 };
 
 static int m2m_queue_init(void *priv, struct vb2_queue *src_vq,
@@ -840,6 +865,7 @@ static int vdec_open(struct file *file)
 	sess->height = 720;
 	sess->pixelaspect.numerator = 1;
 	sess->pixelaspect.denominator = 1;
+	sess->dpb_size = 1;
 
 	INIT_LIST_HEAD(&sess->timestamps);
 	INIT_LIST_HEAD(&sess->bufs_recycle);
@@ -915,6 +941,8 @@ static const struct of_device_id vdec_dt_match[] = {
 	  .data = &vdec_platform_gxm },
 	{ .compatible = "amlogic,gxl-vdec",
 	  .data = &vdec_platform_gxl },
+	{ .compatible = "amlogic,g12a-vdec",
+	  .data = &vdec_platform_g12a },
 	{}
 };
 MODULE_DEVICE_TABLE(of, vdec_dt_match);
@@ -961,6 +989,15 @@ static int vdec_probe(struct platform_device *pdev)
 	if (!core->canvas)
 		return PTR_ERR(core->canvas);
 
+	of_id = of_match_node(vdec_dt_match, dev->of_node);
+	core->platform = of_id->data;
+
+	if (core->platform->revision == VDEC_REVISION_G12A) {
+		core->vdec_hevcf_clk = devm_clk_get(dev, "vdec_hevcf");
+		if (IS_ERR(core->vdec_hevcf_clk))
+			return -EPROBE_DEFER;
+	}
+
 	core->dos_parser_clk = devm_clk_get(dev, "dos_parser");
 	if (IS_ERR(core->dos_parser_clk))
 		return -EPROBE_DEFER;
@@ -1003,8 +1040,6 @@ static int vdec_probe(struct platform_device *pdev)
 		goto err_vdev_release;
 	}
 
-	of_id = of_match_node(vdec_dt_match, dev->of_node);
-	core->platform = of_id->data;
 	core->vdev_dec = vdev;
 	core->dev_dec = dev;
 	mutex_init(&core->lock);

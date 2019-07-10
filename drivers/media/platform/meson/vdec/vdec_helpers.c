@@ -50,6 +50,33 @@ void amvdec_write_parser(struct amvdec_core *core, u32 reg, u32 val)
 }
 EXPORT_SYMBOL_GPL(amvdec_write_parser);
 
+/* 4 KiB per 64x32 block */
+u32 amvdec_am21c_body_size(u32 width, u32 height)
+{
+	u32 width_64 = ALIGN(width, 64) / 64;
+	u32 height_32 = ALIGN(height, 32) / 32;
+
+	return SZ_4K * width_64 * height_32;
+}
+EXPORT_SYMBOL_GPL(amvdec_am21c_body_size);
+
+/* 32 bytes per 128x64 block */
+u32 amvdec_am21c_head_size(u32 width, u32 height)
+{
+	u32 width_128 = ALIGN(width, 128) / 128;
+	u32 height_64 = ALIGN(height, 64) / 64;
+
+	return 32 * width_128 * height_64;
+}
+EXPORT_SYMBOL_GPL(amvdec_am21c_head_size);
+
+u32 amvdec_am21c_size(u32 width, u32 height)
+{
+	return ALIGN(amvdec_am21c_body_size(width, height) +
+		     amvdec_am21c_head_size(width, height), SZ_64K);
+}
+EXPORT_SYMBOL_GPL(amvdec_am21c_size);
+
 static int canvas_alloc(struct amvdec_session *sess, u8 *canvas_id)
 {
 	int ret;
@@ -159,6 +186,7 @@ int amvdec_set_canvases(struct amvdec_session *sess,
 	u32 reg_cur = reg_base[0];
 	u32 reg_num_cur = 0;
 	u32 reg_base_cur = 0;
+	int i = 0;
 	int ret;
 
 	v4l2_m2m_for_each_dst_buf(sess->m2m_ctx, buf) {
@@ -184,13 +212,15 @@ int amvdec_set_canvases(struct amvdec_session *sess,
 			dev_err(sess->core->dev, "Unsupported pixfmt %08X\n",
 				pixfmt);
 			return -EINVAL;
-		};
+		}
 
 		reg_num_cur++;
 		if (reg_num_cur >= reg_num[reg_base_cur]) {
 			reg_base_cur++;
 			reg_num_cur = 0;
 		}
+
+		sess->fw_idx_to_vb2_idx[i++] = buf->vb.vb2_buf.index;
 	}
 
 	return 0;
@@ -264,6 +294,10 @@ static void dst_buf_done(struct amvdec_session *sess,
 		vbuf->vb2_buf.planes[1].bytesused = output_size / 4;
 		vbuf->vb2_buf.planes[2].bytesused = output_size / 4;
 		break;
+	case V4L2_PIX_FMT_AM21C:
+		vbuf->vb2_buf.planes[0].bytesused =
+			amvdec_am21c_size(sess->width, sess->height);
+		break;
 	}
 
 	vbuf->vb2_buf.timestamp = timestamp;
@@ -318,10 +352,9 @@ void amvdec_dst_buf_done(struct amvdec_session *sess,
 }
 EXPORT_SYMBOL_GPL(amvdec_dst_buf_done);
 
-static void amvdec_dst_buf_done_offset(struct amvdec_session *sess,
-				       struct vb2_v4l2_buffer *vbuf,
-				       u32 offset,
-				       u32 field)
+void amvdec_dst_buf_done_offset(struct amvdec_session *sess,
+				struct vb2_v4l2_buffer *vbuf,
+				u32 offset, u32 field, bool allow_drop)
 {
 	struct device *dev = sess->core->dev_dec;
 	struct amvdec_timestamp *match = NULL;
@@ -343,6 +376,9 @@ static void amvdec_dst_buf_done_offset(struct amvdec_session *sess,
 			match = tmp;
 			break;
 		}
+
+		if (!allow_drop)
+			continue;
 
 		/* Delete any timestamp entry that appears before our target
 		 * (not all src packets/timestamps lead to a frame)
@@ -368,6 +404,7 @@ static void amvdec_dst_buf_done_offset(struct amvdec_session *sess,
 	if (match)
 		atomic_dec(&sess->esparser_queued_bufs);
 }
+EXPORT_SYMBOL_GPL(amvdec_dst_buf_done_offset);
 
 void amvdec_dst_buf_done_idx(struct amvdec_session *sess,
 			     u32 buf_idx, u32 offset, u32 field)
@@ -375,7 +412,9 @@ void amvdec_dst_buf_done_idx(struct amvdec_session *sess,
 	struct vb2_v4l2_buffer *vbuf;
 	struct device *dev = sess->core->dev_dec;
 
-	vbuf = v4l2_m2m_dst_buf_remove_by_idx(sess->m2m_ctx, buf_idx);
+	vbuf = v4l2_m2m_dst_buf_remove_by_idx(sess->m2m_ctx,
+					      sess->fw_idx_to_vb2_idx[buf_idx]);
+
 	if (!vbuf) {
 		dev_err(dev,
 			"Buffer %u done but it doesn't exist in m2m_ctx\n",
@@ -384,7 +423,7 @@ void amvdec_dst_buf_done_idx(struct amvdec_session *sess,
 	}
 
 	if (offset != -1)
-		amvdec_dst_buf_done_offset(sess, vbuf, offset, field);
+		amvdec_dst_buf_done_offset(sess, vbuf, offset, field, true);
 	else
 		amvdec_dst_buf_done(sess, vbuf, field);
 }
@@ -403,7 +442,8 @@ void amvdec_set_par_from_dar(struct amvdec_session *sess,
 }
 EXPORT_SYMBOL_GPL(amvdec_set_par_from_dar);
 
-void amvdec_src_change(struct amvdec_session *sess, u32 width, u32 height, u32 dpb_size)
+void amvdec_src_change(struct amvdec_session *sess, u32 width,
+		       u32 height, u32 dpb_size)
 {
 	static const struct v4l2_event ev = {
 		.type = V4L2_EVENT_SOURCE_CHANGE,

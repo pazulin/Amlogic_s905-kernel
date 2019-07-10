@@ -772,9 +772,9 @@ static ssize_t show_associate_remote(struct device *d,
 
 	mutex_lock(&ictx->lock);
 	if (ictx->rf_isassociating)
-		strcpy(buf, "associating\n");
+		strscpy(buf, "associating\n", PAGE_SIZE);
 	else
-		strcpy(buf, "closed\n");
+		strscpy(buf, "closed\n", PAGE_SIZE);
 
 	dev_info(d, "Visit http://www.lirc.org/html/imon-24g.html for instructions on how to associate your iMON 2.4G DT/LT remote\n");
 	mutex_unlock(&ictx->lock);
@@ -1405,6 +1405,17 @@ static void imon_pad_to_keys(struct imon_context *ictx, unsigned char *buf)
 				scancode = be32_to_cpu(*((__be32 *)buf));
 			}
 		} else {
+			/*
+			 * For users without stabilized, just ignore any value getting
+			 * to close to the diagonal.
+			 */
+			if ((abs(rel_y) < 2 && abs(rel_x) < 2) ||
+				abs(abs(rel_y) - abs(rel_x)) < 2 ) {
+				spin_lock_irqsave(&ictx->kc_lock, flags);
+				ictx->kc = KEY_UNKNOWN;
+				spin_unlock_irqrestore(&ictx->kc_lock, flags);
+				return;
+			}
 			/*
 			 * Hack alert: instead of using keycodes, we have
 			 * to use hard-coded scancodes here...
