@@ -1,6 +1,6 @@
 #
 # Automatically generated file; DO NOT EDIT.
-# Linux/arm64 5.2.0-rc7 Kernel Configuration
+# Linux/arm64 5.2.0 Kernel Configuration
 #
 
 #
@@ -3740,6 +3740,7 @@ CONFIG_SND_MESON_AXG_PDM=m
 CONFIG_SND_MESON_G12A_TOHDMITX=m
 # end of ASoC support for Amlogic platforms
 
+# CONFIG_SND_SOC_MESON_GX is not set
 # CONFIG_SND_SOC_SOF_TOPLEVEL is not set
 
 #
@@ -5145,6 +5146,7 @@ CONFIG_MESON_SARADC=y
 # Temperature sensors
 #
 # CONFIG_MAXIM_THERMOCOUPLE is not set
+CONFIG_MESON_TSENSOR=y
 # CONFIG_MLX90614 is not set
 # CONFIG_MLX90632 is not set
 # CONFIG_TMP006 is not set
