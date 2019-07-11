@@ -302,28 +302,28 @@
 	clock-latency = <50000>;
 };
 
-&cpu100 {
+&cpu2 {
 	cpu-supply = <&vddcpu_a>;
 	operating-points-v2 = <&cpub_opp_table_1>;
 	clocks = <&clkc CLKID_CPUB_CLK>;
 	clock-latency = <50000>;
 };
 
-&cpu101 {
+&cpu3 {
 	cpu-supply = <&vddcpu_a>;
 	operating-points-v2 = <&cpub_opp_table_1>;
 	clocks = <&clkc CLKID_CPUB_CLK>;
 	clock-latency = <50000>;
 };
 
-&cpu102 {
+&cpu4 {
 	cpu-supply = <&vddcpu_a>;
 	operating-points-v2 = <&cpub_opp_table_1>;
 	clocks = <&clkc CLKID_CPUB_CLK>;
 	clock-latency = <50000>;
 };
 
-&cpu103 {
+&cpu5 {
 	cpu-supply = <&vddcpu_a>;
 	operating-points-v2 = <&cpub_opp_table_1>;
 	clocks = <&clkc CLKID_CPUB_CLK>;
@@ -392,21 +392,21 @@
 		#gpio-cells = <2>;
 	};
 
-	fusb302: typec-portc@22 {
-		compatible = "fcs,fusb302";
-		reg = <0x22>;
-		interrupt-parent = <&gpio_intc>;
-		interrupts = <8 IRQ_TYPE_LEVEL_LOW>;
+//	fusb302: typec-portc@22 {
+//		compatible = "fcs,fusb302";
+//		reg = <0x22>;
+//		interrupt-parent = <&gpio_intc>;
+//		interrupts = <8 IRQ_TYPE_LEVEL_LOW>;
 
-		usb_con: connector {
-			compatible = "usb-c-connector";
-			label = "USB-C";
-			power-role = "sink";
-			data-role = "dual";
-			sink-pdos = <PDO_FIXED(5000, 3000, PDO_FIXED_USB_COMM)>;
-			op-sink-microwatt = <10000000>;
-		};
-	};
+//		usb_con: connector {
+//			compatible = "usb-c-connector";
+//			label = "USB-C";
+//			power-role = "sink";
+//			data-role = "dual";
+//			sink-pdos = <PDO_FIXED(5000, 3000, PDO_FIXED_USB_COMM)>;
+//			op-sink-microwatt = <10000000>;
+//		};
+//	};
 
 	rtc@51 {
 		compatible = "haoyu,hym8563";
