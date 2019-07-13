@@ -3,6 +3,7 @@
 /* Copyright 2019 Linaro, Ltd., Rob Herring <robh@kernel.org> */
 /* Copyright 2019 Collabora ltd. */
 
+#include <linux/dma-mapping.h>
 #include <linux/module.h>
 #include <linux/of_platform.h>
 #include <linux/pagemap.h>
@@ -46,7 +47,7 @@ static int panfrost_ioctl_create_bo(struct drm_device *dev, void *data,
 	struct drm_gem_shmem_object *shmem;
 	struct drm_panfrost_create_bo *args = data;
 
-	if (!args->size || args->flags || args->pad)
+	if (!args->size || args->flags)
 		return -EINVAL;
 
 	shmem = drm_gem_shmem_create_with_handle(file, dev, args->size,
@@ -63,7 +64,7 @@ static int panfrost_ioctl_create_bo(struct drm_device *dev, void *data,
 	return 0;
 
 err_free:
-	drm_gem_handle_delete(file, args->handle);
+	drm_gem_object_put_unlocked(&shmem->base);
 	return ret;
 }
 
@@ -170,27 +171,13 @@ static int panfrost_ioctl_submit(struct drm_device *dev, void *data,
 {
 	struct panfrost_device *pfdev = dev->dev_private;
 	struct drm_panfrost_submit *args = data;
-	struct drm_syncobj *sync_out = NULL;
+	struct drm_syncobj *sync_out;
 	struct panfrost_job *job;
 	int ret = 0;
 
-	if (!args->jc)
-		return -EINVAL;
-
-	if (args->requirements && args->requirements != PANFROST_JD_REQ_FS)
-		return -EINVAL;
-
-	if (args->out_sync > 0) {
-		sync_out = drm_syncobj_find(file, args->out_sync);
-		if (!sync_out)
-			return -ENODEV;
-	}
-
-	job = kzalloc(sizeof(*job), GFP_KERNEL);
-	if (!job) {
-		ret = -ENOMEM;
-		goto fail_out_sync;
-	}
+	job = kcalloc(1, sizeof(*job), GFP_KERNEL);
+	if (!job)
+		return -ENOMEM;
 
 	kref_init(&job->refcount);
 
@@ -202,25 +189,25 @@ static int panfrost_ioctl_submit(struct drm_device *dev, void *data,
 
 	ret = panfrost_copy_in_sync(dev, file, args, job);
 	if (ret)
-		goto fail_job;
+		goto fail;
 
 	ret = panfrost_lookup_bos(dev, file, args, job);
 	if (ret)
-		goto fail_job;
+		goto fail;
 
 	ret = panfrost_job_push(job);
 	if (ret)
-		goto fail_job;
+		goto fail;
 
 	/* Update the return sync object for the job */
-	if (sync_out)
+	sync_out = drm_syncobj_find(file, args->out_sync);
+	if (sync_out) {
 		drm_syncobj_replace_fence(sync_out, job->render_done_fence);
-
-fail_job:
-	panfrost_job_put(job);
-fail_out_sync:
-	if (sync_out)
 		drm_syncobj_put(sync_out);
+	}
+
+fail:
+	panfrost_job_put(job);
 
 	return ret;
 }
@@ -376,6 +363,7 @@ static int panfrost_probe(struct platform_device *pdev)
 	pfdev->dev = &pdev->dev;
 
 	platform_set_drvdata(pdev, pfdev);
+	dma_set_mask_and_coherent(&pdev->dev, DMA_BIT_MASK(40));
 
 	/* Allocate and initialze the DRM device. */
 	ddev = drm_dev_alloc(&panfrost_drm_driver, &pdev->dev);
@@ -388,7 +376,7 @@ static int panfrost_probe(struct platform_device *pdev)
 	spin_lock_init(&pfdev->mm_lock);
 
 	/* 4G enough for now. can be 48-bit */
-	drm_mm_init(&pfdev->mm, SZ_32M >> PAGE_SHIFT, (SZ_4G - SZ_32M) >> PAGE_SHIFT);
+	drm_mm_init(&pfdev->mm, SZ_32M >> PAGE_SHIFT, SZ_4G);
 
 	pm_runtime_use_autosuspend(pfdev->dev);
 	pm_runtime_set_autosuspend_delay(pfdev->dev, 50); /* ~3 frames */
@@ -396,15 +384,13 @@ static int panfrost_probe(struct platform_device *pdev)
 
 	err = panfrost_device_init(pfdev);
 	if (err) {
-		if (err != -EPROBE_DEFER)
-			dev_err(&pdev->dev, "Fatal error during GPU init\n");
+		dev_err(&pdev->dev, "Fatal error during GPU init\n");
 		goto err_out0;
 	}
 
 	err = panfrost_devfreq_init(pfdev);
 	if (err) {
-		if (err != -EPROBE_DEFER)
-			dev_err(&pdev->dev, "Fatal error during devfreq init\n");
+		dev_err(&pdev->dev, "Fatal error during devfreq init\n");
 		goto err_out1;
 	}
 
@@ -421,7 +407,6 @@ static int panfrost_probe(struct platform_device *pdev)
 err_out1:
 	panfrost_device_fini(pfdev);
 err_out0:
-	pm_runtime_disable(pfdev->dev);
 	drm_dev_put(ddev);
 	return err;
 }
