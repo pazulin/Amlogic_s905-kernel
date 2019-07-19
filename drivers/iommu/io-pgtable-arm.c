@@ -1,17 +1,6 @@
+// SPDX-License-Identifier: GPL-2.0-only
 /*
  * CPU-agnostic ARM page table allocator.
- *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
- *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
- * GNU General Public License for more details.
- *
- * You should have received a copy of the GNU General Public License
- * along with this program.  If not, see <http://www.gnu.org/licenses/>.
  *
  * Copyright (C) 2014 ARM Limited
  *
@@ -1016,14 +1005,16 @@ arm_mali_lpae_alloc_pgtable(struct io_pgtable_cfg *cfg, void *cookie)
 {
 	struct io_pgtable *iop;
 
-	if (cfg->ias != 48 || cfg->oas > 40)
+	if (cfg->ias > 48 || cfg->oas > 40)
 		return NULL;
 
 	cfg->pgsize_bitmap &= (SZ_4K | SZ_2M | SZ_1G);
 	iop = arm_64_lpae_alloc_pgtable_s1(cfg, cookie);
 	if (iop) {
 		u64 mair, ttbr;
+		struct arm_lpae_io_pgtable *data = io_pgtable_ops_to_data(&iop->ops);
 
+		data->levels = 4;
 		/* Copy values as union fields overlap */
 		mair = cfg->arm_lpae_s1_cfg.mair[0];
 		ttbr = cfg->arm_lpae_s1_cfg.ttbr[0];

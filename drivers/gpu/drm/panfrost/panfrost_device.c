@@ -98,6 +98,7 @@ int panfrost_device_init(struct panfrost_device *pfdev)
 	struct resource *res;
 
 	mutex_init(&pfdev->sched_lock);
+	mutex_init(&pfdev->reset_lock);
 	INIT_LIST_HEAD(&pfdev->scheduled_jobs);
 
 	spin_lock_init(&pfdev->hwaccess_lock);
@@ -164,6 +165,10 @@ err_out0:
 
 void panfrost_device_fini(struct panfrost_device *pfdev)
 {
+	panfrost_job_fini(pfdev);
+	panfrost_mmu_fini(pfdev);
+	panfrost_gpu_fini(pfdev);
+	panfrost_reset_fini(pfdev);
 	panfrost_regulator_fini(pfdev);
 	panfrost_clk_fini(pfdev);
 }

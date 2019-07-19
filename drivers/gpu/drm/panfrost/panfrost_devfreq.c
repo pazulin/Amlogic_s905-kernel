@@ -7,6 +7,7 @@
 #include <linux/regulator/consumer.h>
 
 #include "panfrost_device.h"
+#include "panfrost_devfreq.h"
 #include "panfrost_features.h"
 #include "panfrost_issues.h"
 #include "panfrost_gpu.h"
@@ -141,6 +142,8 @@ int panfrost_devfreq_init(struct panfrost_device *pfdev)
 	ret = dev_pm_opp_of_add_table(&pfdev->pdev->dev);
 	if (ret == -ENODEV) /* Optional, continue without devfreq */
 		return 0;
+	else if (ret)
+		return ret;
 
 	panfrost_devfreq_reset(pfdev);
 
