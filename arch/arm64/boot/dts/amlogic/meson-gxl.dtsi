@@ -280,7 +280,6 @@
 		 <&clkc CLKID_CLK81>,
 		 <&clkc CLKID_GCLK_VENCI_INT0>;
 	clock-names = "isfr", "iahb", "venci";
-	#sound-dai-cells = <0>;
 };
 
 &sysctrl {
@@ -327,10 +326,15 @@
 		};
 
 		emmc_pins: emmc {
-			mux {
+			mux-0 {
 				groups = "emmc_nand_d07",
-				       "emmc_cmd",
-				       "emmc_clk";
+				       "emmc_cmd";
+				function = "emmc";
+				bias-pull-up;
+			};
+
+			mux-1 {
+				groups = "emmc_clk";
 				function = "emmc";
 				bias-disable;
 			};
@@ -340,7 +344,7 @@
 			mux {
 				groups = "emmc_ds";
 				function = "emmc";
-				bias-disable;
+				bias-pull-down;
 			};
 		};
 
@@ -382,13 +386,18 @@
 		};
 
 		sdcard_pins: sdcard {
-			mux {
+			mux-0 {
 				groups = "sdcard_d0",
 				       "sdcard_d1",
 				       "sdcard_d2",
 				       "sdcard_d3",
-				       "sdcard_cmd",
-				       "sdcard_clk";
+				       "sdcard_cmd";
+				function = "sdcard";
+				bias-pull-up;
+			};
+
+			mux-1 {
+				groups = "sdcard_clk";
 				function = "sdcard";
 				bias-disable;
 			};
@@ -403,13 +412,18 @@
 		};
 
 		sdio_pins: sdio {
-			mux {
+			mux-0 {
 				groups = "sdio_d0",
 				       "sdio_d1",
 				       "sdio_d2",
 				       "sdio_d3",
-				       "sdio_cmd",
-				       "sdio_clk";
+				       "sdio_cmd";
+				function = "sdio";
+				bias-pull-up;
+			};
+
+			mux-1 {
+				groups = "sdio_clk";
 				function = "sdio";
 				bias-disable;
 			};
@@ -509,14 +523,6 @@
 				      "i2c_sda_c";
 				function = "i2c_c";
 				bias-disable;
-			};
-		};
-
-		i2c_c1_pins: i2c_c1 {
-			mux {
-				groups = "i2c_sck_c_dv19",
-				      "i2c_sda_c_dv18";
-				function = "i2c_c";
 			};
 		};
 
@@ -721,24 +727,6 @@
 	};
 };
 
-&audio {
-	clocks = <&clkc CLKID_AIU>,
-		 <&clkc CLKID_AIU_GLUE>,
-		 <&clkc CLKID_I2S_SPDIF>;
-	clock-names = "aiu_top", "aiu_glue", "audin";
-	resets = <&reset RESET_AIU>,
-		 <&reset RESET_AUDIN>;
-	reset-names = "aiu", "audin";
-};
-
-&aiu_i2s {
-	clocks = <&clkc CLKID_I2S_OUT>,
-		 <&clkc CLKID_MIXER_IFACE>,
-		 <&clkc CLKID_AOCLK_GATE>,
-		 <&clkc CLKID_CTS_AMCLK>;
-	clock-names = "fast", "iface", "bclks", "mclk";
-};
-
 &pwrc_vpu {
 	resets = <&reset RESET_VIU>,
 		 <&reset RESET_VENC>,
@@ -825,15 +813,6 @@
 	clock-names = "core";
 	resets = <&reset RESET_PERIPHS_SPICC>;
 	num-cs = <1>;
-};
-
-&aiu_spdif {
-	clocks = <&clkc CLKID_IEC958>,
-		 <&clkc CLKID_IEC958_GATE>,
-		 <&clkc CLKID_CTS_MCLK_I958>,
-		 <&clkc CLKID_CTS_AMCLK>,
-		 <&clkc CLKID_CTS_I958>;
-	clock-names = "fast", "iface", "mclk_i958", "mclk_i2s", "mclk";
 };
 
 &spifc {

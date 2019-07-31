@@ -45,7 +45,8 @@
 		blue {
 			label = "c2:blue:alive";
 			gpios = <&gpio_ao GPIOAO_13 GPIO_ACTIVE_LOW>;
-			default-state = "on";
+			linux,default-trigger = "heartbeat";
+			default-state = "off";
 		};
 	};
 
@@ -109,35 +110,6 @@
 			};
 		};
 	};
-
-	sound {
-		compatible = "simple-audio-card";
-		simple-audio-card,name = "HDMI";
-
-		assigned-clocks = <&clkc CLKID_MPLL2>,
-				  <&clkc CLKID_MPLL0>,
-				  <&clkc CLKID_MPLL1>;
-		assigned-clock-parents = <0>, <0>, <0>;
-		assigned-clock-rates = <294912000>,
-				       <270950400>,
-				       <393216000>;
-
-		simple-audio-card,dai-link@0 {
-			/* HDMI Output */
-			format = "i2s";
-			mclk-fs = <256>;
-			bitclock-master = <&aiu_i2s>;
-			frame-master = <&aiu_i2s>;
-
-			cpu {
-				sound-dai = <&aiu_i2s>;
-			};
-
-			codec {
-				sound-dai = <&hdmi_tx>;
-			};
-		};
-	};	
 };
 
 &cec_AO {
@@ -147,24 +119,12 @@
 	hdmi-phandle = <&hdmi_tx>;
 };
 
-&audio {
-	status = "okay";
-};
-
-&aiu_i2s {
-	status = "okay";
-};
-
 &ethmac {
 	status = "okay";
 	pinctrl-0 = <&eth_rgmii_pins>;
 	pinctrl-names = "default";
 	phy-handle = <&eth_phy0>;
 	phy-mode = "rgmii";
-
-	snps,reset-gpio = <&gpio GPIOZ_14 0>;
-	snps,reset-delays-us = <0 10000 1000000>;
-	snps,reset-active-low;
 
 	amlogic,tx-delay-ns = <2>;
 
@@ -176,6 +136,11 @@
 		eth_phy0: ethernet-phy@0 {
 			/* Realtek RTL8211F (0x001cc916) */
 			reg = <0>;
+
+			reset-assert-us = <10000>;
+			reset-deassert-us = <30000>;
+			reset-gpios = <&gpio GPIOZ_14 GPIO_ACTIVE_LOW>;
+
 			interrupt-parent = <&gpio_intc>;
 			/* MAC_INTR on GPIOZ_15 */
 			interrupts = <29 IRQ_TYPE_LEVEL_LOW>;
@@ -292,6 +257,10 @@
 
 	bus-width = <4>;
 	cap-sd-highspeed;
+	sd-uhs-sdr12;
+	sd-uhs-sdr25;
+	sd-uhs-sdr50;
+	sd-uhs-ddr50;
 	max-frequency = <100000000>;
 	disable-wp;
 
@@ -309,7 +278,7 @@
 	pinctrl-names = "default", "clk-gate";
 
 	bus-width = <8>;
-	max-frequency = <100000000>;
+	max-frequency = <200000000>;
 	non-removable;
 	disable-wp;
 	cap-mmc-highspeed;

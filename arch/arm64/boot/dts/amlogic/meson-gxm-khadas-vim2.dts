@@ -62,11 +62,9 @@
 
 	gpio-keys-polled {
 		compatible = "gpio-keys-polled";
-		#address-cells = <1>;
-		#size-cells = <0>;
 		poll-interval = <100>;
 
-		button@0 {
+		power-button {
 			label = "power";
 			linux,code = <KEY_POWER>;
 			gpios = <&gpio_ao GPIOAO_2 GPIO_ACTIVE_LOW>;
@@ -80,35 +78,6 @@
 		port {
 			hdmi_connector_in: endpoint {
 				remote-endpoint = <&hdmi_tx_tmds_out>;
-			};
-		};
-	};
-
-	sound {
-		compatible = "simple-audio-card";
-		simple-audio-card,name = "HDMI";
-
-		assigned-clocks = <&clkc CLKID_MPLL2>,
-				  <&clkc CLKID_MPLL0>,
-				  <&clkc CLKID_MPLL1>;
-		assigned-clock-parents = <0>, <0>, <0>;
-		assigned-clock-rates = <294912000>,
-				       <270950400>,
-				       <393216000>;
-
-		simple-audio-card,dai-link@0 {
-			/* HDMI Output */
-			format = "i2s";
-			mclk-fs = <256>;
-			bitclock-master = <&aiu_i2s>;
-			frame-master = <&aiu_i2s>;
-
-			cpu {
-				sound-dai = <&aiu_i2s>;
-			};
-
-			codec {
-				sound-dai = <&hdmi_tx>;
 			};
 		};
 	};
@@ -220,58 +189,6 @@
 		clock-frequency = <32768>;
 		pwms = <&pwm_ef 0 30518 0>; /* PWM_E at 32.768KHz */
 	};
-	dvb {
-		compatible = "amlogic,dvb";
-		reg = <0x0 0xc1108c40 0x0 0x20>,
-		      <0x0 0xc1105800 0x0 0x3c0>;
-		reg-names = "afifo", "stbtop";
-		dev_name = "avl6862";
-		status = "okay";
-		fec_reset_gpio-gpios = <&gpio GPIODV_12 GPIO_ACTIVE_HIGH>;
-		power_ctrl_gpio-gpios = <&gpio GPIODV_20 GPIO_ACTIVE_LOW>;
-		lock_led_gpio-gpios = <&gpio GPIODV_11 GPIO_ACTIVE_HIGH>;
-		//"parallel","serial","disable"
-		ts0 = "serial";
-		ts0_control = <0>;
-		ts0_invert = <0>;
-		dtv_demod0_i2c_adap_id = <1>;
-		pinctrl-0 = <&dvb_s_ts0_pins>;
-		pinctrl-1 = <&dvb_s_ts1_pins>;
-		pinctrl-names = "s_ts0", "s_ts1";
-		clocks = <&clkc CLKID_DEMUX>,
-			 <&clkc CLKID_ASYNC_FIFO>,
-			 <&clkc CLKID_AHB_ARB0>,
-			 <&clkc CLKID_DOS_PARSER>;
-		clock-names = "demux", "asyncfifo", "ahbarb0", "uparsertop";
-		resets = <&reset RESET_PERIPHS_ASYNC_0>,
-			<&reset RESET_PERIPHS_ASYNC_1>,
-			 <&reset RESET_DEMUX>,
-			 <&reset RESET_DEMUX_RESET_0>,
-			 <&reset RESET_DEMUX_RESET_1>;
-		reset-names = "async0", "async1", "demux", "demuxreset0", "demuxreset1";
-		interrupts = <GIC_SPI 23 IRQ_TYPE_EDGE_RISING>,
-			     <GIC_SPI 53 IRQ_TYPE_EDGE_RISING>,
-			     <GIC_SPI 19 IRQ_TYPE_EDGE_RISING>,
-			     <GIC_SPI 25 IRQ_TYPE_EDGE_RISING>;
-		interrupt-names = "demux0", "demux1", "asyncfifo0", "asyncfifo1";
-	};
-};
-
-&periphs {
-	pinctrl_periphs:pinctrl@4b0 {
-		dvb_s_ts0_pins: dvb_s_ts0 {
-			mux {
-				groups = "tsin_a_d_valid", "tsin_a_sop", "tsin_a_clk", "tsin_a_d0";
-				function = "tsin_a";
-			};
-		};
-		dvb_s_ts1_pins: dvb_s_ts1 {
-			mux {
-				groups = "tsin_b_d_valid", "tsin_b_sop", "tsin_b_clk", "tsin_b_d0";
-				function = "tsin_b";
-			};
-		};
-	};
 };
 
 &cec_AO {
@@ -279,14 +196,6 @@
 	pinctrl-0 = <&ao_cec_pins>;
 	pinctrl-names = "default";
 	hdmi-phandle = <&hdmi_tx>;
-};
-
-&audio {
-	status = "okay";
-};
-
-&aiu_i2s {
-	status = "okay";
 };
 
 &cpu0 {
@@ -330,11 +239,6 @@
 
 	amlogic,tx-delay-ns = <2>;
 
-	/* External PHY reset is shared with internal PHY Led signals */
-	snps,reset-gpio = <&gpio GPIOZ_14 0>;
-	snps,reset-delays-us = <0 10000 1000000>;
-	snps,reset-active-low;
-
 	/* External PHY is in RGMII */
 	phy-mode = "rgmii";
 
@@ -345,10 +249,14 @@
 	external_phy: ethernet-phy@0 {
 		/* Realtek RTL8211F (0x001cc916) */
 		reg = <0>;
+
+		reset-assert-us = <10000>;
+		reset-deassert-us = <30000>;
+		reset-gpios = <&gpio GPIOZ_14 GPIO_ACTIVE_LOW>;
+
 		interrupt-parent = <&gpio_intc>;
 		/* MAC_INTR on GPIOZ_15 */
 		interrupts = <25 IRQ_TYPE_LEVEL_LOW>;
-		eee-broken-1000t;
 	};
 };
 
@@ -375,7 +283,6 @@
 	status = "okay";
 	pinctrl-0 = <&i2c_b_pins>;
 	pinctrl-names = "default";
-	clock-frequency = <300000>;
 
 	rtc: rtc@51 {
 		/* has to be enabled manually when a battery is connected: */
@@ -392,7 +299,7 @@
 	status = "okay";
 	pinctrl-0 = <&remote_input_ao_pins>;
 	pinctrl-names = "default";
-	linux,rc-map-name = "rc-geekbox";
+	linux,rc-map-name = "rc-khadas";
 };
 
 &pwm_AO_ab {
@@ -414,12 +321,13 @@
 &sd_emmc_a {
 	status = "okay";
 	pinctrl-0 = <&sdio_pins>;
-	pinctrl-names = "default";
+	pinctrl-1 = <&sdio_clk_gate_pins>;
+	pinctrl-names = "default", "clk-gate";
 	#address-cells = <1>;
 	#size-cells = <0>;
 
 	bus-width = <4>;
-	max-frequency = <100000000>;
+	max-frequency = <50000000>;
 
 	non-removable;
 	disable-wp;
@@ -439,11 +347,12 @@
 &sd_emmc_b {
 	status = "okay";
 	pinctrl-0 = <&sdcard_pins>;
-	pinctrl-names = "default";
+	pinctrl-1 = <&sdcard_clk_gate_pins>;
+	pinctrl-names = "default", "clk-gate";
 
 	bus-width = <4>;
 	cap-sd-highspeed;
-	max-frequency = <100000000>;
+	max-frequency = <50000000>;
 	disable-wp;
 
 	cd-gpios = <&gpio CARD_6 GPIO_ACTIVE_LOW>;
@@ -456,17 +365,16 @@
 &sd_emmc_c {
 	status = "okay";
 	pinctrl-0 = <&emmc_pins>, <&emmc_ds_pins>;
-	pinctrl-names = "default";
+	pinctrl-1 = <&emmc_clk_gate_pins>;
+	pinctrl-names = "default", "clk-gate";
 
 	bus-width = <8>;
-	cap-sd-highspeed;
 	cap-mmc-highspeed;
 	max-frequency = <200000000>;
 	non-removable;
 	disable-wp;
 	mmc-ddr-1_8v;
 	mmc-hs200-1_8v;
-	mmc-hs400-1_8v;
 
 	mmc-pwrseq = <&emmc_pwrseq>;
 	vmmc-supply = <&vcc_3v3>;

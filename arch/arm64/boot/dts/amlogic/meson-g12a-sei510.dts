@@ -172,6 +172,13 @@
 		clock-names = "ext_clock";
 	};
 
+	wifi32k: wifi32k {
+		compatible = "pwm-clock";
+		#clock-cells = <0>;
+		clock-frequency = <32768>;
+		pwms = <&pwm_ef 0 30518 0>; /* PWM_E at 32.768KHz */
+	};
+
 	sound {
 		compatible = "amlogic,axg-sound-card";
 		model = "G12A-SEI510";
@@ -285,13 +292,6 @@
 			};
 		};
 	};
-
-	wifi32k: wifi32k {
-		compatible = "pwm-clock";
-		#clock-cells = <0>;
-		clock-frequency = <32768>;
-		pwms = <&pwm_ef 0 30518 0>; /* PWM_E at 32.768KHz */
-	};
 };
 
 &arb {
@@ -383,6 +383,12 @@
 &i2c3 {
 	status = "okay";
 	pinctrl-0 = <&i2c3_sda_a_pins>, <&i2c3_sck_a_pins>;
+	pinctrl-names = "default";
+};
+
+&ir {
+	status = "okay";
+	pinctrl-0 = <&remote_input_ao_pins>;
 	pinctrl-names = "default";
 };
 
