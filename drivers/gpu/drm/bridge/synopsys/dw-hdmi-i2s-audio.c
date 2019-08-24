@@ -57,8 +57,6 @@ static int dw_hdmi_i2s_hw_params(struct device *dev, void *data,
 	inputclkfs	= HDMI_AUD_INPUTCLKFS_64FS;
 	conf0		= (HDMI_AUD_CONF0_I2S_SELECT | HDMI_AUD_CONF0_I2S_EN0);
 
-	dev_dbg(dev, "channels=%d sample_width=%d sample_rate=%d\n", hparms->channels, hparms->sample_width, hparms->sample_rate);
-
 	/* Enable the required i2s lanes */
 	switch (hparms->channels) {
 	case 7 ... 8:
