@@ -110,7 +110,7 @@
 };
 
 &ir {
-	linux,rc-map-name = "rc-khadas";
+	linux,rc-map-name = "rc-geekbox";
 };
 
 &gpio_ao {
@@ -192,9 +192,6 @@
 	bluetooth {
 		compatible = "brcm,bcm43438-bt";
 		shutdown-gpios = <&gpio GPIOX_17 GPIO_ACTIVE_HIGH>;
-		max-speed = <2000000>;
-		clocks = <&wifi32k>;
-		clock-names = "lpo";
 	};
 };
 

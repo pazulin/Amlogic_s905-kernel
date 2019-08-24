@@ -508,14 +508,8 @@ static void hdmi_set_cts_n(struct dw_hdmi *hdmi, unsigned int cts,
 	/* nshift factor = 0 */
 	hdmi_modb(hdmi, 0, HDMI_AUD_CTS3_N_SHIFT_MASK, HDMI_AUD_CTS3);
 
-	/* Use automatic CTS generation mode when CTS is not set */
-	if (cts)
-		hdmi_writeb(hdmi, ((cts >> 16) &
-				   HDMI_AUD_CTS3_AUDCTS19_16_MASK) |
-				  HDMI_AUD_CTS3_CTS_MANUAL,
-			    HDMI_AUD_CTS3);
-	else
-		hdmi_writeb(hdmi, 0, HDMI_AUD_CTS3);
+	hdmi_writeb(hdmi, ((cts >> 16) & HDMI_AUD_CTS3_AUDCTS19_16_MASK) |
+		    HDMI_AUD_CTS3_CTS_MANUAL, HDMI_AUD_CTS3);
 	hdmi_writeb(hdmi, (cts >> 8) & 0xff, HDMI_AUD_CTS2);
 	hdmi_writeb(hdmi, cts & 0xff, HDMI_AUD_CTS1);
 
@@ -585,33 +579,24 @@ static void hdmi_set_clk_regenerator(struct dw_hdmi *hdmi,
 {
 	unsigned long ftdms = pixel_clk;
 	unsigned int n, cts;
-	u8 config3;
 	u64 tmp;
 
 	n = hdmi_compute_n(sample_rate, pixel_clk);
 
-	config3 = hdmi_readb(hdmi, HDMI_CONFIG3_ID);
+	/*
+	 * Compute the CTS value from the N value.  Note that CTS and N
+	 * can be up to 20 bits in total, so we need 64-bit math.  Also
+	 * note that our TDMS clock is not fully accurate; it is accurate
+	 * to kHz.  This can introduce an unnecessary remainder in the
+	 * calculation below, so we don't try to warn about that.
+	 */
+	tmp = (u64)ftdms * n;
+	do_div(tmp, 128 * sample_rate);
+	cts = tmp;
 
-	/* Only compute CTS when using internal AHB audio */
-	if (config3 & HDMI_CONFIG3_AHBAUDDMA) {
-		/*
-		 * Compute the CTS value from the N value.  Note that CTS and N
-		 * can be up to 20 bits in total, so we need 64-bit math.  Also
-		 * note that our TDMS clock is not fully accurate; it is
-		 * accurate to kHz.  This can introduce an unnecessary remainder
-		 * in the calculation below, so we don't try to warn about that.
-		 */
-		tmp = (u64)ftdms * n;
-		do_div(tmp, 128 * sample_rate);
-		cts = tmp;
-
-		dev_dbg(hdmi->dev, "%s: fs=%uHz ftdms=%lu.%03luMHz N=%d cts=%d\n",
-			__func__, sample_rate,
-			ftdms / 1000000, (ftdms / 1000) % 1000,
-			n, cts);
-	} else {
-		cts = 0;
-	}
+	dev_dbg(hdmi->dev, "%s: fs=%uHz ftdms=%lu.%03luMHz N=%d cts=%d\n",
+		__func__, sample_rate, ftdms / 1000000, (ftdms / 1000) % 1000,
+		n, cts);
 
 	spin_lock_irq(&hdmi->audio_lock);
 	hdmi->audio_n = n;
@@ -1927,7 +1912,6 @@ static void hdmi_disable_overflow_interrupts(struct dw_hdmi *hdmi)
 static int dw_hdmi_setup(struct dw_hdmi *hdmi, struct drm_display_mode *mode)
 {
 	int ret;
-	void *data = hdmi->plat_data->phy_data;
 
 	hdmi_disable_overflow_interrupts(hdmi);
 
@@ -1939,13 +1923,10 @@ static int dw_hdmi_setup(struct dw_hdmi *hdmi, struct drm_display_mode *mode)
 		dev_dbg(hdmi->dev, "CEA mode used vic=%d\n", hdmi->vic);
 	}
 
-	if (hdmi->plat_data->get_enc_out_encoding)
-		hdmi->hdmi_data.enc_out_encoding =
-			hdmi->plat_data->get_enc_out_encoding(data);
-	else if ((hdmi->vic == 6) || (hdmi->vic == 7) ||
-		 (hdmi->vic == 21) || (hdmi->vic == 22) ||
-		 (hdmi->vic == 2) || (hdmi->vic == 3) ||
-		 (hdmi->vic == 17) || (hdmi->vic == 18))
+	if ((hdmi->vic == 6) || (hdmi->vic == 7) ||
+	    (hdmi->vic == 21) || (hdmi->vic == 22) ||
+	    (hdmi->vic == 2) || (hdmi->vic == 3) ||
+	    (hdmi->vic == 17) || (hdmi->vic == 18))
 		hdmi->hdmi_data.enc_out_encoding = V4L2_YCBCR_ENC_601;
 	else
 		hdmi->hdmi_data.enc_out_encoding = V4L2_YCBCR_ENC_709;
@@ -1954,31 +1935,21 @@ static int dw_hdmi_setup(struct dw_hdmi *hdmi, struct drm_display_mode *mode)
 	hdmi->hdmi_data.video_mode.mpixelrepetitioninput = 0;
 
 	/* TOFIX: Get input format from plat data or fallback to RGB888 */
-	if (hdmi->plat_data->get_input_bus_format)
-		hdmi->hdmi_data.enc_in_bus_format =
-			hdmi->plat_data->get_input_bus_format(data);
-	else if (hdmi->plat_data->input_bus_format)
+	if (hdmi->plat_data->input_bus_format)
 		hdmi->hdmi_data.enc_in_bus_format =
 			hdmi->plat_data->input_bus_format;
 	else
 		hdmi->hdmi_data.enc_in_bus_format = MEDIA_BUS_FMT_RGB888_1X24;
 
 	/* TOFIX: Get input encoding from plat data or fallback to none */
-	if (hdmi->plat_data->get_enc_in_encoding)
-		hdmi->hdmi_data.enc_in_encoding =
-			hdmi->plat_data->get_enc_in_encoding(data);
-	else if (hdmi->plat_data->input_bus_encoding)
+	if (hdmi->plat_data->input_bus_encoding)
 		hdmi->hdmi_data.enc_in_encoding =
 			hdmi->plat_data->input_bus_encoding;
 	else
 		hdmi->hdmi_data.enc_in_encoding = V4L2_YCBCR_ENC_DEFAULT;
 
 	/* TOFIX: Default to RGB888 output format */
-	if (hdmi->plat_data->get_output_bus_format)
-		hdmi->hdmi_data.enc_out_bus_format =
-			hdmi->plat_data->get_output_bus_format(data);
-	else
-		hdmi->hdmi_data.enc_out_bus_format = MEDIA_BUS_FMT_RGB888_1X24;
+	hdmi->hdmi_data.enc_out_bus_format = MEDIA_BUS_FMT_RGB888_1X24;
 
 	hdmi->hdmi_data.pix_repet_factor = 0;
 	hdmi->hdmi_data.hdcp_enable = 0;
@@ -2747,12 +2718,6 @@ __dw_hdmi_probe(struct platform_device *pdev,
 #ifdef CONFIG_OF
 	hdmi->bridge.of_node = pdev->dev.of_node;
 #endif
-
-	if (hdmi->version >= 0x200a)
-		hdmi->connector.ycbcr_420_allowed =
-			hdmi->plat_data->ycbcr_420_allowed;
-	else
-		hdmi->connector.ycbcr_420_allowed = false;
 
 	memset(&pdevinfo, 0, sizeof(pdevinfo));
 	pdevinfo.parent = dev;
